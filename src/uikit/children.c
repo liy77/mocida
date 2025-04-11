@@ -11,7 +11,6 @@ UIChildren* UIChildren_Create(int capacity) {
     children->count = 0; // Initialize count to 0
     children->children = (UIWidget**)malloc(sizeof(UIWidget*) * capacity);
     if (children->children == NULL) {
-        free(children);
         return NULL; // Memory allocation failed
     }
 
@@ -22,40 +21,23 @@ UIChildren* UIChildren_Create(int capacity) {
     return children;
 }
 
-void UIChildren_Add(UIChildren* children, UIWidget* child) {
-    if (children == NULL || child == NULL) {
-        return; // Invalid arguments
+int UIChildren_Add(UIChildren* children, UIWidget* child) {
+    if (children == NULL || child == NULL || children->count >= children->capacity) {
+        return 0;
     }
 
-    for (int i = 0; i < children->capacity; i++) {
-        if (children->children[i] == NULL) {
-            if (child->z < 0) {
-                child->z = 0; // Set z-index to 0 if it's negative
-            } else if (child->z >= children->capacity) {
-                child->z = children->capacity - 1; // Clamp z-index to capacity - 1
-            }
-
-            if (!(child->z > 0)) {
-                child->z = i;
-            } else {
-                for (int j = children->capacity - 1; j > child->z; j--) {
-                    children->children[j] = children->children[j - 1];
-                }
-            }
-            
-            children->children[child->z] = child;
-            children->count++; 
-            return; 
-        }
+    // Fix negative z-index
+    if (child->z < 0) {
+        child->z = 0;
     }
 
-    // No space available to add the child
-    fprintf(stderr, "No space available to add the child\n");
+    children->children[children->count++] = child;
+    return 1;
 }
 
-void UIChildren_Remove(UIChildren* children, UIWidget* child) {
+int UIChildren_Remove(UIChildren* children, UIWidget* child) {
     if (children == NULL || child == NULL) {
-        return; // Invalid arguments
+        return 0; // Invalid arguments
     }
 
     for (int i = 0; i < children->capacity; i++) {
@@ -63,13 +45,13 @@ void UIChildren_Remove(UIChildren* children, UIWidget* child) {
             free(children->children[i]); 
             children->children[i] = NULL; 
             children->count--; 
-            return; 
+            return 1; 
         }
     }
 
     // Child not found in the array
     fprintf(stderr, "Child not found in the array\n");
-    return;
+    return 0;
 }
 
 void UIChildren_Destroy(UIChildren* children) {
@@ -99,5 +81,17 @@ void UIChildren_Clear(UIChildren* children) {
             free(children->children[i]); 
             children->children[i] = NULL;
         }
+    }
+}
+
+void UIChildren_SortByZ(UIChildren* children) {
+    for (int i = 1; i < children->count; i++) {
+        UIWidget* key = children->children[i];
+        int j = i - 1;
+        while (j >= 0 && children->children[j]->z > key->z) {
+            children->children[j + 1] = children->children[j];
+            j--;
+        }
+        children->children[j + 1] = key;
     }
 }

@@ -17,7 +17,7 @@ typedef struct {
     float paddingTop;
     float paddingRight;
     float paddingBottom;
-    int radius;
+    float radius;
     float borderWidth;
 
     UIColor color;
@@ -60,7 +60,7 @@ UIRectangle* UIRectangle_SetPadding(UIRectangle* rect, float left, float top, fl
  * @param radius Border radius.
  * @return Pointer to the updated UIRectangle object.
  */
-UIRectangle* UIRectangle_SetRadius(UIRectangle* rect, int radius);
+UIRectangle* UIRectangle_SetRadius(UIRectangle* rect, float radius);
 
 /**
  * Sets the border width of the rectangle.

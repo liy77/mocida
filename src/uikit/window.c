@@ -1,42 +1,19 @@
 #include <uikit/window.h>
-#include <uikit/widget.h> // Ensure this header contains the definition of UIWidgetData
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <SDL3_ttf/SDL_ttf.h>
 
-void DrawRoundedRectWithAlpha(SDL_Renderer* renderer, SDL_FRect rect, UIColor color, int radius, int borderWidth, UIColor borderColor) {
-    if (!renderer || rect.w <= 0 || rect.h <= 0) return;
-
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-
-    // Draw border if necessary
-    if (borderWidth > 0) {
-        // Draw border first (full rectangle)
-        SDL_SetRenderDrawColor(renderer, borderColor.r, borderColor.g, borderColor.b, (Uint8)SDL_clamp((int)(borderColor.a * 255), 0, 255));
-        DrawRoundedRectWithAlpha(renderer, rect, borderColor, radius, 0, borderColor);  // recursive call without border
-    }
-
-    // Compute inner rectangle (actual content)
-    SDL_FRect inner = {
-        rect.x + borderWidth,
-        rect.y + borderWidth,
-        rect.w - 2 * borderWidth,
-        rect.h - 2 * borderWidth
-    };
-
-    if (inner.w <= 0 || inner.h <= 0) return;
-
-    radius = SDL_max(0, radius - borderWidth);
-    SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, (Uint8)SDL_clamp((int)(color.a * 255), 0, 255));
-
+void DrawRoundedRectFill(SDL_Renderer* renderer, SDL_FRect inner, UIColor color, float radius) {
     if (radius <= 0) {
         SDL_RenderFillRect(renderer, &inner);
         return;
     }
 
-    // Center fill
+    SDL_SetRenderDrawColor(renderer, (Uint8)(color.r), (Uint8)(color.g), (Uint8)(color.b), (Uint8)SDL_clamp((int)(color.a * 255), 0, 255));
+
     SDL_FRect center = {
         inner.x + radius,
         inner.y + radius,
@@ -45,20 +22,18 @@ void DrawRoundedRectWithAlpha(SDL_Renderer* renderer, SDL_FRect rect, UIColor co
     };
     SDL_RenderFillRect(renderer, &center);
 
-    // Sides
-    SDL_FRect top = { inner.x + (float)radius, inner.y, inner.w - 2 * (float)radius, (float)radius };
-    SDL_FRect bottom = { inner.x + (float)radius, inner.y + inner.h - (float)radius, inner.w - 2 * (float)radius, (float)radius };
-    SDL_FRect left = { inner.x, inner.y + (float)radius, (float)radius, inner.h - 2 * (float)radius };
-    SDL_FRect right = { inner.x + inner.w - (float)radius, inner.y + (float)radius, (float)radius, inner.h - 2 * (float)radius };
+    SDL_FRect top = { inner.x + radius, inner.y, inner.w - 2 * radius, radius };
+    SDL_FRect bottom = { inner.x + radius, inner.y + inner.h - radius, inner.w - 2 * radius, radius };
+    SDL_FRect left = { inner.x, inner.y + radius, radius, inner.h - 2 * radius };
+    SDL_FRect right = { inner.x + inner.w - radius, inner.y + radius, radius, inner.h - 2 * radius };
 
     SDL_RenderFillRect(renderer, &top);
     SDL_RenderFillRect(renderer, &bottom);
     SDL_RenderFillRect(renderer, &left);
     SDL_RenderFillRect(renderer, &right);
 
-    // Rounded corners with anti-aliasing (higher steps for smoother curves)
-    int steps = radius * 2; // more steps = smoother corners
-    float step_size = (float)radius / steps;
+    float steps = radius * 2;
+    float step_size = radius / steps;
 
     for (int i = 0; i < steps; ++i) {
         float dy = (i + 0.5f) * step_size;
@@ -78,67 +53,164 @@ void DrawRoundedRectWithAlpha(SDL_Renderer* renderer, SDL_FRect rect, UIColor co
     }
 }
 
+void DrawRoundedRectWithAlpha(SDL_Renderer* renderer, SDL_FRect rect, UIColor color, float radius, int borderWidth, UIColor borderColor) {
+    if (!renderer || rect.w <= 0 || rect.h <= 0) return;
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+
+    if (borderWidth > 0) {
+        SDL_SetRenderDrawColor(renderer, (Uint8)(borderColor.r), (Uint8)(borderColor.g), (Uint8)(borderColor.b), (Uint8)SDL_clamp((int)(borderColor.a * 255), 0, 255));
+        DrawRoundedRectFill(renderer, rect, borderColor, radius);
+    }
+
+    SDL_FRect inner = {
+        rect.x + borderWidth,
+        rect.y + borderWidth,
+        rect.w - 2 * borderWidth,
+        rect.h - 2 * borderWidth
+    };
+
+    if (inner.w <= 0 || inner.h <= 0) return;
+
+    radius = SDL_max(0, radius - borderWidth);
+    DrawRoundedRectFill(renderer, inner, color, radius);
+}
+
 int UIWindow_Render(UIWindow* window) {
     if (!window || !window->sdlRenderer) return -1;
 
-    // Clear the screen with a default color (black)
-    SDL_SetRenderDrawColor(window->sdlRenderer, 0, 0, 0, 255);
-    SDL_RenderClear(window->sdlRenderer);
+    SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_BLEND);
 
-    // Draw background color if set
     if (window->backgroundColor) {
-        SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_BLEND);
         SDL_SetRenderDrawColor(
             window->sdlRenderer,
-            window->backgroundColor->r,
-            window->backgroundColor->g,
-            window->backgroundColor->b,
-            (Uint8)SDL_clamp((int)roundf(window->backgroundColor->a * 255), 0, 255)
+            (Uint8)(window->backgroundColor->r),
+            (Uint8)(window->backgroundColor->g),
+            (Uint8)(window->backgroundColor->b),
+            (Uint8)SDL_clamp((int)(window->backgroundColor->a * 255), 0, 255)
         );
-        SDL_RenderClear(window->sdlRenderer);
+    } else {
+        SDL_SetRenderDrawColor(window->sdlRenderer, 0, 0, 0, 255);
     }
 
-    // Draw children if they exist
+    SDL_RenderClear(window->sdlRenderer);
+
     if (window->children != NULL) {
+        UIChildren_SortByZ(window->children); // Sort children by z-index
+
         for (int i = 0; i < window->children->count; ++i) {
             UIWidget* el = window->children->children[i];
-            if (el != NULL && el->visible) {
-                if (el->data == NULL) {
-                    printf("No data for child %d\n", i); // Debug output
-                    continue; // Skip if no data
+            if (!el || !el->visible || !el->data) continue;
+
+            UIWidgetBase* base = (UIWidgetBase*)el->data;
+            if (!base || !base->__widget_type) continue;
+
+            if (strcmp(base->__widget_type, UI_WIDGET_RECTANGLE) == 0) {
+                UIRectangle* rect = (UIRectangle*)el->data;
+                SDL_FRect rectF = {
+                    el->x + rect->marginLeft,
+                    el->y + rect->marginTop,
+                    rect->width - (rect->marginLeft + rect->marginRight),
+                    rect->height - (rect->marginTop + rect->marginBottom)
+                };
+
+                if (rectF.w > 0 && rectF.h > 0) {
+                    DrawRoundedRectWithAlpha(
+                        window->sdlRenderer,
+                        rectF,
+                        rect->color,
+                        rect->radius,
+                        (int)rect->borderWidth,
+                        rect->borderColor
+                    );
                 }
+            } else if (strcmp(base->__widget_type, UI_WIDGET_TEXT) == 0) {
+                UIText* textWidget = (UIText*)el->data;
 
-                UIWidgetBase* base = (UIWidgetBase*)el->data;
+                if (
+                    !textWidget->text || !textWidget->fontFamily ||
+                    strcmp(textWidget->fontFamily, "") == 0 ||
+                    strcmp(textWidget->text, "") == 0 ||
+                    textWidget->textLength == 0 || textWidget->fontSize == 0
+                ) continue;
 
-                if (base == NULL) {
-                    printf("No base for child %d\n", i); // Debug output
-                    continue; // Skip if no base
-                }
-
-                char* type = base->__widget_type;
-
-                if (type == NULL) {
-                    printf("Widget type is NULL for child %d\n", i); // Debug output
-                    continue; // Skip if no widget type
-                }
-
-                if (strcmp(type, UI_WIDGET_RECTANGLE) == 0) {
-                    // Desenhar retângulo
-                    UIRectangle* rect = (UIRectangle*)el->data;
-                    SDL_SetRenderDrawColor(window->sdlRenderer, rect->color.r, rect->color.g, rect->color.b, (Uint8)SDL_clamp((int)(rect->color.a * 255), 0, 255));
-                    SDL_FRect rectF = {
-                        el->x + rect->marginLeft,
-                        el->y + rect->marginTop,
-                        rect->width - (rect->marginLeft + rect->marginRight),
-                        rect->height - (rect->marginTop + rect->marginBottom)
-                    };
-
-                    if (rectF.w > 0 && rectF.h > 0) {
-                        DrawRoundedRectWithAlpha(window->sdlRenderer, rectF, rect->color, (int)rect->radius, (int)rect->borderWidth, rect->borderColor);
+                if (textWidget->__SDL_textTexture == NULL) {
+                    if (TTF_Init() != 1) {
+                        printf("Error initializing SDL_ttf: %s\n", SDL_GetError());
+                        return 1;
                     }
-                } else if (strcmp(type, UI_WIDGET_TEXT) == 0) {
-                    // Desenhar texto (placeholder para implementação futura)
+
+                    TTF_Font* font = TTF_OpenFont(textWidget->fontFamily, textWidget->fontSize);
+                    if (!font) {
+                        printf("Error loading font: %s\n", SDL_GetError());
+                        continue;
+                    }
+                
+                    SDL_Color colorSDL = {
+                        (Uint8)(textWidget->color->r),
+                        (Uint8)(textWidget->color->g),
+                        (Uint8)(textWidget->color->b),
+                        (Uint8)SDL_clamp((int)(textWidget->color->a * 255), 0, 255)
+                    };
+                
+                    SDL_Surface* surface = NULL;
+                    surface = TTF_RenderText_Blended(font, textWidget->text, textWidget->textLength, colorSDL);
+                    if (surface == NULL) {
+                        printf("Error rendering texture: %s\n", SDL_GetError());
+                        TTF_CloseFont(font);
+                        continue;
+                    }
+                
+                    SDL_Texture* texture = SDL_CreateTextureFromSurface(window->sdlRenderer, surface);
+                    if (texture == NULL) {
+                        printf("Error creating texture: %s\n", SDL_GetError());
+                        SDL_DestroySurface(surface);
+                        SDL_DestroyTexture(texture);
+                        TTF_CloseFont(font);
+                        continue;
+                    }
+                    textWidget->__SDL_textTexture = texture;
+                    SDL_DestroySurface(surface);
+                    TTF_CloseFont(font);
                 }
+                
+                float w, h;
+                if (SDL_GetTextureSize(textWidget->__SDL_textTexture, &w, &h) != 1) {
+                    printf("Error getting font texture size: %s\n", SDL_GetError());
+                    continue;
+                }    
+                
+                SDL_FRect subTextRect = {
+                    el->x + textWidget->marginLeft,
+                    el->y + textWidget->marginTop,
+                    w + (textWidget->marginLeft + textWidget->marginRight),
+                    h + (textWidget->marginTop + textWidget->marginBottom)
+                };
+
+                SDL_SetRenderDrawColor(
+                    window->sdlRenderer,
+                    (Uint8)(textWidget->background->color.r),
+                    (Uint8)(textWidget->background->color.g),
+                    (Uint8)(textWidget->background->color.b),
+                    (Uint8)SDL_clamp((int)(textWidget->background->color.a * 255), 0, 255)
+                );
+                DrawRoundedRectWithAlpha(
+                    window->sdlRenderer,
+                    subTextRect,
+                    textWidget->background->color,
+                    textWidget->background->radius,
+                    (int)textWidget->background->borderWidth,
+                    textWidget->background->borderColor
+                );
+
+                SDL_FRect mainTextRect = {
+                    subTextRect.x + (subTextRect.w - w) / 2,
+                    subTextRect.y + (subTextRect.h - h) / 2,
+                    w - (textWidget->paddingLeft + textWidget->paddingRight),
+                    h - (textWidget->paddingTop + textWidget->paddingBottom)
+                };
+
+                SDL_RenderTexture(window->sdlRenderer, textWidget->__SDL_textTexture, NULL, &mainTextRect);
             }
         }
     }

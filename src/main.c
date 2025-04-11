@@ -24,12 +24,28 @@ void main() {
     }
 
     UIWidget *redWidget = UIWidget_Create(redRect);
-    UIWidget_SetZIndex(redWidget, 1);
+    UIWidget_SetZIndex(redWidget, 2);
 
     UIWidget *blueWidget = UIWidget_Create(blueRect);
 
     UIChildren_Add(children, redWidget);
     UIChildren_Add(children, blueWidget);
+
+    UIText* text = UIText_Create("Hello, World!", 40);
+    UIText_SetFontFamily(text, DEFAULT_FONT_PATH);
+    UIText_SetColor(text, &UIColorYellow);
+    UIRectangle* textBackground = UIRectangle_Create(0, 0);
+    UIRectangle_SetColor(textBackground, UIColorGray);
+    UIRectangle_SetRadius(textBackground, 0);
+    UIRectangle_SetBorderColor(textBackground, UIColorBlack);
+    UIRectangle_SetBorderWidth(textBackground, 0);
+
+    UIText_SetBackground(text, textBackground);
+    
+    UIWidget* textWidget = UIWidget_Create(text);
+    UIWidget_SetZIndex(textWidget, 3);
+
+    UIChildren_Add(children, textWidget);
     UIApp_SetChildren(app, children);
     UIApp_SetBackgroundColor(app, &UIColorWhite);
     UIApp_SetWindowTitle(app, "My App 2");

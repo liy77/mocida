@@ -3,7 +3,16 @@
 
 #include <uikit/color.h>
 #include <uikit/widget.h>
+#include <uikit/rect.h>
+#include <SDL3_ttf/SDL_ttf.h>
 
+#ifdef WIN32
+#define DEFAULT_FONT_PATH "C:\\Windows\\Fonts\\arial.ttf"
+#elif defined(__linux__)
+#define DEFAULT_FONT_PATH "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+#elif defined(__APPLE__)
+#define DEFAULT_FONT_PATH "/Library/Fonts/Arial.ttf"
+#endif
 
 /**
  * Font styles for text rendering.
@@ -31,9 +40,20 @@ typedef struct UIText {
 
     int fontStyle;
     UIColor* color;
-    UIColor* backgroundColor;
+    UIRectangle* background;
     char* text;
     int textLength;
+
+    float marginLeft;
+    float marginTop;
+    float marginRight;
+    float marginBottom;
+    float paddingLeft;
+    float paddingTop;
+    float paddingRight;
+    float paddingBottom;
+    
+    SDL_Texture* __SDL_textTexture; // Pointer to the SDL texture for rendering text
 } UIText;
 
 /**
@@ -69,12 +89,12 @@ UIText* UIText_SetFontStyle(UIText* text, int fontStyle);
 UIText* UIText_SetColor(UIText* text, UIColor* color);
 
 /**
- * Sets the background color of the UIText object.
+ * Sets the background of the UIText object.
  * @param text Pointer to the UIText object.
- * @param backgroundColor Background color to be set.
+ * @param background Background to be set.
  * @return Pointer to the updated UIText object.
  */
-UIText* UIText_SetBackgroundColor(UIText* text, UIColor* backgroundColor);
+UIText* UIText_SetBackground(UIText* text, UIRectangle* backgroundRect);
 
 /**
  * Sets the text of the UIText object.
@@ -83,5 +103,27 @@ UIText* UIText_SetBackgroundColor(UIText* text, UIColor* backgroundColor);
  * @return Pointer to the updated UIText object.
  */
 UIText* UIText_SetText(UIText* text, char* newText);
+
+/**
+ * Sets the margins of the UIText object.
+ * @param text Pointer to the UIText object.
+ * @param left Left margin.
+ * @param top Top margin.
+ * @param right Right margin.
+ * @param bottom Bottom margin.
+ * @return Pointer to the updated UIText object.
+ */
+UIText* UIText_SetMargins(UIText* text, float left, float top, float right, float bottom);
+
+/**
+ * Sets the padding of the UIText object.
+ * @param text Pointer to the UIText object.
+ * @param left Left padding.
+ * @param top Top padding.
+ * @param right Right padding.
+ * @param bottom Bottom padding.
+ * @return Pointer to the updated UIText object.
+ */
+UIText* UIText_SetPadding(UIText* text, float left, float top, float right, float bottom);
 
 #endif // UIKIT_TEXT_H

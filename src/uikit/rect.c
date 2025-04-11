@@ -43,7 +43,7 @@ UIRectangle* UIRectangle_SetPadding(UIRectangle* rect, float left, float top, fl
     return rect;
 }
 
-UIRectangle* UIRectangle_SetRadius(UIRectangle* rect, int radius) {
+UIRectangle* UIRectangle_SetRadius(UIRectangle* rect, float radius) {
     rect->radius = radius;
     return rect;
 }

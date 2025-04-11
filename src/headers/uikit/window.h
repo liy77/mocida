@@ -1,10 +1,8 @@
 #ifndef UIKIT_WINDOW_H
 #define UIKIT_WINDOW_H
 
-#ifdef WIN32
-#include <windows.h>
-#endif
-
+#include <uikit/widget.h>
+#include <uikit/text.h>
 #include <uikit/color.h>
 #include <uikit/children.h>
 #include <SDL3/SDL.h>

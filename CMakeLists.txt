@@ -28,23 +28,39 @@ include(FetchContent)
 FetchContent_Declare(
   SDL3
   GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-  GIT_TAG release-3.2.10  # Use a versão estável mais recente ou ajuste conforme necessário
+  GIT_TAG release-3.2.10  
 )
 
 # Make SDL3 available
 FetchContent_MakeAvailable(SDL3)
 
-# Link SDL3 to the executable
-target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3)
+# Declare SDL3_ttf
+FetchContent_Declare(
+    SDL3_ttf
+    GIT_REPOSITORY https://github.com/libsdl-org/SDL_ttf.git
+    GIT_TAG release-3.2.2 
+)
+
+# Make SDL3_ttf available
+FetchContent_MakeAvailable(SDL3_ttf)
+
+set(SDL3TTF_VENDORED ON CACHE BOOL "Use vendored dependencies for building SDL3_ttf")
+set(SDL3TTF_SAMPLES OFF CACHE BOOL "Build the SDL3_ttf sample programs")
+
+# Link SDL3 and SDL3_ttf to the executable
+target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf)
+
 
 # Copy SDL3.dll to the output directory on Windows
 if(WIN32)
     add_custom_command(
-        TARGET ${PROJECT_NAME}
-        POST_BUILD
+        TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:SDL3::SDL3>
             $<TARGET_FILE_DIR:${PROJECT_NAME}>
-        COMMENT "Copying SDL3.dll to output directory"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:SDL3_ttf::SDL3_ttf>
+            $<TARGET_FILE_DIR:${PROJECT_NAME}>
+        COMMENT "Copying SDL3 and SDL3_ttf DLLs to output directory"
     )
 endif()

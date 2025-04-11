@@ -16,7 +16,7 @@ UIApp* UIApp_Create(const char* title, int width, int height) {
         return NULL;
     }
 
-    if (SDL_Init(SDL_INIT_VIDEO) < 0) { // Corrigido: SDL_Init retorna 0 em sucesso
+    if (SDL_Init(SDL_INIT_VIDEO) != 1) {
         fprintf(stderr, "SDL_Init Error: %s\n", SDL_GetError());
         free(app);
         return NULL;
@@ -132,6 +132,6 @@ void UIApp_Run(UIApp* app) {
         // Render the window
         UIWindow_Render(app->window);
 
-        SDL_Delay(16); // Aproximating 60 FPS
+        SDL_Delay(16); // Approximating 60 FPS
     }
 }

@@ -54,6 +54,9 @@ void UIWidget_Destroy(UIWidget* widget) {
         return; // Invalid argument
     }
 
-    free(widget->data); // Free the data pointer
+    if (widget->data != NULL) {
+        free(widget->data); // Free the data pointer
+    }
+
     free(widget); // Free the widget itself
 }
