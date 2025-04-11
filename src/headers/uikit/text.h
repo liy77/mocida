@@ -4,6 +4,13 @@
 #include <uikit/color.h>
 #include <uikit/widget.h>
 
+
+/**
+ * Font styles for text rendering.
+ * These styles can be combined using bitwise OR.
+ * Normal is the default style.
+ * Bold, Italic, and Underscore can be combined with Normal.
+ */
 typedef enum FontStyle {
     Normal = 0,
     Bold = 1 << 0,
@@ -11,6 +18,11 @@ typedef enum FontStyle {
     Underscore = 1 << 2
 } FontStyle;
 
+/**
+ * UIText structure representing a text widget.
+ * It contains properties for font size, font family, font style,
+ * color, background color, and the text itself.
+ */
 typedef struct UIText {
     const char* __widget_type;
 

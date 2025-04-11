@@ -7,17 +7,17 @@
 
 typedef int UIRenderDriver;
 
-#define UIRenderSoftware (UIRenderDriver)0
-#define UIRenderOpenGL (UIRenderDriver)1
-#define UIRenderVulkan (UIRenderDriver)2
+#define UI_RENDER_SOFTWARE (UIRenderDriver)0
+#define UI_RENDER_OPENGL (UIRenderDriver)1
+#define UI_RENDER_VULKAN (UIRenderDriver)2
 
 #ifdef WIN32
-#define UIRender3D12 (UIRenderDriver)3
-#define UIRender3D11 (UIRenderDriver)4
+#define UI_RENDER_3D12 (UIRenderDriver)3
+#define UI_RENDER_3D11 (UIRenderDriver)4
 #endif
 
 #ifdef __MACH__
-#define UIRenderMetal (UIRenderDriver)5
+#define UI_RENDER_METAL (UIRenderDriver)5
 #endif
 
 

@@ -44,8 +44,8 @@ void UIChildren_Add(UIChildren* children, UIWidget* child) {
             }
             
             children->children[child->z] = child;
-            children->count++; // Increment the count of children
-            return; // Child added successfully
+            children->count++; 
+            return; 
         }
     }
 
@@ -60,10 +60,10 @@ void UIChildren_Remove(UIChildren* children, UIWidget* child) {
 
     for (int i = 0; i < children->capacity; i++) {
         if (children->children[i] == child) {
-            free(children->children[i]); // Free the memory of the removed child
-            children->children[i] = NULL; // Set the pointer to NULL
-            children->count--; // Decrement the count of children
-            return; // Child removed successfully
+            free(children->children[i]); 
+            children->children[i] = NULL; 
+            children->count--; 
+            return; 
         }
     }
 
@@ -86,7 +86,7 @@ void UIChildren_Destroy(UIChildren* children) {
     free(children->children); // Free the array of children
     free(children); // Free the UIChildren object
 
-    return; // Indicate destruction
+    return;
 }
 
 void UIChildren_Clear(UIChildren* children) {
@@ -96,8 +96,8 @@ void UIChildren_Clear(UIChildren* children) {
 
     for (int i = 0; i < children->capacity; i++) {
         if (children->children[i] != NULL) {
-            free(children->children[i]); // Free each child
-            children->children[i] = NULL; // Set the pointer to NULL
+            free(children->children[i]); 
+            children->children[i] = NULL;
         }
     }
 }

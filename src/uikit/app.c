@@ -126,12 +126,12 @@ void UIApp_Run(UIApp* app) {
             if (e.type == SDL_EVENT_QUIT) {
                 app->window->visible = 0;
             }
-            // Aqui você pode adicionar manipulação de eventos para os children
+            // TODO - Add other event handling here (keyboard, mouse, etc.)
         }
 
-        // Renderizar a janela, incluindo fundo e children
+        // Render the window
         UIWindow_Render(app->window);
 
-        SDL_Delay(16); // Aproximadamente 60 FPS
+        SDL_Delay(16); // Aproximating 60 FPS
     }
 }

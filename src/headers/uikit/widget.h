@@ -8,10 +8,18 @@
 // Define a typedef for a pointer to UIWidgetData
 typedef void* UIWidgetData;
 
+/**
+ * Base structure for UI widgets.
+ * This structure contains common properties for all widgets.
+ */
 typedef struct {
     const char* __widget_type; // Type of the widget (e.g., "UIRectangle", "UIText", etc.)
 } UIWidgetBase;
 
+/**
+ * UIWidget structure representing a UI widget.
+ * It contains properties for position, visibility, and a pointer to the actual widget data.
+ */
 typedef struct {
     int x;
     int y;

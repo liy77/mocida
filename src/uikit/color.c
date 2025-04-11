@@ -5,7 +5,7 @@ UIColor* UIColor_RGBA(int r, int g, int b, float a) {
     UIColor* color = (UIColor*)malloc(sizeof(UIColor));
     if (color == NULL) {
         fprintf(stderr, "Failed to allocate memory for UIColor\n");
-        return NULL; // Memory allocation failed
+        return NULL;
     }
 
     // Clamp values to valid ranges
