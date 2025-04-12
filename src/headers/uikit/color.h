@@ -32,6 +32,7 @@ typedef struct {
 #define UIColorSilver (UIColor){192, 192, 192, 1.0f}
 #define UIColorNavy (UIColor){0, 0, 128, 1.0f}
 #define UIColorTeal (UIColor){0, 128, 128, 1.0f}
+#define UIColorTransparent (UIColor){0, 0, 0, 0.0f} // Fully transparent
 
 /**
  * Creates a UIColor object with the specified RGBA values.

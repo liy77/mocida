@@ -33,7 +33,7 @@ void main() {
 
     UIText* text = UIText_Create("Hello, World!", 40);
     UIText_SetFontFamily(text, DEFAULT_FONT_PATH);
-    UIText_SetColor(text, &UIColorYellow);
+    UIText_SetColor(text, UIColorYellow);
 
     
     UIRectangle* textBackground = UIRectangle_Create(0, 0);
@@ -44,12 +44,14 @@ void main() {
 
     UIText_SetBackground(text, textBackground);
     UIText_SetPadding(text, 10, 10, 10, 10);
+    UISearchFonts();
+    UIText_SetFontFamily(text, UIGetFont("Times New Roman"));
     UIWidget* textWidget = UIWidget_Create(text);
     UIWidget_SetZIndex(textWidget, 3);
 
     UIChildren_Add(children, textWidget);
     UIApp_SetChildren(app, children);
-    UIApp_SetBackgroundColor(app, &UIColorWhite);
+    UIApp_SetBackgroundColor(app, UIColorWhite);
     UIApp_SetWindowTitle(app, "My App 2");
     UIApp_SetWindowSize(app, 1024, 768);
     UIApp_SetWindowScaleMode(app, UIWindowWindowed);

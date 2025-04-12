@@ -27,7 +27,7 @@ typedef struct {
     char* title;
     int visible;
     UIChildren* children;
-    UIColor* backgroundColor;
+    UIColor backgroundColor;
     UIWindowScaleMode scaleMode;
 
     SDL_Renderer* sdlRenderer;

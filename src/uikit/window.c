@@ -88,17 +88,13 @@ int UIWindow_Render(UIWindow* window) {
 
     SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_BLEND);
 
-    if (window->backgroundColor) {
-        SDL_SetRenderDrawColor(
-            window->sdlRenderer,
-            (Uint8)(window->backgroundColor->r),
-            (Uint8)(window->backgroundColor->g),
-            (Uint8)(window->backgroundColor->b),
-            (Uint8)SDL_clamp((int)(window->backgroundColor->a * 255), 0, 255)
-        );
-    } else {
-        SDL_SetRenderDrawColor(window->sdlRenderer, 0, 0, 0, 255);
-    }
+    SDL_SetRenderDrawColor(
+        window->sdlRenderer,
+        (Uint8)(window->backgroundColor.r),
+        (Uint8)(window->backgroundColor.g),
+        (Uint8)(window->backgroundColor.b),
+        (Uint8)SDL_clamp((int)(window->backgroundColor.a * 255), 0, 255)
+    );
 
     SDL_RenderClear(window->sdlRenderer);
 
@@ -162,10 +158,10 @@ int UIWindow_Render(UIWindow* window) {
                     }
                 
                     SDL_Color colorSDL = {
-                        (Uint8)(textWidget->color->r),
-                        (Uint8)(textWidget->color->g),
-                        (Uint8)(textWidget->color->b),
-                        (Uint8)SDL_clamp((int)(textWidget->color->a * 255), 0, 255)
+                        (Uint8)(textWidget->color.r),
+                        (Uint8)(textWidget->color.g),
+                        (Uint8)(textWidget->color.b),
+                        (Uint8)SDL_clamp((int)(textWidget->color.a * 255), 0, 255)
                     };
                 
                     SDL_Surface* surface = NULL;
@@ -217,7 +213,7 @@ int UIWindow_Render(UIWindow* window) {
                     (Uint8)(textWidget->background->color.b),
                     (Uint8)SDL_clamp((int)(textWidget->background->color.a * 255), 0, 255)
                 );
-                
+
                 DrawRoundedRectWithAlpha(
                     window->sdlRenderer,
                     subTextRect,
@@ -275,7 +271,7 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
     window->scaleMode = UIWindowWindowed;
     window->width = width;
     window->height = height;
-    window->backgroundColor = NULL;
+    window->backgroundColor = UIColorWhite;
     window->children = NULL;
     window->sdlWindow = sdlWindow;
     window->sdlRenderer = sdlRenderer;

@@ -24,9 +24,9 @@ UIText* UIText_Create(char* text, float fontSize) {
     uiText->fontSize = fontSize;
     uiText->fontFamily = _strdup(DEFAULT_FONT_PATH); // Default font family
     uiText->fontStyle = Normal; // Default style
-    uiText->color = UIColor_RGBA(0, 0, 0, 1.0f); // Default color (black)
+    uiText->color = UIColorBlack; // Default color (black)
     UIRectangle* UIRecN = UIRectangle_Create(0, 0); // Default rectangle
-    UIRectangle_SetColor(UIRecN, UIColorWhite); // Set default color (white)
+    UIRectangle_SetColor(UIRecN, UIColorTransparent); // Set default color (white)
 
     uiText->background = UIRecN; // Default background color (white
     uiText->text = _strdup(text);
@@ -39,7 +39,7 @@ UIText* UIText_Create(char* text, float fontSize) {
 
 UIText* UIText_SetFontFamily(UIText* text, char* fontFamily) {
     if (text == NULL || fontFamily == NULL) {
-        return NULL; // Invalid arguments
+        return NULL;
     }
 
     free(text->fontFamily); // Free previous font family
@@ -49,22 +49,16 @@ UIText* UIText_SetFontFamily(UIText* text, char* fontFamily) {
 
 UIText* UIText_SetFontStyle(UIText* text, int fontStyle) {
     if (text == NULL) {
-        return NULL; // Invalid argument
+        return NULL;
     }
 
     text->fontStyle = fontStyle;
     return text;
 }
 
-UIText* UIText_SetColor(UIText* text, UIColor* color) {
+UIText* UIText_SetColor(UIText* text, UIColor color) {
     if (text == NULL) {
-        return NULL; // Invalid arguments
-    }
-
-    free(text->color); // Free previous color
-
-    if (color == NULL) {
-        color = &UIColorBlack; // Default color (black) if NULL
+        return NULL; 
     }
 
     text->color = color;

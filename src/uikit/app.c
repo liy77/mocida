@@ -30,7 +30,7 @@ UIApp* UIApp_Create(const char* title, int width, int height) {
         return NULL;
     }
 
-    UIApp_SetBackgroundColor(app, &UIColorWhite);
+    UIApp_SetBackgroundColor(app, UIColorWhite);
     return app;
 }
 
@@ -39,8 +39,11 @@ void UIApp_SetChildren(UIApp* app, UIChildren* children) {
     app->window->children = children;
 }
 
-void UIApp_SetBackgroundColor(UIApp* app, UIColor* color) {
-    if (!app || !color || !app->window) return;
+void UIApp_SetBackgroundColor(UIApp* app, UIColor color) {
+    if (!app || !app->window) {
+        fprintf(stderr, "UIApp or UIWindow is NULL\n");
+        return;
+    };
     app->backgroundColor = color;
     app->window->backgroundColor = color;
 }

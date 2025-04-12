@@ -4,15 +4,8 @@
 #include <uikit/color.h>
 #include <uikit/widget.h>
 #include <uikit/rect.h>
+#include <uikit/font.h>
 #include <SDL3_ttf/SDL_ttf.h>
-
-#ifdef WIN32
-#define DEFAULT_FONT_PATH "C:\\Windows\\Fonts\\arial.ttf"
-#elif defined(__linux__)
-#define DEFAULT_FONT_PATH "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-#elif defined(__APPLE__)
-#define DEFAULT_FONT_PATH "/Library/Fonts/Arial.ttf"
-#endif
 
 /**
  * Font styles for text rendering.
@@ -39,7 +32,7 @@ typedef struct UIText {
     char* fontFamily;
 
     int fontStyle;
-    UIColor* color;
+    UIColor color;
     UIRectangle* background;
     char* text;
     int textLength;
@@ -86,7 +79,7 @@ UIText* UIText_SetFontStyle(UIText* text, int fontStyle);
  * @param color Color to be set.
  * @return Pointer to the updated UIText object.
  */
-UIText* UIText_SetColor(UIText* text, UIColor* color);
+UIText* UIText_SetColor(UIText* text, UIColor color);
 
 /**
  * Sets the background of the UIText object.

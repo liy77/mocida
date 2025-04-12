@@ -21,7 +21,7 @@ UIWidget* UIWidget_Create(UIWidgetData data)  {
     return widget;
 }
 
-UIWidget* UIWidget_SetPosition(UIWidget* widget, int x, int y) {
+UIWidget* UIWidget_SetPosition(UIWidget* widget, float x, float y) {
     if (widget == NULL) {
         return NULL;
     }

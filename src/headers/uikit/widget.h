@@ -43,7 +43,7 @@ UIWidget* UIWidget_Create(UIWidgetData data);
  * @param y Y-coordinate of the widget.
  * @return Pointer to the updated UIWidget object.
  */
-UIWidget *UIWidget_SetPosition(UIWidget *widget, int x, int y);
+UIWidget *UIWidget_SetPosition(UIWidget *widget, float x, float y);
 
 /**
  * Sets the z-index of the UIWidget object.
