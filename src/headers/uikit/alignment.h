@@ -12,10 +12,10 @@
 #define UI_ALIGN_H_LEFT 0x00000010
 #define UI_ALIGN_H_RIGHT 0x00000020
 
-typedef struct UIAlignment {
+typedef struct {
     int vertical;
     int horizontal;
-};
+} UIAlignment;
 
 UIAlignment UIAlignment_Create(int vertical, int horizontal);
 
