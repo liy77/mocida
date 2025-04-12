@@ -21,8 +21,8 @@ typedef struct {
  * It contains properties for position, visibility, and a pointer to the actual widget data.
  */
 typedef struct {
-    int x;
-    int y;
+    float x;
+    float y;
     int z;
     int visible;
 

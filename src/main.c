@@ -34,6 +34,8 @@ void main() {
     UIText* text = UIText_Create("Hello, World!", 40);
     UIText_SetFontFamily(text, DEFAULT_FONT_PATH);
     UIText_SetColor(text, &UIColorYellow);
+
+    
     UIRectangle* textBackground = UIRectangle_Create(0, 0);
     UIRectangle_SetColor(textBackground, UIColorGray);
     UIRectangle_SetRadius(textBackground, 0);
@@ -41,7 +43,7 @@ void main() {
     UIRectangle_SetBorderWidth(textBackground, 0);
 
     UIText_SetBackground(text, textBackground);
-    
+    UIText_SetPadding(text, 10, 10, 10, 10);
     UIWidget* textWidget = UIWidget_Create(text);
     UIWidget_SetZIndex(textWidget, 3);
 

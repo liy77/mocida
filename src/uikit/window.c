@@ -6,6 +6,13 @@
 #include <math.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
+void ApplyMargins(SDL_FRect* rect, float marginLeft, float marginTop, float marginRight, float marginBottom) {
+    rect->x += marginLeft;
+    rect->y += marginTop;
+    rect->w -= (marginLeft + marginRight);
+    rect->h -= (marginTop + marginBottom);
+}
+
 void DrawRoundedRectFill(SDL_Renderer* renderer, SDL_FRect inner, UIColor color, float radius) {
     if (radius <= 0) {
         SDL_RenderFillRect(renderer, &inner);
@@ -108,11 +115,19 @@ int UIWindow_Render(UIWindow* window) {
             if (strcmp(base->__widget_type, UI_WIDGET_RECTANGLE) == 0) {
                 UIRectangle* rect = (UIRectangle*)el->data;
                 SDL_FRect rectF = {
-                    el->x + rect->marginLeft,
-                    el->y + rect->marginTop,
-                    rect->width - (rect->marginLeft + rect->marginRight),
-                    rect->height - (rect->marginTop + rect->marginBottom)
+                    el->x,
+                    el->y,
+                    rect->width,
+                    rect->height
                 };
+
+                ApplyMargins(
+                    &rectF,
+                    rect->marginLeft,
+                    rect->marginTop,
+                    rect->marginRight,
+                    rect->marginBottom
+                );
 
                 if (rectF.w > 0 && rectF.h > 0) {
                     DrawRoundedRectWithAlpha(
@@ -181,11 +196,19 @@ int UIWindow_Render(UIWindow* window) {
                 }    
                 
                 SDL_FRect subTextRect = {
-                    el->x + textWidget->marginLeft,
-                    el->y + textWidget->marginTop,
-                    w + (textWidget->marginLeft + textWidget->marginRight),
-                    h + (textWidget->marginTop + textWidget->marginBottom)
+                    el->x,
+                    el->y,
+                    w + textWidget->paddingLeft + textWidget->paddingRight,
+                    h + textWidget->paddingTop + textWidget->paddingBottom
                 };
+
+                ApplyMargins(
+                    &subTextRect,
+                    textWidget->marginLeft,
+                    textWidget->marginTop,
+                    textWidget->marginRight,
+                    textWidget->marginBottom
+                );
 
                 SDL_SetRenderDrawColor(
                     window->sdlRenderer,
@@ -194,6 +217,7 @@ int UIWindow_Render(UIWindow* window) {
                     (Uint8)(textWidget->background->color.b),
                     (Uint8)SDL_clamp((int)(textWidget->background->color.a * 255), 0, 255)
                 );
+                
                 DrawRoundedRectWithAlpha(
                     window->sdlRenderer,
                     subTextRect,
@@ -206,8 +230,8 @@ int UIWindow_Render(UIWindow* window) {
                 SDL_FRect mainTextRect = {
                     subTextRect.x + (subTextRect.w - w) / 2,
                     subTextRect.y + (subTextRect.h - h) / 2,
-                    w - (textWidget->paddingLeft + textWidget->paddingRight),
-                    h - (textWidget->paddingTop + textWidget->paddingBottom)
+                    w,
+                    h
                 };
 
                 SDL_RenderTexture(window->sdlRenderer, textWidget->__SDL_textTexture, NULL, &mainTextRect);

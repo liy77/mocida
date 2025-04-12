@@ -13,10 +13,6 @@ typedef struct {
     float marginTop;
     float marginRight;
     float marginBottom;
-    float paddingLeft;
-    float paddingTop;
-    float paddingRight;
-    float paddingBottom;
     float radius;
     float borderWidth;
 
@@ -42,17 +38,6 @@ UIRectangle* UIRectangle_Create(float width, float height);
  * @return Pointer to the updated UIRectangle object.
  */
 UIRectangle* UIRectangle_SetMargins(UIRectangle* rect, float left, float top, float right, float bottom);
-
-/**
- * Sets the padding of the rectangle.
- * @param rect Pointer to the UIRectangle object.
- * @param left Left padding.
- * @param top Top padding.
- * @param right Right padding.
- * @param bottom Bottom padding.
- * @return Pointer to the updated UIRectangle object.
- */
-UIRectangle* UIRectangle_SetPadding(UIRectangle* rect, float left, float top, float right, float bottom);
 
 /**
  * Sets the border radius of the rectangle.

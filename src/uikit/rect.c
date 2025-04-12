@@ -16,10 +16,6 @@ UIRectangle* UIRectangle_Create(float width, float height) {
     rect->marginTop = 0;
     rect->marginRight = 0;
     rect->marginBottom = 0;
-    rect->paddingLeft = 0;
-    rect->paddingTop = 0;
-    rect->paddingRight = 0;
-    rect->paddingBottom = 0;
     rect->radius = 0;
     rect->borderWidth = 0;
     rect->__widget_type = UI_WIDGET_RECTANGLE; // Set the widget type
@@ -32,14 +28,6 @@ UIRectangle* UIRectangle_SetMargins(UIRectangle* rect, float left, float top, fl
     rect->marginTop = top;
     rect->marginRight = right;
     rect->marginBottom = bottom;
-    return rect;
-}
-
-UIRectangle* UIRectangle_SetPadding(UIRectangle* rect, float left, float top, float right, float bottom) {
-    rect->paddingLeft = left;
-    rect->paddingTop = top;
-    rect->paddingRight = right;
-    rect->paddingBottom = bottom;
     return rect;
 }
 

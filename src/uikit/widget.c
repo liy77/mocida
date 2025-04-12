@@ -4,12 +4,12 @@
 
 UIWidget* UIWidget_Create(UIWidgetData data)  {
     if (data == NULL) {
-        return NULL; // Invalid argument
+        return NULL;
     }
     
     UIWidget* widget = (UIWidget*)malloc(sizeof(UIWidget));
     if (widget == NULL) {
-        return NULL; // Memory allocation failed
+        return NULL; 
     }
 
     widget->x = 0;
@@ -23,7 +23,7 @@ UIWidget* UIWidget_Create(UIWidgetData data)  {
 
 UIWidget* UIWidget_SetPosition(UIWidget* widget, int x, int y) {
     if (widget == NULL) {
-        return NULL; // Invalid argument
+        return NULL;
     }
 
     widget->x = x;
@@ -33,7 +33,7 @@ UIWidget* UIWidget_SetPosition(UIWidget* widget, int x, int y) {
 
 UIWidget* UIWidget_SetZIndex(UIWidget* widget, int z) {
     if (widget == NULL) {
-        return NULL; // Invalid argument
+        return NULL;
     }
 
     widget->z = z;
@@ -42,7 +42,7 @@ UIWidget* UIWidget_SetZIndex(UIWidget* widget, int z) {
 
 UIWidget* UIWidget_SetVisible(UIWidget* widget, int visible) {
     if (widget == NULL) {
-        return NULL; // Invalid argument
+        return NULL;
     }
 
     widget->visible = visible;
@@ -51,7 +51,7 @@ UIWidget* UIWidget_SetVisible(UIWidget* widget, int visible) {
 
 void UIWidget_Destroy(UIWidget* widget) {
     if (widget == NULL) {
-        return; // Invalid argument
+        return;
     }
 
     if (widget->data != NULL) {
