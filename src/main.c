@@ -10,7 +10,7 @@ void main() {
 
     UIRectangle* redRect = UIRectangle_Create();
     UIRectangle_SetColor(redRect, UIColorRed);
-    UIRectangle_SetRadius(redRect, 0);
+    UIRectangle_SetRadius(redRect, 50);
     UIRectangle_SetBorderWidth(redRect, 3);
     
     UIRectangle* blueRect = UIRectangle_Create();
