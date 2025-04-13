@@ -26,21 +26,105 @@ typedef int UIRenderDriver;
 #endif
 
 
+/**
+ * UIApp structure representing the main application.
+ * It contains properties for the main window, background color,
+ * and other application settings.
+ */
 typedef struct {
     UIWindow* window;
+    UIWidget* mainWidget;
     UIColor backgroundColor;
 } UIApp;
 
+/**
+ * Creates a UIApp object with the specified title, width, and height.
+ * @param title Title of the application window.
+ * @param width Width of the application window.
+ * @param height Height of the application window.
+ * @return A pointer to the created UIApp object.
+ */
 UIApp* UIApp_Create(const char* title, int width, int height);
+
+UIWidget* UIApp_GetWindow(UIApp* app);
+
+/**
+ * Sets the child widgets of the UIApp object.
+ * @param app Pointer to the UIApp object.
+ * @param children Pointer to the UIChildren object containing child widgets.
+ * @return None.
+ */
 void UIApp_SetChildren(UIApp* app, UIChildren* children);
+
+/**
+ * Sets the background color of the UIApp object.
+ * @param app Pointer to the UIApp object.
+ * @param color Background color to be set.
+ * @return None.
+ */
 void UIApp_SetBackgroundColor(UIApp* app, UIColor color);
+
+/**
+ * Sets the title of the application window.
+ * @param app Pointer to the UIApp object.
+ * @param title Title to be set.
+ * @return None.
+ */
 void UIApp_SetWindowTitle(UIApp* app, const char* title);
+
+/**
+ * Sets the size of the application window.
+ * @param app Pointer to the UIApp object.
+ * @param width Width to be set.
+ * @param height Height to be set.
+ * @return None.
+ */
 void UIApp_SetWindowSize(UIApp* app, int width, int height);
+
+/**
+ * Sets the position of the application window.
+ * @param app Pointer to the UIApp object.
+ * @param x X-coordinate to be set.
+ * @param y Y-coordinate to be set.
+ * @return None.
+ */
 void UIApp_SetWindowPosition(UIApp* app, int x, int y);
-void UIApp_SetWindowScaleMode(UIApp* app, UIWindowScaleMode scaleMode);
+
+/**
+ * Sets the scale mode of the application window.
+ * @param app Pointer to the UIApp object.
+ * @param scaleMode Scale mode to be set.
+ * @return None.
+ */
+void UIApp_SetWindowDisplayMode(UIApp* app, UIWindowDisplayMode scaleMode);
+
+/**
+ * Sets the render driver of the application window.
+ * @param app Pointer to the UIApp object.
+ * @param renderDriver Render driver to be set.
+ * @return None.
+ */
 void UIApp_ShowWindow(UIApp* app);
+
+/**
+ * Hides the application window.
+ * @param app Pointer to the UIApp object.
+ * @return None.
+ */
 void UIApp_HideWindow(UIApp* app);
+
+/**
+ * Destroys the UIApp object and frees its resources.
+ * @param app Pointer to the UIApp object to be destroyed.
+ * @return None.
+ */
 void UIApp_Destroy(UIApp* app);
+
+/**
+ * Runs the main loop of the application.
+ * @param app Pointer to the UIApp object.
+ * @return None.
+ */
 void UIApp_Run(UIApp* app);
 
 #endif

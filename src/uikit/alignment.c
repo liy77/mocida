@@ -1,75 +1,77 @@
 #include <uikit/alignment.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
+#include <uikit/widget.h>
 
-UIAlignment UIAlignment_Create(int vertical, int horizontal) {
+UIAlignment UIAlignment_Create(UIAlign vertical, UIAlign horizontal) {
     UIAlignment alignment;
     alignment.vertical = vertical;
     alignment.horizontal = horizontal;
     return alignment;
 }
 
-UIAlignment UIAlignment_VerticalCenter() {
-    return UIAlignment_Create(UI_ALIGN_V_CENTER, 0);
-}
-
-UIAlignment UIAlignment_VerticalTop() {
-    return UIAlignment_Create(UI_ALIGN_V_TOP, 0);
-}
-
-UIAlignment UIAlignment_VerticalBottom() {
-    return UIAlignment_Create(UI_ALIGN_V_BOTTOM, 0);
-}
-
-UIAlignment UIAlignment_HorizontalCenter() {
-    return UIAlignment_Create(0, UI_ALIGN_H_CENTER);
-}
-
-UIAlignment UIAlignment_HorizontalLeft() {
-    return UIAlignment_Create(0, UI_ALIGN_H_LEFT);
-}
-
-UIAlignment UIAlignment_HorizontalRight() {
-    return UIAlignment_Create(0, UI_ALIGN_H_RIGHT);
-}
-
-void UIAlignment_SetWidgetAlignment(UIWidget* widget, UIAlignment alignment) {
+void UIWidget_SetAlignment(UIWidget* widget, UIAlignment alignment) {
     if (widget == NULL) {
         return;
     }
 
-    UIWidgetBase* base = (UIWidgetBase*)widget->data;
-    if (base == NULL) {
-        fprintf(stderr, "Widget data is NULL\n");
-        return; 
-    }
-
-
-    const char* widgetType = base->__widget_type;
-    if (widgetType == NULL) {
-        fprintf(stderr, "Widget type is NULL\n");
-        return; 
+    widget->alignment = malloc(sizeof(UIAlignment));
+    if (widget->alignment == NULL) {
+        fprintf(stderr, "Failed to allocate memory for alignment\n");
+        return;
     }
     
-    if (strcmp(widgetType, UI_WIDGET_RECTANGLE) == 0) {
-        UIRectangle* rect = (UIRectangle*)widget->data;
-        if (rect == NULL) {
-            fprintf(stderr, "Rectangle data is NULL\n");
-            return; 
-        }
+    *widget->alignment = alignment;
 
-        // TODO: Implement alignment logic for UIRectangle
-    } else if (strcmp(widgetType, UI_WIDGET_TEXT) == 0) {
-        UIText* text = (UIText*)widget->data;
-        if (text == NULL) {
-            fprintf(stderr, "Text data is NULL\n");
-            return; 
-        }
+    UIWidget* parent = UIWidget_GetParent(widget);
+    if (parent == NULL) {
+        fprintf(stderr, "Parent widget is NULL, alignment will not work\n");
+        return;
+    }
 
-        // TODO: Implement alignment logic for UIText
-    } else {
-        fprintf(stderr, "Unknown widget type: %s. Cannot set alignment \n", widgetType);
-        return; 
+    if (parent->width == NULL || parent->height == NULL) {
+        fprintf(stderr, "Parent widget does not have a defined size.\n");
+        return;
+    }
+
+    if (widget->width == NULL || widget->height == NULL) {
+        fprintf(stderr, "Child widget does not have a defined size.\n");
+        return;
+    }
+
+    printf("Parent widget size: %f x %f\n", parent->width, parent->height);
+
+    float parentWidth = *parent->width;
+    float parentHeight = *parent->height;
+
+    float widgetWidth = *widget->width;
+    float widgetHeight = *widget->height;
+
+    switch (alignment.horizontal) {
+        case UI_ALIGN_H_LEFT:
+            widget->x = 0;
+            break;
+        case UI_ALIGN_H_CENTER:
+            widget->x = (parentWidth - widgetWidth) / 2;
+            break;
+        case UI_ALIGN_H_RIGHT:
+            widget->x = parentWidth - widgetWidth;
+            break;
+        default:
+            break;
+    }
+
+    switch (alignment.vertical) {
+        case UI_ALIGN_V_TOP:
+            widget->y = 0;
+            break;
+        case UI_ALIGN_V_CENTER:
+            widget->y = (parentHeight - widgetHeight) / 2;
+            break;
+        case UI_ALIGN_V_BOTTOM:
+            widget->y = parentHeight - widgetHeight;
+            break;
+        default:
+            break;
     }
 }

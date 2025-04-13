@@ -2,8 +2,6 @@
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <math.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
 void ApplyMargins(SDL_FRect* rect, float marginLeft, float marginTop, float marginRight, float marginBottom) {
@@ -14,12 +12,12 @@ void ApplyMargins(SDL_FRect* rect, float marginLeft, float marginTop, float marg
 }
 
 void DrawRoundedRectFill(SDL_Renderer* renderer, SDL_FRect inner, UIColor color, float radius) {
+    SDL_SetRenderDrawColor(renderer, (Uint8)(color.r), (Uint8)(color.g), (Uint8)(color.b), (Uint8)SDL_clamp((int)(color.a * 255), 0, 255));
+
     if (radius <= 0) {
         SDL_RenderFillRect(renderer, &inner);
         return;
     }
-
-    SDL_SetRenderDrawColor(renderer, (Uint8)(color.r), (Uint8)(color.g), (Uint8)(color.b), (Uint8)SDL_clamp((int)(color.a * 255), 0, 255));
 
     SDL_FRect center = {
         inner.x + radius,
@@ -105,16 +103,31 @@ int UIWindow_Render(UIWindow* window) {
             UIWidget* el = window->children->children[i];
             if (!el || !el->visible || !el->data) continue;
 
+            if (el->alignment != NULL) {
+                printf("Setting alignment for widget\n");
+                UIWidget_SetAlignment(el, *el->alignment);
+            }
+
             UIWidgetBase* base = (UIWidgetBase*)el->data;
-            if (!base || !base->__widget_type) continue;
+            if (base == NULL || base->__widget_type == NULL) continue;
 
             if (strcmp(base->__widget_type, UI_WIDGET_RECTANGLE) == 0) {
+                if (el->width == NULL) {
+                    fprintf(stderr, "Rectangle width cannot be NULL\n");
+                    exit(1);
+                }
+    
+                if (el->height == NULL) {
+                    fprintf(stderr, "Rectangle height cannot be NULL\n");\
+                    exit(1);
+                }
+
                 UIRectangle* rect = (UIRectangle*)el->data;
                 SDL_FRect rectF = {
                     el->x,
                     el->y,
-                    rect->width,
-                    rect->height
+                    *el->width,
+                    *el->height
                 };
 
                 ApplyMargins(
@@ -185,11 +198,42 @@ int UIWindow_Render(UIWindow* window) {
                     TTF_CloseFont(font);
                 }
                 
-                float w, h;
-                if (SDL_GetTextureSize(textWidget->__SDL_textTexture, &w, &h) != 1) {
-                    printf("Error getting font texture size: %s\n", SDL_GetError());
-                    continue;
-                }    
+                float w = 0, h = 0;
+
+                if (!el->width || !el->height) {
+                    float tex_w = 0, tex_h = 0;
+                    if (SDL_GetTextureSize(textWidget->__SDL_textTexture, &tex_w, &tex_h) != 1) {
+                        fprintf(stderr, "Error getting texture size: %s\n", SDL_GetError());
+                        continue;
+                    }
+
+                    if (!el->width) {
+                        w = tex_w;
+                        el->width = malloc(sizeof(float));
+                        if (!el->width) {
+                            fprintf(stderr, "Error allocating memory for width\n");
+                            continue;
+                        }
+                        *el->width = w;
+                    } else {
+                        w = *el->width;
+                    }
+
+                    if (!el->height) {
+                        h = tex_h;
+                        el->height = malloc(sizeof(float));
+                        if (!el->height) {
+                            fprintf(stderr, "Error allocating memory for height\n");
+                            continue;
+                        }
+                        *el->height = h;
+                    } else {
+                        h = *el->height;
+                    }
+                } else {
+                    w = *el->width;
+                    h = *el->height;
+                }
                 
                 SDL_FRect subTextRect = {
                     el->x,

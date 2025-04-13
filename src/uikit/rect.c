@@ -1,15 +1,13 @@
 #include <uikit/rect.h>
 #include <stdio.h>
 
-UIRectangle* UIRectangle_Create(float width, float height) {
+UIRectangle* UIRectangle_Create() {
     UIRectangle* rect = (UIRectangle*)malloc(sizeof(UIRectangle));
     if (rect == NULL) {
         fprintf(stderr, "Failed to allocate memory for UIRectangle\n");
         return NULL; // Memory allocation failed
     }
 
-    rect->width = width;
-    rect->height = height;
     rect->color = UIColorWhite;
     rect->borderColor = UIColorBlack;
     rect->marginLeft = 0;

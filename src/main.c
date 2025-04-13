@@ -2,17 +2,18 @@
 #include <stdio.h>
 
 void main() {
+
     UIApp* app = UIApp_Create("My App", 800, 600);
     if (app == NULL) {
         return;
     }
 
-    UIRectangle* redRect = UIRectangle_Create(100, 100);
+    UIRectangle* redRect = UIRectangle_Create();
     UIRectangle_SetColor(redRect, UIColorRed);
-    UIRectangle_SetRadius(redRect, 10);
+    UIRectangle_SetRadius(redRect, 0);
     UIRectangle_SetBorderWidth(redRect, 3);
     
-    UIRectangle* blueRect = UIRectangle_Create(200, 200);
+    UIRectangle* blueRect = UIRectangle_Create();
     UIRectangle_SetColor(blueRect, UIColorBlue);
     UIRectangle_SetRadius(blueRect, 10);
     UIRectangle_SetMargins(blueRect, 20, 20, 20, 20);
@@ -23,11 +24,13 @@ void main() {
         return;
     }
 
-    UIWidget *redWidget = UIWidget_Create(redRect);
+    UIWidget *redWidget = widgcs(redRect, 100, 100);
     UIWidget_SetZIndex(redWidget, 2);
 
-    UIWidget *blueWidget = UIWidget_Create(blueRect);
+    UIWidget *blueWidget = widgcs(blueRect, 200, 200);
+    UIWidget_SetParent(redWidget, app->mainWidget);
 
+    UIWidget_SetAlignment(redWidget, UIAlignment_Create(UI_ALIGN_V_BOTTOM, UI_ALIGN_H_CENTER));
     UIChildren_Add(children, redWidget);
     UIChildren_Add(children, blueWidget);
 
@@ -36,7 +39,7 @@ void main() {
     UIText_SetColor(text, UIColorYellow);
 
     
-    UIRectangle* textBackground = UIRectangle_Create(0, 0);
+    UIRectangle* textBackground = UIRectangle_Create();
     UIRectangle_SetColor(textBackground, UIColorGray);
     UIRectangle_SetRadius(textBackground, 0);
     UIRectangle_SetBorderColor(textBackground, UIColorBlack);
@@ -44,9 +47,7 @@ void main() {
 
     UIText_SetBackground(text, textBackground);
     UIText_SetPadding(text, 10, 10, 10, 10);
-    UISearchFonts();
-    UIText_SetFontFamily(text, UIGetFont("Times New Roman"));
-    UIWidget* textWidget = UIWidget_Create(text);
+    UIWidget* textWidget = widgc(text);
     UIWidget_SetZIndex(textWidget, 3);
 
     UIChildren_Add(children, textWidget);
@@ -54,7 +55,7 @@ void main() {
     UIApp_SetBackgroundColor(app, UIColorWhite);
     UIApp_SetWindowTitle(app, "My App 2");
     UIApp_SetWindowSize(app, 1024, 768);
-    UIApp_SetWindowScaleMode(app, UIWindowWindowed);
+    UIApp_SetWindowDisplayMode(app, UIWindowWindowed);
 
     UIApp_ShowWindow(app);
     UIApp_Run(app);

@@ -7,11 +7,11 @@
 #include <uikit/children.h>
 #include <SDL3/SDL.h>
 
-typedef int UIWindowScaleMode;
+typedef int UIWindowDisplayMode;
 
-#define UIWindowWindowed (UIWindowScaleMode)0
-#define UIWindowFullscreen (UIWindowScaleMode)1
-#define UIWindowBorderless (UIWindowScaleMode)2
+#define UIWindowWindowed (UIWindowDisplayMode)0
+#define UIWindowFullscreen (UIWindowDisplayMode)1
+#define UIWindowBorderless (UIWindowDisplayMode)2
 
 /**
  * UIWindow structure representing a window in the UI framework.
@@ -21,14 +21,14 @@ typedef int UIWindowScaleMode;
 typedef struct {
     int width;
     int height;
-    int x;
-    int y;
+    float x;
+    float y;
     int z;
     char* title;
     int visible;
     UIChildren* children;
     UIColor backgroundColor;
-    UIWindowScaleMode scaleMode;
+    UIWindowDisplayMode scaleMode;
 
     SDL_Renderer* sdlRenderer;
     SDL_Window* sdlWindow;

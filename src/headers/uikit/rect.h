@@ -7,8 +7,6 @@
 typedef struct {
     const char* __widget_type;
 
-    float width;
-    float height;
     float marginLeft;
     float marginTop;
     float marginRight;
@@ -22,11 +20,9 @@ typedef struct {
 
 /**
  * Creates a UIRectangle object with the specified width and height.
- * @param width Width of the rectangle.
- * @param height Height of the rectangle.
  * @return A pointer to the UIRectangle object.
  */
-UIRectangle* UIRectangle_Create(float width, float height);
+UIRectangle* UIRectangle_Create();
 
 /**
  * Sets the margins of the rectangle.
