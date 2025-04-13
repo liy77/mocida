@@ -82,6 +82,23 @@ void DrawRoundedRectWithAlpha(SDL_Renderer* renderer, SDL_FRect rect, UIColor co
 int UIWindow_Render(UIWindow* window) {
     if (!window || !window->sdlRenderer) return -1;
 
+    int renderWidth, renderHeight;
+    SDL_GetWindowSize(window->sdlWindow, &renderWidth, &renderHeight);
+
+    int upscaleFactor = 2;
+
+    SDL_Texture* smoothTexture = SDL_CreateTexture(
+        window->sdlRenderer,
+        SDL_PIXELFORMAT_RGBA8888,
+        SDL_TEXTUREACCESS_TARGET,
+        renderWidth * upscaleFactor,
+        renderHeight * upscaleFactor
+    );
+
+    SDL_SetTextureScaleMode(smoothTexture, SDL_SCALEMODE_LINEAR);
+    SDL_SetRenderTarget(window->sdlRenderer, smoothTexture);
+    SDL_SetRenderScale(window->sdlRenderer, (float)upscaleFactor, (float)upscaleFactor);
+
     SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_BLEND);
 
     SDL_SetRenderDrawColor(
@@ -95,7 +112,7 @@ int UIWindow_Render(UIWindow* window) {
     SDL_RenderClear(window->sdlRenderer);
 
     if (window->children != NULL) {
-        UIChildren_SortByZ(window->children); // Sort children by z-index
+        UIChildren_SortByZ(window->children);
 
         for (int i = 0; i < window->children->count; ++i) {
             UIWidget* el = window->children->children[i];
@@ -109,31 +126,15 @@ int UIWindow_Render(UIWindow* window) {
             if (base == NULL || base->__widget_type == NULL) continue;
 
             if (strcmp(base->__widget_type, UI_WIDGET_RECTANGLE) == 0) {
-                if (el->width == NULL) {
-                    fprintf(stderr, "Rectangle width cannot be NULL\n");
-                    exit(1);
-                }
-    
-                if (el->height == NULL) {
-                    fprintf(stderr, "Rectangle height cannot be NULL\n");\
+                if (el->width == NULL || el->height == NULL) {
+                    fprintf(stderr, "Rectangle width/height cannot be NULL\n");
                     exit(1);
                 }
 
                 UIRectangle* rect = (UIRectangle*)el->data;
-                SDL_FRect rectF = {
-                    el->x,
-                    el->y,
-                    *el->width,
-                    *el->height
-                };
+                SDL_FRect rectF = { el->x, el->y, *el->width, *el->height };
 
-                ApplyMargins(
-                    &rectF,
-                    rect->marginLeft,
-                    rect->marginTop,
-                    rect->marginRight,
-                    rect->marginBottom
-                );
+                ApplyMargins(&rectF, rect->marginLeft, rect->marginTop, rect->marginRight, rect->marginBottom);
 
                 if (rectF.w > 0 && rectF.h > 0) {
                     DrawRoundedRectWithAlpha(
@@ -148,12 +149,9 @@ int UIWindow_Render(UIWindow* window) {
             } else if (strcmp(base->__widget_type, UI_WIDGET_TEXT) == 0) {
                 UIText* textWidget = (UIText*)el->data;
 
-                if (
-                    !textWidget->text || !textWidget->fontFamily ||
-                    strcmp(textWidget->fontFamily, "") == 0 ||
-                    strcmp(textWidget->text, "") == 0 ||
-                    textWidget->textLength == 0 || textWidget->fontSize == 0
-                ) continue;
+                if (!textWidget->text || !textWidget->fontFamily || strcmp(textWidget->fontFamily, "") == 0 ||
+                    strcmp(textWidget->text, "") == 0 || textWidget->textLength == 0 || textWidget->fontSize == 0)
+                    continue;
 
                 if (textWidget->__SDL_textTexture == NULL) {
                     if (TTF_Init() != 1) {
@@ -166,37 +164,35 @@ int UIWindow_Render(UIWindow* window) {
                         printf("Error loading font: %s\n", SDL_GetError());
                         continue;
                     }
-                
+
                     SDL_Color colorSDL = {
                         (Uint8)(textWidget->color.r),
                         (Uint8)(textWidget->color.g),
                         (Uint8)(textWidget->color.b),
                         (Uint8)SDL_clamp((int)(textWidget->color.a * 255), 0, 255)
                     };
-                
-                    SDL_Surface* surface = NULL;
-                    surface = TTF_RenderText_Blended(font, textWidget->text, textWidget->textLength, colorSDL);
+
+                    SDL_Surface* surface = TTF_RenderText_Blended(font, textWidget->text, textWidget->textLength, colorSDL);
                     if (surface == NULL) {
                         printf("Error rendering texture: %s\n", SDL_GetError());
                         TTF_CloseFont(font);
                         continue;
                     }
-                
+
                     SDL_Texture* texture = SDL_CreateTextureFromSurface(window->sdlRenderer, surface);
                     if (texture == NULL) {
                         printf("Error creating texture: %s\n", SDL_GetError());
                         SDL_DestroySurface(surface);
-                        SDL_DestroyTexture(texture);
                         TTF_CloseFont(font);
                         continue;
                     }
+
                     textWidget->__SDL_textTexture = texture;
                     SDL_DestroySurface(surface);
                     TTF_CloseFont(font);
                 }
-                
-                float w = 0, h = 0;
 
+                float w = 0, h = 0;
                 if (!el->width || !el->height) {
                     float tex_w = 0, tex_h = 0;
                     if (SDL_GetTextureSize(textWidget->__SDL_textTexture, &tex_w, &tex_h) != 1) {
@@ -231,7 +227,7 @@ int UIWindow_Render(UIWindow* window) {
                     w = *el->width;
                     h = *el->height;
                 }
-                
+
                 SDL_FRect subTextRect = {
                     el->x,
                     el->y,
@@ -239,13 +235,7 @@ int UIWindow_Render(UIWindow* window) {
                     h + textWidget->paddingTop + textWidget->paddingBottom
                 };
 
-                ApplyMargins(
-                    &subTextRect,
-                    textWidget->marginLeft,
-                    textWidget->marginTop,
-                    textWidget->marginRight,
-                    textWidget->marginBottom
-                );
+                ApplyMargins(&subTextRect, textWidget->marginLeft, textWidget->marginTop, textWidget->marginRight, textWidget->marginBottom);
 
                 SDL_SetRenderDrawColor(
                     window->sdlRenderer,
@@ -276,6 +266,14 @@ int UIWindow_Render(UIWindow* window) {
         }
     }
 
+    // render de volta na tela principal com suavização
+    SDL_SetRenderTarget(window->sdlRenderer, NULL);
+    SDL_SetRenderScale(window->sdlRenderer, 1.0f, 1.0f);
+
+    SDL_FRect dstRect = { 0, 0, (float)renderWidth, (float)renderHeight };
+    SDL_RenderTexture(window->sdlRenderer, smoothTexture, NULL, &dstRect);
+
+    SDL_DestroyTexture(smoothTexture);
     SDL_RenderPresent(window->sdlRenderer);
     return 0;
 }
@@ -289,7 +287,7 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
     UIWindow* window = (UIWindow*)malloc(sizeof(UIWindow));
     if (!window) return NULL;
 
-    SDL_Window* sdlWindow = SDL_CreateWindow(title, width, height, SDL_WINDOW_RESIZABLE);
+    SDL_Window* sdlWindow = SDL_CreateWindow(title, width, height, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!sdlWindow) {
         fprintf(stderr, "SDL_CreateWindow Error: %s\n", SDL_GetError());
         free(window);

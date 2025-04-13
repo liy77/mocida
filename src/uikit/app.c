@@ -140,6 +140,39 @@ void UIApp_SetWindowDisplayMode(UIApp* app, UIWindowDisplayMode scaleMode) {
     app->window->scaleMode = scaleMode;
 }
 
+void UIApp_SetRenderDriver(UIApp* app, UIRenderDriver renderDriver) {
+    if (!app || !app->window || !app->window->sdlWindow) return;
+
+    switch (renderDriver) {
+        case UI_RENDER_OPENGL:
+            SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
+            SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 16);
+            SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
+            SDL_DestroyRenderer(app->window->sdlRenderer);
+            app->window->sdlRenderer = SDL_CreateRenderer(app->window->sdlWindow, "opengl");
+            break;
+        case UI_RENDER_SOFTWARE:
+            SDL_SetHint(SDL_HINT_RENDER_DRIVER, "software");
+            SDL_DestroyRenderer(app->window->sdlRenderer);
+            app->window->sdlRenderer = SDL_CreateRenderer(app->window->sdlWindow, "software");
+            break;
+        case UI_RENDER_VULKAN:
+            SDL_SetHint(SDL_HINT_RENDER_DRIVER, "vulkan");
+            SDL_DestroyRenderer(app->window->sdlRenderer);
+            app->window->sdlRenderer = SDL_CreateRenderer(app->window->sdlWindow, "vulkan");
+            break;
+        #ifdef __APPLE__
+        case UI_RENDER_METAL:
+            // Note: Metal is only available on macOS and iOS
+            SDL_SetHint(SDL_HINT_RENDER_DRIVER, "metal");
+            break;
+        #endif
+        default:
+            fprintf(stderr, "Unknown render driver\n");
+            break;
+    }
+}
+
 void UIApp_ShowWindow(UIApp* app) {
     if (!app || !app->window || !app->window->sdlWindow) return;
     app->window->visible = 1;

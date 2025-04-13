@@ -8,6 +8,8 @@ void main() {
         return;
     }
 
+    UIApp_SetRenderDriver(app, UI_RENDER_OPENGL);
+
     UIRectangle* redRect = UIRectangle_Create();
     UIRectangle_SetColor(redRect, UIColorRed);
     UIRectangle_SetRadius(redRect, 50);

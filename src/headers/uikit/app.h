@@ -113,6 +113,8 @@ void UIApp_ShowWindow(UIApp* app);
  */
 void UIApp_HideWindow(UIApp* app);
 
+void UIApp_SetRenderDriver(UIApp* app, UIRenderDriver renderDriver);
+
 /**
  * Destroys the UIApp object and frees its resources.
  * @param app Pointer to the UIApp object to be destroyed.
