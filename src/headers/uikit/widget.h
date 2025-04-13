@@ -21,6 +21,19 @@ typedef struct {
     const char* __widget_type; // Type of the widget (e.g., "UIRectangle", "UIText", etc.)
 } UIWidgetBase;
 
+/**
+ * UIMarginsObject structure representing the margins of a widget.
+ * It contains properties for left, top, right, and bottom margins.
+ */
+typedef struct UIMarginsObject {
+    const char* __widget_type;
+
+    float marginLeft;
+    float marginTop;
+    float marginRight;
+    float marginBottom;
+} UIMarginsObject;
+
 
 /**
  * UIWidget structure representing a UI widget.

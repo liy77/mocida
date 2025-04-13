@@ -16,7 +16,7 @@ void main() {
     UIRectangle* blueRect = UIRectangle_Create();
     UIRectangle_SetColor(blueRect, UIColorBlue);
     UIRectangle_SetRadius(blueRect, 10);
-    UIRectangle_SetMargins(blueRect, 20, 20, 20, 20);
+    UIRectangle_SetMargins(blueRect, 150, 20, 0, 20);
 
     UIChildren* children = UIChildren_Create(10);
     if (children == NULL) {
@@ -30,12 +30,13 @@ void main() {
     UIWidget *blueWidget = widgcs(blueRect, 200, 200);
     UIWidget_SetParent(redWidget, app->mainWidget);
 
-    UIWidget_SetAlignment(redWidget, UIAlignment_Create(UI_ALIGN_V_BOTTOM, UI_ALIGN_H_CENTER));
+    UIWidget_SetAlignment(redWidget, UIAlignment_Create(UI_ALIGN_V_TOP, UI_ALIGN_H_RIGHT));
     UIChildren_Add(children, redWidget);
     UIChildren_Add(children, blueWidget);
 
     UIText* text = UIText_Create("Hello, World!", 40);
-    UIText_SetFontFamily(text, DEFAULT_FONT_PATH);
+    UISearchFonts(); // Search for available fonts
+    UIText_SetFontFamily(text, UIGetFont("Times New Roman"));
     UIText_SetColor(text, UIColorYellow);
 
     

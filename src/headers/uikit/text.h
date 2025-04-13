@@ -28,6 +28,16 @@ typedef enum FontStyle {
 typedef struct UIText {
     const char* __widget_type;
 
+    float marginLeft;
+    float marginTop;
+    float marginRight;
+    float marginBottom;
+
+    float paddingLeft;
+    float paddingTop;
+    float paddingRight;
+    float paddingBottom;
+    
     float fontSize;
     char* fontFamily;
 
@@ -36,15 +46,6 @@ typedef struct UIText {
     UIRectangle* background;
     char* text;
     int textLength;
-
-    float marginLeft;
-    float marginTop;
-    float marginRight;
-    float marginBottom;
-    float paddingLeft;
-    float paddingTop;
-    float paddingRight;
-    float paddingBottom;
     
     SDL_Texture* __SDL_textTexture; // Pointer to the SDL texture for rendering text
 } UIText;

@@ -98,7 +98,7 @@ void UISearchFonts() {
             return;
         }
         fontCount++;
-        printf("Font loaded: %s, Path: %s\n", family_name_copy, fontPath);
+        // printf("Font loaded: %s, Path: %s\n", family_name_copy, fontPath);
     } while (FindNextFile(hFind, &findFileData) != 0);
     
     FindClose(hFind);
@@ -207,7 +207,7 @@ void UISearchFonts() {
 }
 
 char* UIGetFont(const char* family_name) {
-    if (UIFonts == NULL) {
+    if (UIFonts == NULL || sizeof(UIFonts) == 0) {
         fprintf(stderr, "Fonts not initialized. Call UISearchFonts() first.\n");
         return NULL;
     }
@@ -229,5 +229,6 @@ char* UIGetFont(const char* family_name) {
         }
     }
 
+    fprintf(stderr, "Font family '%s' not found\n", family_name);
     return NULL; 
 }

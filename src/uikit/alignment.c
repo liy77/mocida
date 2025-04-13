@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <uikit/widget.h>
+#include <string.h>
 
 UIAlignment UIAlignment_Create(UIAlign vertical, UIAlign horizontal) {
     UIAlignment alignment;
@@ -13,6 +14,11 @@ UIAlignment UIAlignment_Create(UIAlign vertical, UIAlign horizontal) {
 void UIWidget_SetAlignment(UIWidget* widget, UIAlignment alignment) {
     if (widget == NULL) {
         return;
+    }
+
+    // Free existing alignment if it exists
+    if (widget->alignment != NULL) {
+        free(widget->alignment);
     }
 
     widget->alignment = malloc(sizeof(UIAlignment));
@@ -39,23 +45,42 @@ void UIWidget_SetAlignment(UIWidget* widget, UIAlignment alignment) {
         return;
     }
 
-    printf("Parent widget size: %f x %f\n", parent->width, parent->height);
-
     float parentWidth = *parent->width;
     float parentHeight = *parent->height;
 
     float widgetWidth = *widget->width;
     float widgetHeight = *widget->height;
+    float parentX = parent->x;
+    float parentY = parent->y;
+
+    float marginLeft = 0;
+    float marginRight = 0;
+    float marginTop = 0;
+    float marginBottom = 0;
+
+    UIWidgetBase* parentBase = (UIWidgetBase*)parent->data;
+    if (parentBase != NULL) {
+        if (
+            strcmp(parentBase->__widget_type, UI_WIDGET_RECTANGLE) == 0 ||
+            strcmp(parentBase->__widget_type, UI_WIDGET_TEXT) == 0
+        ) {
+            UIMarginsObject* objectMargins = (UIMarginsObject*)parentBase;
+            marginLeft = objectMargins->marginLeft;
+            marginRight = objectMargins->marginRight;
+            marginTop = objectMargins->marginTop;
+            marginBottom = objectMargins->marginBottom;
+        }
+    }
 
     switch (alignment.horizontal) {
         case UI_ALIGN_H_LEFT:
-            widget->x = 0;
+            widget->x = parentX + marginLeft;
             break;
         case UI_ALIGN_H_CENTER:
-            widget->x = (parentWidth - widgetWidth) / 2;
+            widget->x = (parentX + (parentWidth - widgetWidth) / 2) + marginLeft;
             break;
         case UI_ALIGN_H_RIGHT:
-            widget->x = parentWidth - widgetWidth;
+            widget->x = parentX + parentWidth + marginLeft - widgetWidth - marginRight;
             break;
         default:
             break;
@@ -63,13 +88,13 @@ void UIWidget_SetAlignment(UIWidget* widget, UIAlignment alignment) {
 
     switch (alignment.vertical) {
         case UI_ALIGN_V_TOP:
-            widget->y = 0;
+            widget->y = parentY + marginTop - marginBottom;
             break;
         case UI_ALIGN_V_CENTER:
-            widget->y = (parentHeight - widgetHeight) / 2;
+            widget->y = parentY + marginTop + (parentHeight - marginTop - marginBottom - widgetHeight) / 2;
             break;
         case UI_ALIGN_V_BOTTOM:
-            widget->y = parentHeight - widgetHeight;
+            widget->y = parentY + marginTop + parentHeight - widgetHeight - marginBottom;
             break;
         default:
             break;

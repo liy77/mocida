@@ -100,8 +100,14 @@ UIWidget* UIWidget_GetParent(UIWidget* widget) {
         return NULL;
     }
 
-    // Assuming the parent is stored in the widget's data structure
-    return (UIWidget*)widget->parent;
+    // Check if the parent is a valid widget
+    UIWidget* parent = (UIWidget*)widget->parent;
+    if (parent != NULL && parent->width != NULL && parent->height != NULL) {
+        return parent;
+    }
+
+    fprintf(stderr, "Parent widget is NULL or invalid\n");
+    return NULL;
 }
 
 UIWidget* UIWidget_SetParent(UIWidget* widget, UIWidget* parent) {
@@ -109,7 +115,7 @@ UIWidget* UIWidget_SetParent(UIWidget* widget, UIWidget* parent) {
         return NULL;
     }
 
-    widget->parent = parent;
+    widget->parent = (UIWidgetData)parent;
     return widget;
 }
 

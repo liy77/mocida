@@ -5,10 +5,8 @@
 #include <SDL3_ttf/SDL_ttf.h>
 
 void ApplyMargins(SDL_FRect* rect, float marginLeft, float marginTop, float marginRight, float marginBottom) {
-    rect->x += marginLeft;
-    rect->y += marginTop;
-    rect->w -= (marginLeft + marginRight);
-    rect->h -= (marginTop + marginBottom);
+    rect->x += marginLeft - marginRight;
+    rect->y += marginTop - marginBottom;
 }
 
 void DrawRoundedRectFill(SDL_Renderer* renderer, SDL_FRect inner, UIColor color, float radius) {
@@ -104,7 +102,6 @@ int UIWindow_Render(UIWindow* window) {
             if (!el || !el->visible || !el->data) continue;
 
             if (el->alignment != NULL) {
-                printf("Setting alignment for widget\n");
                 UIWidget_SetAlignment(el, *el->alignment);
             }
 
