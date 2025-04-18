@@ -140,4 +140,34 @@ UIWidget* UIWidget_SetParent(UIWidget* widget, UIWidget* parent);
  */
 UIWidget* UIWidget_GetParent(UIWidget* widget);
 
+/**
+ * Sets the alignment of a widget based on its parent.
+ * @param widget Pointer to the UIWidget object.
+ * @param valign Vertical alignment (e.g., UI_ALIGN_V_CENTER).
+ * @param halign Horizontal alignment (e.g., UI_ALIGN_H_CENTER).
+ * @return None.
+ */
+void UIWidget_SetAlignmentByParent(UIWidget* widget, uint8_t valign, uint8_t halign);
+
+/**
+ * Gets the vertical target of a UIAlignment object.
+ * @param alignment Pointer to the UIAlignment object.
+ * @return Pointer to the vertical target UIWidget object.
+ */
+UIWidget* UIAlignment_GetVTarget(UIAlignment* alignment);
+
+/**
+ * Gets the horizontal target of a UIAlignment object.
+ * @param alignment Pointer to the UIAlignment object.
+ * @return Pointer to the horizontal target UIWidget object.
+ */
+UIWidget* UIAlignment_GetHTarget(UIAlignment* alignment);
+
+/**
+ * Gets the vertical alignment value of a UIAlignment object.
+ * @param alignment Pointer to the UIAlignment object.
+ * @return Vertical alignment value (e.g., UI_ALIGN_V_CENTER).
+ */
+void UIAlignment_Align(UIWidget* widget);
+
 #endif // UIKIT_WIDGET_H

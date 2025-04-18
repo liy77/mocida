@@ -85,6 +85,27 @@ int UIWindow_Render(UIWindow* window) {
     int renderWidth, renderHeight;
     SDL_GetWindowSize(window->sdlWindow, &renderWidth, &renderHeight);
 
+    static Uint64 lastCounter = 0;
+    static Uint64 frameCount = 0;
+    static float currentFPS = 0.0f;
+
+    static Uint64 frequency = 0;
+    if (frequency == 0) frequency = SDL_GetPerformanceFrequency();
+
+
+    frameCount++;
+    Uint64 currentCounter = SDL_GetPerformanceCounter();
+
+    if (lastCounter == 0) lastCounter = currentCounter;
+
+    if ((currentCounter - lastCounter) >= frequency) { // a cada 1 segundo
+        currentFPS = (float)frameCount / ((currentCounter - lastCounter) / (float)frequency);
+        lastCounter = currentCounter;
+        frameCount = 0;
+
+        window->framerate = currentFPS;
+    }
+
     int upscaleFactor = 2;
 
     SDL_Texture* smoothTexture = SDL_CreateTexture(
@@ -119,7 +140,7 @@ int UIWindow_Render(UIWindow* window) {
             if (!el || !el->visible || !el->data) continue;
 
             if (el->alignment != NULL) {
-                UIWidget_SetAlignment(el, *el->alignment);
+                UIAlignment_Align(el);
             }
 
             UIWidgetBase* base = (UIWidgetBase*)el->data;
@@ -314,6 +335,7 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
     window->children = NULL;
     window->sdlWindow = sdlWindow;
     window->sdlRenderer = sdlRenderer;
+    window->framerate = 0.0f;
 
     SDL_SetRenderDrawBlendMode(sdlRenderer, SDL_BLENDMODE_BLEND);
 

@@ -8,7 +8,7 @@ void main() {
         return;
     }
 
-    UIApp_SetRenderDriver(app, UI_RENDER_OPENGL);
+    UIApp_SetRenderDriver(app, UI_RENDER_3D9);
 
     UIRectangle* redRect = UIRectangle_Create();
     UIRectangle_SetColor(redRect, UIColorRed);
@@ -32,11 +32,16 @@ void main() {
     UIWidget *blueWidget = widgcs(blueRect, 200, 200);
     UIWidget_SetParent(redWidget, app->mainWidget);
 
-    UIWidget_SetAlignment(redWidget, UIAlignment_Create(UI_ALIGN_V_TOP, UI_ALIGN_H_RIGHT));
+    UIWidget_SetAlignment(redWidget, UIAlignment_Create(
+        (UIAlign){.value = UI_ALIGN_V_BOTTOM, .target_widget = app->mainWidget},
+        (UIAlign){.value = UI_ALIGN_H_CENTER, .target_widget = blueWidget}
+    ));
     UIChildren_Add(children, redWidget);
     UIChildren_Add(children, blueWidget);
 
-    UIText* text = UIText_Create("Hello, World!", 40);
+    char buffer[100];
+    sprintf_s(buffer, 100, "Frame time: %.1f", app->window->framerate);
+    UIText* text = UIText_Create(buffer, 40);
     UISearchFonts(); // Search for available fonts
     UIText_SetFontFamily(text, UIGetFont("Times New Roman"));
     UIText_SetColor(text, UIColorYellow);

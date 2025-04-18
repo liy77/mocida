@@ -19,11 +19,14 @@ typedef int UIRenderDriver;
 #ifdef _WIN32
 #define UI_RENDER_3D12 (UIRenderDriver)3
 #define UI_RENDER_3D11 (UIRenderDriver)4
+#define UI_RENDER_3D9 (UIRenderDriver)5
 #endif
 
 #ifdef __APPLE__
-#define UI_RENDER_METAL (UIRenderDriver)5
+#define UI_RENDER_METAL (UIRenderDriver)6
 #endif
+
+#define UI_RENDER_GPU (UIRenderDriver)7
 
 
 /**

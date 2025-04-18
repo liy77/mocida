@@ -161,6 +161,27 @@ void UIApp_SetRenderDriver(UIApp* app, UIRenderDriver renderDriver) {
             SDL_DestroyRenderer(app->window->sdlRenderer);
             app->window->sdlRenderer = SDL_CreateRenderer(app->window->sdlWindow, "vulkan");
             break;
+        case UI_RENDER_3D9:
+            // Used for Direct3D 9 - For legacy systems
+            SDL_SetHint(SDL_HINT_RENDER_DRIVER, "direct3d");
+            SDL_DestroyRenderer(app->window->sdlRenderer);
+            app->window->sdlRenderer = SDL_CreateRenderer(app->window->sdlWindow, "direct3d");
+            break;
+        case UI_RENDER_3D11:
+            SDL_SetHint(SDL_HINT_RENDER_DRIVER, "direct3d11");
+            SDL_DestroyRenderer(app->window->sdlRenderer);
+            app->window->sdlRenderer = SDL_CreateRenderer(app->window->sdlWindow, "direct3d11");
+            break;
+        case UI_RENDER_3D12:
+            SDL_SetHint(SDL_HINT_RENDER_DRIVER, "direct3d12");
+            SDL_DestroyRenderer(app->window->sdlRenderer);
+            app->window->sdlRenderer = SDL_CreateRenderer(app->window->sdlWindow, "direct3d12");
+            break;
+        case UI_RENDER_GPU:
+            SDL_SetHint(SDL_HINT_RENDER_DRIVER, "gpu");
+            SDL_DestroyRenderer(app->window->sdlRenderer);
+            app->window->sdlRenderer = SDL_CreateRenderer(app->window->sdlWindow, "gpu");
+            break;
         #ifdef __APPLE__
         case UI_RENDER_METAL:
             // Note: Metal is only available on macOS and iOS

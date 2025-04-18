@@ -26,6 +26,7 @@ typedef struct {
     int z;
     char* title;
     int visible;
+    float framerate;
     UIChildren* children;
     UIColor backgroundColor;
     UIWindowDisplayMode scaleMode;
