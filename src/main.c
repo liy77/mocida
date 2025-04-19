@@ -1,6 +1,25 @@
 #include <uikit/app.h>
 #include <stdio.h>
 
+// Define the callback function outside of main
+void UpdateFrameRateText(UIEventData data) {
+    double frametime = data.framerate.fps;
+    UIWidget* textWidget = (UIWidget*)UIChildren_GetById(data.children, "frame_time_text");
+    if (textWidget == NULL) {
+        fprintf(stderr, "Text widget not found\n");
+        return;
+    }
+
+    UIText* text = (UIText*)textWidget->data;
+    if (text == NULL) {
+        fprintf(stderr, "Text data not found\n");
+        return;
+    }
+    char buffer[100];
+    snprintf(buffer, sizeof(buffer), "Frame time: %.2f", frametime);
+    UIText_SetText(text, buffer);
+}
+
 void main() {
 
     UIApp* app = UIApp_Create("My App", 800, 600);
@@ -29,6 +48,8 @@ void main() {
     UIWidget *redWidget = widgcs(redRect, 100, 100);
     UIWidget_SetZIndex(redWidget, 2);
 
+    UIText* text = UIText_Create("Frame time: 0.0", 40);
+    
     UIWidget *blueWidget = widgcs(blueRect, 200, 200);
     UIWidget_SetParent(redWidget, app->mainWidget);
 
@@ -39,9 +60,9 @@ void main() {
     UIChildren_Add(children, redWidget);
     UIChildren_Add(children, blueWidget);
 
-    char buffer[100];
-    sprintf_s(buffer, 100, "Frame time: %.1f", app->window->framerate);
-    UIText* text = UIText_Create(buffer, 40);
+    // Register the callback to be called every frame
+    UIApp_SetEventCallback(app, UI_EVENT_FRAMERATE_CHANGED, UpdateFrameRateText);
+
     UISearchFonts(); // Search for available fonts
     UIText_SetFontFamily(text, UIGetFont("Times New Roman"));
     UIText_SetColor(text, UIColorYellow);
@@ -56,6 +77,7 @@ void main() {
     UIText_SetBackground(text, textBackground);
     UIText_SetPadding(text, 10, 10, 10, 10);
     UIWidget* textWidget = widgc(text);
+    UIWidget_SetId(textWidget, "frame_time_text");
     UIWidget_SetZIndex(textWidget, 3);
 
     UIChildren_Add(children, textWidget);

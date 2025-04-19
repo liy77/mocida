@@ -28,7 +28,6 @@ typedef int UIRenderDriver;
 
 #define UI_RENDER_GPU (UIRenderDriver)7
 
-
 /**
  * UIApp structure representing the main application.
  * It contains properties for the main window, background color,
@@ -49,7 +48,38 @@ typedef struct {
  */
 UIApp* UIApp_Create(const char* title, int width, int height);
 
+/**
+ * Gets the main window of the UIApp object.
+ * @param app Pointer to the UIApp object.
+ * @return Pointer to the UIWindow object.
+ */
 UIWidget* UIApp_GetWindow(UIApp* app);
+
+/**
+ * Gets a property of the UIApp object.
+ * @param app Pointer to the UIApp object.
+ * @param property Property name to be retrieved.
+ * @return Pointer to the property value.
+ */
+void* UIApp_GetProperty(UIApp* app, const char* property);
+
+/**
+ * Sets a property of the UIApp object.
+ * @param app Pointer to the UIApp object.
+ * @param property Property name to be set.
+ * @param value Value to be set for the property.
+ * @return None.
+ */
+void UIApp_SetProperty(UIApp* app, const char* property, void* value);
+
+/**
+ * Emits an event to the UIApp object.
+ * @param app Pointer to the UIApp object.
+ * @param event Event type to be emitted.
+ * @param data Data associated with the event.
+ * @return None.
+ */
+void UIApp_EmitEvent(UIApp* app, UI_EVENT event, UIEventData data);
 
 /**
  * Sets the child widgets of the UIApp object.
@@ -116,7 +146,22 @@ void UIApp_ShowWindow(UIApp* app);
  */
 void UIApp_HideWindow(UIApp* app);
 
+/**
+ * Sets the render driver of the application window.
+ * @param app Pointer to the UIApp object.
+ * @param renderDriver Render driver to be set.
+ * @return None.
+ */
 void UIApp_SetRenderDriver(UIApp* app, UIRenderDriver renderDriver);
+
+/**
+ * Sets an event callback to the UIApp object.
+ * @param app Pointer to the UIApp object.
+ * @param event Event type to listen for.
+ * @param callback Callback function to be called when the event occurs.
+ * @return None.
+ */
+void UIApp_SetEventCallback(UIApp* app, UI_EVENT event, UIEventCallback callback);
 
 /**
  * Destroys the UIApp object and frees its resources.

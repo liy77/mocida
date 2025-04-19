@@ -1,6 +1,8 @@
 #include <uikit/widget.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <uikit/text.h>
 
 UIWidget* widgc(UIWidgetData data) {
     return UIWidget_Create(data);
@@ -26,7 +28,28 @@ UIWidget* UIWidget_Create(UIWidgetData data)  {
     widget->opacity = 1.0f; // Default opacity
     widget->alignment = NULL; // Default alignment (NULL)
     widget->data = data; // Set the data pointer
+    widget->id = NULL; // Default ID (NULL)
 
+    return widget;
+}
+
+UIWidget* UIWidget_SetId(UIWidget* widget, const char* id) {
+    if (widget == NULL || id == NULL) {
+        return NULL;
+    }
+
+    // Free previous ID if allocated
+    if (widget->id != NULL) {
+        free(widget->id);
+    }
+    
+    // Allocate and set new ID
+    size_t len = strlen(id) + 1;
+    widget->id = (char*)malloc(len);
+    if (widget->id) {
+        memcpy(widget->id, id, len);
+    }
+    widget->id = _strdup(id);
     return widget;
 }
 
@@ -120,13 +143,26 @@ UIWidget* UIWidget_SetParent(UIWidget* widget, UIWidget* parent) {
 }
 
 void UIWidget_Destroy(UIWidget* widget) {
-    if (widget == NULL) {
-        return;
+    if (!widget) return;
+    
+    if (widget->data) {
+        UIWidgetBase* base = (UIWidgetBase*)widget->data;
+        if (!strcmp(base->__widget_type, UI_WIDGET_TEXT)) {
+            UIText* text = (UIText*)base;
+            UIText_DestroyTexture(text);
+            if (text->background) free(text->background);
+            if (text->text) free(text->text);
+            if (text->fontFamily) free(text->fontFamily);
+            free(text->__widget_type);
+        }
+        else if (!strcmp(base->__widget_type, UI_WIDGET_RECTANGLE)) {
+            UIRectangle* rect = (UIRectangle*)base;
+            free(rect->__widget_type);
+        }
+        free(base);
     }
-
-    if (widget->data != NULL) {
-        free(widget->data); // Free the data pointer
-    }
-
-    free(widget); // Free the widget itself
+    
+    if (widget->width) free(widget->width);
+    if (widget->height) free(widget->height);
+    free(widget);
 }

@@ -86,9 +86,17 @@ UIText* UIText_SetText(UIText* text, char* newText) {
         return NULL; // Invalid arguments
     }
 
-    free(text->text); // Free previous text
+    if (text->text != NULL) {
+        free(text->text); // Free previous text if not NULL
+    }
+    
     text->text = _strdup(newText);
     text->textLength = strlen(newText);
+
+    // Invalidate the SDL texture if the text changes
+    if (text->__SDL_textTexture != NULL) {
+        UIText_DestroyTexture(text);
+    }
     return text;
 }
 
@@ -114,4 +122,10 @@ UIText* UIText_SetPadding(UIText* text, float left, float top, float right, floa
     text->paddingRight = right;
     text->paddingBottom = bottom;
     return text;
+}
+
+void UIText_DestroyTexture(UIText* text) {
+    if (!text || !text->__SDL_textTexture) return;
+    SDL_DestroyTexture(text->__SDL_textTexture);
+    text->__SDL_textTexture = NULL;
 }

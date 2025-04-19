@@ -38,6 +38,14 @@ int UIChildren_Add(UIChildren* children, UIWidget* child);
 int UIChildren_Remove(UIChildren* children, UIWidget* child);
 
 /**
+ * Gets a child widget by its ID from the UIChildren object.
+ * @param children Pointer to the UIChildren object.
+ * @param id ID of the child widget to be retrieved.
+ * @return Pointer to the child widget, or NULL if not found.
+ */
+UIWidget* UIChildren_GetById(UIChildren* children, const char* id);
+
+/**
  * Destroys the UIChildren object and frees its resources.
  * @param children Pointer to the UIChildren object to be destroyed.
  * @return None.

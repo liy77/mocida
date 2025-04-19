@@ -120,4 +120,11 @@ UIText* UIText_SetMargins(UIText* text, float left, float top, float right, floa
  */
 UIText* UIText_SetPadding(UIText* text, float left, float top, float right, float bottom);
 
+/**
+ * Destroys the UIText object and frees its resources.
+ * @param text Pointer to the UIText object to be destroyed.
+ * @return None.
+ */
+void UIText_DestroyTexture(UIText* text);
+
 #endif // UIKIT_TEXT_H

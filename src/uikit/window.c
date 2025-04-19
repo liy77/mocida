@@ -4,55 +4,89 @@
 #include <stdlib.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
-void ApplyMargins(SDL_FRect* rect, float marginLeft, float marginTop, float marginRight, float marginBottom) {
-    rect->x += marginLeft - marginRight;
-    rect->y += marginTop - marginBottom;
+typedef struct FontCacheEntry {
+    char *path;
+    float size;
+    TTF_Font *font;
+    struct FontCacheEntry *next;
+} FontCacheEntry;
+
+static FontCacheEntry *g_fontCache = NULL;
+
+static TTF_Font* GetFont(const char *path, float size) {
+    FontCacheEntry *e = g_fontCache;
+    while (e) {
+        if (e->size == size && strcmp(e->path, path) == 0)
+            return e->font;
+        e = e->next;
+    }
+    TTF_Font *f = TTF_OpenFont(path, size);
+    if (!f) {
+        fprintf(stderr, "TTF_OpenFont error: %s\n", SDL_GetError());
+        return NULL;
+    }
+    e = malloc(sizeof(FontCacheEntry));
+    if (!e) {
+        fprintf(stderr, "Failed to allocate memory for FontCacheEntry\n");
+        TTF_CloseFont(f);
+        return NULL;
+    }
+    e->path = _strdup(path);
+    if (!e->path) {
+        fprintf(stderr, "Failed to allocate memory for font path\n");
+        free(e);
+        TTF_CloseFont(f);
+        return NULL;
+    }
+    e->size = size;
+    e->font = f;
+    e->next = g_fontCache;
+    g_fontCache = e;
+    return f;
 }
 
-void DrawRoundedRectFill(SDL_Renderer* renderer, SDL_FRect inner, UIColor color, float radius) {
-    SDL_SetRenderDrawColor(renderer, (Uint8)(color.r), (Uint8)(color.g), (Uint8)(color.b), (Uint8)SDL_clamp((int)(color.a * 255), 0, 255));
+// Smooth Texture Cache
+static SDL_Texture *g_smoothTexture = NULL;
+static int g_smoothW = 0, g_smoothH = 0;
 
+static inline void ApplyMargins(SDL_FRect* r, float ml, float mt, float mr, float mb) {
+    r->x += ml - mr;
+    r->y += mt - mb;
+}
+
+static void DrawRoundedRectFill(SDL_Renderer* rend, SDL_FRect inner, UIColor c, float radius) {
+    SDL_SetRenderDrawColor(rend, (Uint8)c.r, (Uint8)c.g, (Uint8)c.b,
+                           (Uint8)SDL_clamp((int)(c.a * 255), 0, 255));
     if (radius <= 0) {
-        SDL_RenderFillRect(renderer, &inner);
+        SDL_RenderFillRect(rend, &inner);
         return;
     }
-
-    SDL_FRect center = {
-        inner.x + radius,
-        inner.y + radius,
-        inner.w - 2 * radius,
-        inner.h - 2 * radius
+    // Center rect
+    SDL_FRect center = { inner.x + radius, inner.y + radius,
+                         inner.w - 2*radius, inner.h - 2*radius };
+    SDL_RenderFillRect(rend, &center);
+    // Edges
+    SDL_FRect edges[4] = {
+        {inner.x+radius, inner.y, inner.w-2*radius, radius},
+        {inner.x+radius, inner.y+inner.h-radius, inner.w-2*radius, radius},
+        {inner.x, inner.y+radius, radius, inner.h-2*radius},
+        {inner.x+inner.w-radius, inner.y+radius, radius, inner.h-2*radius}
     };
-    SDL_RenderFillRect(renderer, &center);
-
-    SDL_FRect top = { inner.x + radius, inner.y, inner.w - 2 * radius, radius };
-    SDL_FRect bottom = { inner.x + radius, inner.y + inner.h - radius, inner.w - 2 * radius, radius };
-    SDL_FRect left = { inner.x, inner.y + radius, radius, inner.h - 2 * radius };
-    SDL_FRect right = { inner.x + inner.w - radius, inner.y + radius, radius, inner.h - 2 * radius };
-
-    SDL_RenderFillRect(renderer, &top);
-    SDL_RenderFillRect(renderer, &bottom);
-    SDL_RenderFillRect(renderer, &left);
-    SDL_RenderFillRect(renderer, &right);
-
-    float steps = radius * 2;
-    float step_size = radius / steps;
-
-    for (int i = 0; i < steps; ++i) {
-        float dy = (i + 0.5f) * step_size;
-        float dx = sqrtf(radius * radius - dy * dy);
-        float w = dx * 2;
-        float h = step_size;
-
-        SDL_FRect tl = { inner.x + radius - dx, inner.y + radius - dy, w, h };
-        SDL_FRect tr = { inner.x + inner.w - radius - dx, inner.y + radius - dy, w, h };
-        SDL_FRect bl = { inner.x + radius - dx, inner.y + inner.h - radius + dy - h, w, h };
-        SDL_FRect br = { inner.x + inner.w - radius - dx, inner.y + inner.h - radius + dy - h, w, h };
-
-        SDL_RenderFillRect(renderer, &tl);
-        SDL_RenderFillRect(renderer, &tr);
-        SDL_RenderFillRect(renderer, &bl);
-        SDL_RenderFillRect(renderer, &br);
+    for (int i=0;i<4;i++) SDL_RenderFillRect(rend, &edges[i]);
+    // Corners
+    int steps = (int)(radius*2);
+    float step = radius/steps;
+    for (int i=0;i<steps;i++) {
+        float dy = (i+0.5f)*step;
+        float dx = sqrtf(radius*radius - dy*dy);
+        float w = dx*2, h = step;
+        SDL_FRect rects[4] = {
+            {inner.x+radius-dx, inner.y+radius-dy, w, h},
+            {inner.x+inner.w-radius-dx, inner.y+radius-dy, w, h},
+            {inner.x+radius-dx, inner.y+inner.h-radius+dy-h, w, h},
+            {inner.x+inner.w-radius-dx, inner.y+inner.h-radius+dy-h, w, h}
+        };
+        for (int j=0;j<4;j++) SDL_RenderFillRect(rend, &rects[j]);
     }
 }
 
@@ -81,222 +115,156 @@ void DrawRoundedRectWithAlpha(SDL_Renderer* renderer, SDL_FRect rect, UIColor co
 
 int UIWindow_Render(UIWindow* window) {
     if (!window || !window->sdlRenderer) return -1;
+    int rw, rh;
+    SDL_GetWindowSize(window->sdlWindow, &rw, &rh);
 
-    int renderWidth, renderHeight;
-    SDL_GetWindowSize(window->sdlWindow, &renderWidth, &renderHeight);
-
-    static Uint64 lastCounter = 0;
-    static Uint64 frameCount = 0;
-    static float currentFPS = 0.0f;
-
-    static Uint64 frequency = 0;
-    if (frequency == 0) frequency = SDL_GetPerformanceFrequency();
-
-
-    frameCount++;
-    Uint64 currentCounter = SDL_GetPerformanceCounter();
-
-    if (lastCounter == 0) lastCounter = currentCounter;
-
-    if ((currentCounter - lastCounter) >= frequency) { // a cada 1 segundo
-        currentFPS = (float)frameCount / ((currentCounter - lastCounter) / (float)frequency);
-        lastCounter = currentCounter;
-        frameCount = 0;
-
-        window->framerate = currentFPS;
+    // Initialize TTF once
+    static int ttfInited = 0;
+    if (!ttfInited) {
+        if (TTF_Init() != 1)
+            fprintf(stderr, "TTF_Init error: %s\n", SDL_GetError());
+        ttfInited = 1;
     }
 
-    int upscaleFactor = 2;
+    // FPS calculation
+    static Uint64 lastCounter = 0, frameCount = 0, freq = 0;
+    if (!freq) freq = SDL_GetPerformanceFrequency();
+    frameCount++;
+    Uint64 cur = SDL_GetPerformanceCounter();
+    if (!lastCounter) lastCounter = cur;
+    if (cur - lastCounter >= freq) {
+        window->framerate = (float)frameCount / ((cur - lastCounter) / (float)freq);
+        lastCounter = cur;
+        frameCount = 0;
+        if (window->events) {
+            UIEventData ev = {0};
+            ev.framerate.fps = window->framerate;
+            ev.children = window->children;
+            ev.type = UI_EVENT_FRAMERATE_CHANGED;
+            UIWindow_EmitEvent(window, UI_EVENT_FRAMERATE_CHANGED, ev);
+        }
+    }
 
-    SDL_Texture* smoothTexture = SDL_CreateTexture(
-        window->sdlRenderer,
-        SDL_PIXELFORMAT_RGBA8888,
-        SDL_TEXTUREACCESS_TARGET,
-        renderWidth * upscaleFactor,
-        renderHeight * upscaleFactor
-    );
+    // Prepare or resize smooth texture
+    int upscale = 2;
+    int tw = rw * upscale, th = rh * upscale;
+    if (!g_smoothTexture || g_smoothW != tw || g_smoothH != th) {
+        if (g_smoothTexture) SDL_DestroyTexture(g_smoothTexture);
+        g_smoothTexture = SDL_CreateTexture(window->sdlRenderer,
+            SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, tw, th);
+        if (!g_smoothTexture) {
+            fprintf(stderr, "Failed to create smooth texture: %s\n", SDL_GetError());
+            return -1;
+        }
+        g_smoothW = tw;
+        g_smoothH = th;
+        SDL_SetTextureScaleMode(g_smoothTexture, SDL_SCALEMODE_LINEAR);
+    }
 
-    SDL_SetTextureScaleMode(smoothTexture, SDL_SCALEMODE_LINEAR);
-    SDL_SetRenderTarget(window->sdlRenderer, smoothTexture);
-    SDL_SetRenderScale(window->sdlRenderer, (float)upscaleFactor, (float)upscaleFactor);
-
+    SDL_SetRenderTarget(window->sdlRenderer, g_smoothTexture);
+    SDL_SetRenderScale(window->sdlRenderer, (float)upscale, (float)upscale);
     SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_BLEND);
-
-    SDL_SetRenderDrawColor(
-        window->sdlRenderer,
-        (Uint8)(window->backgroundColor.r),
-        (Uint8)(window->backgroundColor.g),
-        (Uint8)(window->backgroundColor.b),
-        (Uint8)SDL_clamp((int)(window->backgroundColor.a * 255), 0, 255)
-    );
-
+    SDL_SetRenderDrawColor(window->sdlRenderer,
+        (Uint8)window->backgroundColor.r,
+        (Uint8)window->backgroundColor.g,
+        (Uint8)window->backgroundColor.b,
+        (Uint8)SDL_clamp((int)(window->backgroundColor.a * 255), 0, 255));
     SDL_RenderClear(window->sdlRenderer);
 
-    if (window->children != NULL) {
+    if (window->children) {
         UIChildren_SortByZ(window->children);
-
-        for (int i = 0; i < window->children->count; ++i) {
-            UIWidget* el = window->children->children[i];
+        for (int i = 0; i < window->children->count; i++) {
+            UIWidget *el = window->children->children[i];
             if (!el || !el->visible || !el->data) continue;
+            if (el->alignment) UIAlignment_Align(el);
+            UIWidgetBase *base = (UIWidgetBase*)el->data;
 
-            if (el->alignment != NULL) {
-                UIAlignment_Align(el);
+            if (!strcmp(base->__widget_type, UI_WIDGET_RECTANGLE)) {
+                UIRectangle *rect = (UIRectangle*)base;
+                SDL_FRect rf = {el->x, el->y, *el->width, *el->height};
+                ApplyMargins(&rf, rect->marginLeft, rect->marginTop,
+                             rect->marginRight, rect->marginBottom);
+                if (rf.w > 0 && rf.h > 0)
+                    DrawRoundedRectWithAlpha(window->sdlRenderer, rf,
+                        rect->color, rect->radius,
+                        (int)rect->borderWidth, rect->borderColor);
             }
-
-            UIWidgetBase* base = (UIWidgetBase*)el->data;
-            if (base == NULL || base->__widget_type == NULL) continue;
-
-            if (strcmp(base->__widget_type, UI_WIDGET_RECTANGLE) == 0) {
-                if (el->width == NULL || el->height == NULL) {
-                    fprintf(stderr, "Rectangle width/height cannot be NULL\n");
-                    exit(1);
-                }
-
-                UIRectangle* rect = (UIRectangle*)el->data;
-                SDL_FRect rectF = { el->x, el->y, *el->width, *el->height };
-
-                ApplyMargins(&rectF, rect->marginLeft, rect->marginTop, rect->marginRight, rect->marginBottom);
-
-                if (rectF.w > 0 && rectF.h > 0) {
-                    DrawRoundedRectWithAlpha(
-                        window->sdlRenderer,
-                        rectF,
-                        rect->color,
-                        rect->radius,
-                        (int)rect->borderWidth,
-                        rect->borderColor
-                    );
-                }
-            } else if (strcmp(base->__widget_type, UI_WIDGET_TEXT) == 0) {
-                UIText* textWidget = (UIText*)el->data;
-
-                if (!textWidget->text || !textWidget->fontFamily || strcmp(textWidget->fontFamily, "") == 0 ||
-                    strcmp(textWidget->text, "") == 0 || textWidget->textLength == 0 || textWidget->fontSize == 0)
+            else if (!strcmp(base->__widget_type, UI_WIDGET_TEXT)) {
+                UIText *twid = (UIText*)base;
+                if (!twid->text || !twid->fontFamily || !*twid->text || !twid->textLength || !twid->fontSize)
                     continue;
-
-                if (textWidget->__SDL_textTexture == NULL) {
-                    if (TTF_Init() != 1) {
-                        printf("Error initializing SDL_ttf: %s\n", SDL_GetError());
-                        return 1;
-                    }
-
-                    TTF_Font* font = TTF_OpenFont(textWidget->fontFamily, textWidget->fontSize);
-                    if (!font) {
-                        printf("Error loading font: %s\n", SDL_GetError());
-                        continue;
-                    }
-
-                    SDL_Color colorSDL = {
-                        (Uint8)(textWidget->color.r),
-                        (Uint8)(textWidget->color.g),
-                        (Uint8)(textWidget->color.b),
-                        (Uint8)SDL_clamp((int)(textWidget->color.a * 255), 0, 255)
-                    };
-
-                    SDL_Surface* surface = TTF_RenderText_Blended(font, textWidget->text, textWidget->textLength, colorSDL);
-                    if (surface == NULL) {
-                        printf("Error rendering texture: %s\n", SDL_GetError());
-                        TTF_CloseFont(font);
-                        continue;
-                    }
-
-                    SDL_Texture* texture = SDL_CreateTextureFromSurface(window->sdlRenderer, surface);
-                    if (texture == NULL) {
-                        printf("Error creating texture: %s\n", SDL_GetError());
-                        SDL_DestroySurface(surface);
-                        TTF_CloseFont(font);
-                        continue;
-                    }
-
-                    textWidget->__SDL_textTexture = texture;
-                    SDL_DestroySurface(surface);
-                    TTF_CloseFont(font);
-                }
-
-                float w = 0, h = 0;
-                if (!el->width || !el->height) {
-                    float tex_w = 0, tex_h = 0;
-                    if (SDL_GetTextureSize(textWidget->__SDL_textTexture, &tex_w, &tex_h) != 1) {
-                        fprintf(stderr, "Error getting texture size: %s\n", SDL_GetError());
-                        continue;
-                    }
-
-                    if (!el->width) {
-                        w = tex_w;
-                        el->width = malloc(sizeof(float));
-                        if (!el->width) {
-                            fprintf(stderr, "Error allocating memory for width\n");
-                            continue;
+                if (!twid->__SDL_textTexture) {
+                    TTF_Font *font = GetFont(twid->fontFamily, twid->fontSize);
+                    if (font) {
+                        SDL_Color sc = {(Uint8)twid->color.r,
+                                        (Uint8)twid->color.g,
+                                        (Uint8)twid->color.b,
+                                        (Uint8)SDL_clamp((int)(twid->color.a * 255), 0, 255)};
+                        SDL_Surface *surf = TTF_RenderText_Blended(
+                            font, twid->text, twid->textLength, sc);
+                        if (surf) {
+                            twid->__SDL_textTexture = SDL_CreateTextureFromSurface(
+                                window->sdlRenderer, surf);
+                            SDL_DestroySurface(surf);
                         }
-                        *el->width = w;
-                    } else {
-                        w = *el->width;
                     }
-
-                    if (!el->height) {
-                        h = tex_h;
-                        el->height = malloc(sizeof(float));
-                        if (!el->height) {
-                            fprintf(stderr, "Error allocating memory for height\n");
-                            continue;
-                        }
-                        *el->height = h;
-                    } else {
-                        h = *el->height;
-                    }
-                } else {
-                    w = *el->width;
-                    h = *el->height;
                 }
+                if (!twid->__SDL_textTexture) continue;
 
-                SDL_FRect subTextRect = {
-                    el->x,
-                    el->y,
-                    w + textWidget->paddingLeft + textWidget->paddingRight,
-                    h + textWidget->paddingTop + textWidget->paddingBottom
-                };
+                // Query texture size
+                float txw, txh;
+                SDL_GetTextureSize(twid->__SDL_textTexture, &txw, &txh);
 
-                ApplyMargins(&subTextRect, textWidget->marginLeft, textWidget->marginTop, textWidget->marginRight, textWidget->marginBottom);
+                // Apply padding
+                float pw = txw + twid->paddingLeft + twid->paddingRight;
+                float ph = txh + twid->paddingTop + twid->paddingBottom;
+                SDL_FRect bg = {el->x, el->y, pw, ph};
 
+                // Draw background with padding
                 SDL_SetRenderDrawColor(
                     window->sdlRenderer,
-                    (Uint8)(textWidget->background->color.r),
-                    (Uint8)(textWidget->background->color.g),
-                    (Uint8)(textWidget->background->color.b),
-                    (Uint8)SDL_clamp((int)(textWidget->background->color.a * 255), 0, 255)
-                );
+                    (Uint8)twid->background->color.r,
+                    (Uint8)twid->background->color.g,
+                    (Uint8)twid->background->color.b,
+                    (Uint8)SDL_clamp((int)(twid->background->color.a * 255), 0, 255));
+                DrawRoundedRectWithAlpha(window->sdlRenderer, bg,
+                    twid->background->color,
+                    twid->background->radius,
+                    (int)twid->background->borderWidth,
+                    twid->background->borderColor);
 
-                DrawRoundedRectWithAlpha(
-                    window->sdlRenderer,
-                    subTextRect,
-                    textWidget->background->color,
-                    textWidget->background->radius,
-                    (int)textWidget->background->borderWidth,
-                    textWidget->background->borderColor
-                );
-
-                SDL_FRect mainTextRect = {
-                    subTextRect.x + (subTextRect.w - w) / 2,
-                    subTextRect.y + (subTextRect.h - h) / 2,
-                    w,
-                    h
-                };
-
-                SDL_RenderTexture(window->sdlRenderer, textWidget->__SDL_textTexture, NULL, &mainTextRect);
+                // Draw text inside padded area
+                SDL_FRect dst = {bg.x + twid->paddingLeft,
+                                 bg.y + twid->paddingTop,
+                                 txw, txh};
+                SDL_RenderTexture(window->sdlRenderer, twid->__SDL_textTexture,
+                                  NULL, &dst);
             }
         }
     }
 
-    // render de volta na tela principal com suavização
     SDL_SetRenderTarget(window->sdlRenderer, NULL);
     SDL_SetRenderScale(window->sdlRenderer, 1.0f, 1.0f);
-
-    SDL_FRect dstRect = { 0, 0, (float)renderWidth, (float)renderHeight };
-    SDL_RenderTexture(window->sdlRenderer, smoothTexture, NULL, &dstRect);
-
-    SDL_DestroyTexture(smoothTexture);
+    SDL_FRect screenRect = {0, 0, (float)rw, (float)rh};
+    SDL_RenderTexture(window->sdlRenderer, g_smoothTexture, NULL, &screenRect);
     SDL_RenderPresent(window->sdlRenderer);
     return 0;
+}
+
+void UIWindow_EmitEvent(UIWindow* window, UI_EVENT event, UIEventData data) {
+    if (!window || !window->events) return;
+
+    const unsigned int* max_events_ptr = (unsigned int*)UIWindow_GetProperty(window, UI_PROP_MAX_EVENTS);
+    const unsigned int MAX_EVENTS = max_events_ptr ? *max_events_ptr : 0;
+    if (event >= MAX_EVENTS) return;
+
+    UIEventCallbackData* callbackData = window->events[event];
+    if (callbackData != NULL) {
+        UIEventCallback cb = callbackData->cb;
+        cb(data);
+    } else {
+        fprintf(stderr, "No callback registered for event %u\n", event);
+    }
 }
 
 UIWindow* UIWindow_Create(const char* title, int width, int height) {
@@ -306,24 +274,9 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
     }
 
     UIWindow* window = (UIWindow*)malloc(sizeof(UIWindow));
-    if (!window) return NULL;
+    if (window == NULL) return NULL;
 
-    SDL_Window* sdlWindow = SDL_CreateWindow(title, width, height, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
-    if (!sdlWindow) {
-        fprintf(stderr, "SDL_CreateWindow Error: %s\n", SDL_GetError());
-        free(window);
-        return NULL;
-    }
-
-    SDL_Renderer* sdlRenderer = SDL_CreateRenderer(sdlWindow, NULL);
-    if (!sdlRenderer) {
-        fprintf(stderr, "SDL_CreateRenderer Error: %s\n", SDL_GetError());
-        SDL_DestroyWindow(sdlWindow);
-        free(window);
-        return NULL;
-    }
-
-    window->title = _strdup(title);
+    window->title = NULL;
     window->x = 0;
     window->y = 0;
     window->z = 0;
@@ -333,11 +286,236 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
     window->height = height;
     window->backgroundColor = UIColorWhite;
     window->children = NULL;
+    window->sdlWindow = NULL;
+    window->sdlRenderer = NULL;
+    window->framerate = 0.0f;
+    window->events = NULL;
+    
+    // Initialize UI properties
+    window->__ui_props.capacity = 10; // Initial capacity
+    window->__ui_props.count = 0;
+    window->__ui_props.props = (UIProp**)calloc(window->__ui_props.capacity, sizeof(UIProp*));
+    if (!window->__ui_props.props) {
+        fprintf(stderr, "Failed to allocate memory for UI properties\n");
+        free(window);
+        return NULL;
+    }
+    
+    unsigned int* max_events = malloc(sizeof(unsigned int));
+    if (!max_events) {
+        fprintf(stderr, "Failed to allocate memory for max_events\n");
+        free(window->__ui_props.props);
+        free(window);
+        return NULL;
+    }
+    *max_events = 10;
+    UIWindow_SetProperty(window, UI_PROP_MAX_EVENTS, max_events);
+
+    const unsigned int MAX_EVENTS = *max_events;
+    window->events = (UIEventCallbackData**)calloc(MAX_EVENTS, sizeof(UIEventCallbackData*));
+    if (!window->events) {
+        fprintf(stderr, "Failed to allocate memory for events\n");
+        free(max_events);
+        free(window->__ui_props.props);
+        free(window);
+        return NULL;
+    }
+
+    SDL_Window* sdlWindow = SDL_CreateWindow(title, width, height, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    if (!sdlWindow) {
+        fprintf(stderr, "SDL_CreateWindow Error: %s\n", SDL_GetError());
+        free(window->events);
+        free(window->__ui_props.props);
+        free(window);
+        return NULL;
+    }
+
+    SDL_Renderer* sdlRenderer = SDL_CreateRenderer(sdlWindow, NULL);
+    if (!sdlRenderer) {
+        fprintf(stderr, "SDL_CreateRenderer Error: %s\n", SDL_GetError());
+        SDL_DestroyWindow(sdlWindow);
+        free(window->events);
+        free(window->__ui_props.props);
+        free(window);
+        return NULL;
+    }
+
+    window->title = _strdup(title);
+    if (!window->title) {
+        fprintf(stderr, "Failed to allocate memory for title\n");
+        SDL_DestroyRenderer(sdlRenderer);
+        SDL_DestroyWindow(sdlWindow);
+        free(window->events);
+        free(window->__ui_props.props);
+        free(window);
+        return NULL;
+    }
+    
     window->sdlWindow = sdlWindow;
     window->sdlRenderer = sdlRenderer;
-    window->framerate = 0.0f;
 
     SDL_SetRenderDrawBlendMode(sdlRenderer, SDL_BLENDMODE_BLEND);
 
     return window;
+}
+
+void UIWindow_SetEventCallback(UIWindow* window, UI_EVENT event, UIEventCallback callback) {
+    if (!window || !callback) return;
+
+    const unsigned int* max_events_ptr = (unsigned int*)UIWindow_GetProperty(window, UI_PROP_MAX_EVENTS);
+    const unsigned int MAX_EVENTS = max_events_ptr ? *max_events_ptr : 0;
+    if (event >= MAX_EVENTS) return;
+
+    if (window->events == NULL) {
+        window->events = (UIEventCallbackData**)calloc(MAX_EVENTS, sizeof(UIEventCallbackData*));
+        if (!window->events) {
+            fprintf(stderr, "Failed to allocate memory for events\n");
+            return;
+        }
+    }
+
+    // Free previous callback if it exists
+    if (window->events[event]) {
+        free(window->events[event]);
+        window->events[event] = NULL;
+    }
+
+    UIEventCallbackData* callbackData = malloc(sizeof(UIEventCallbackData));
+    if (!callbackData) {
+        fprintf(stderr, "Failed to allocate memory for callback data\n");
+        return;
+    }
+    
+    callbackData->cb = callback;
+    window->events[event] = callbackData;
+}
+
+void UIWindow_SetProperty(UIWindow* window, const char* property, void* value) {
+    if (!window || !property || !value) return;
+
+    // Verify if the property already exists
+    for (unsigned int i = 0; i < window->__ui_props.count; i++) {
+        if (window->__ui_props.props[i] && strcmp(window->__ui_props.props[i]->key, property) == 0) {
+            window->__ui_props.props[i]->value = value;
+            return;
+        }
+    }
+    
+    // Verify if we need to expand the properties array
+    if (window->__ui_props.count >= window->__ui_props.capacity) {
+        unsigned int new_capacity = window->__ui_props.capacity * 2;
+        UIProp** new_props = (UIProp**)realloc(window->__ui_props.props, new_capacity * sizeof(UIProp*));
+        if (!new_props) {
+            fprintf(stderr, "Failed to reallocate memory for UI properties\n");
+            return;
+        }
+        window->__ui_props.props = new_props;
+        window->__ui_props.capacity = new_capacity;
+        
+        // Initialize new properties to NULL
+        for (unsigned int i = window->__ui_props.count; i < new_capacity; i++) {
+            window->__ui_props.props[i] = NULL;
+        }
+    }
+    
+    // Add the new property
+    UIProp* new_prop = (UIProp*)malloc(sizeof(UIProp));
+    if (!new_prop) {
+        fprintf(stderr, "Failed to allocate memory for new UIProp\n");
+        return;
+    }
+    
+    new_prop->key = _strdup(property);
+    if (!new_prop->key) {
+        fprintf(stderr, "Failed to allocate memory for property key\n");
+        free(new_prop);
+        return;
+    }
+    
+    new_prop->value = value;
+    window->__ui_props.props[window->__ui_props.count++] = new_prop;
+}
+
+void* UIWindow_GetProperty(UIWindow* window, const char* property) {
+    if (!window || !property) return NULL;
+
+    for (unsigned int i = 0; i < window->__ui_props.count; i++) {
+        if (window->__ui_props.props[i] && strcmp(window->__ui_props.props[i]->key, property) == 0) {
+            return window->__ui_props.props[i]->value;
+        }
+    }
+    return NULL;
+}
+
+void UIWindow_Destroy(UIWindow* window) {
+    if (!window) return;
+    
+    // Destroy smooth texture
+    if (g_smoothTexture) {
+        SDL_DestroyTexture(g_smoothTexture);
+        g_smoothTexture = NULL;
+        g_smoothW = g_smoothH = 0;
+    }
+    
+    // Free font cache
+    FontCacheEntry *e = g_fontCache;
+    while (e) {
+        TTF_CloseFont(e->font);
+        free(e->path);
+        FontCacheEntry *n = e->next;
+        free(e);
+        e = n;
+    }
+    g_fontCache = NULL;
+    TTF_Quit();
+
+    // Destroy childs
+    if (window->children) {
+        UIChildren_Destroy(window->children);
+        window->children = NULL;
+    }
+
+    // Free events
+    if (window->events) {
+        const unsigned int* max_events_ptr = (unsigned int*)UIWindow_GetProperty(window, UI_PROP_MAX_EVENTS);
+        const unsigned int MAX_EVENTS = max_events_ptr ? *max_events_ptr : 0;
+        for (unsigned int i = 0; i < MAX_EVENTS; i++) {
+            if (window->events[i]) {
+                free(window->events[i]);
+            }
+        }
+        free(window->events);
+        window->events = NULL;
+    }
+
+    // Free properties
+    if (window->__ui_props.props != NULL) {
+        for (unsigned int i = 0; i < window->__ui_props.count; i++) {
+            if (window->__ui_props.props[i]) {
+                if (window->__ui_props.props[i]->key) {
+                    // If the property is UI_PROP_MAX_EVENTS, free the value
+                    if (strcmp(window->__ui_props.props[i]->key, UI_PROP_MAX_EVENTS) == 0) {
+                        free(window->__ui_props.props[i]->value);
+                    }
+                    free(window->__ui_props.props[i]->key);
+                }
+                free(window->__ui_props.props[i]);
+            }
+        }
+        free(window->__ui_props.props);
+        window->__ui_props.props = NULL;
+    }
+
+    if (window->sdlRenderer) {
+        SDL_DestroyRenderer(window->sdlRenderer);
+        window->sdlRenderer = NULL;
+    }
+    
+    if (window->sdlWindow) {
+        SDL_DestroyWindow(window->sdlWindow);
+        window->sdlWindow = NULL;
+    }
+    
+    free(window->title);
+    free(window);
 }

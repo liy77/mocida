@@ -40,6 +40,7 @@ typedef struct UIMarginsObject {
  * It contains properties for position, visibility, and a pointer to the actual widget data.
  */
 typedef struct {
+    char* id; // Unique identifier for the widget
     float x;
     float y;
     int z;
@@ -75,6 +76,14 @@ UIWidget* widgcs(UIWidgetData data, float width, float height);
  * @return A pointer to the created UIWidget object.
  */
 UIWidget* UIWidget_Create(UIWidgetData data);
+
+/**
+ * Sets the ID of the UIWidget object.
+ * @param widget Pointer to the UIWidget object.
+ * @param id Unique identifier for the widget.
+ * @return Pointer to the updated UIWidget object.
+ */
+UIWidget* UIWidget_SetId(UIWidget* widget, const char* id);
 
 /**
  * Sets the size of the UIWidget object.

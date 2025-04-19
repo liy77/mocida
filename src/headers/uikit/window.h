@@ -5,6 +5,7 @@
 #include <uikit/text.h>
 #include <uikit/color.h>
 #include <uikit/children.h>
+#include <uikit/event.h>
 #include <SDL3/SDL.h>
 
 typedef int UIWindowDisplayMode;
@@ -12,6 +13,20 @@ typedef int UIWindowDisplayMode;
 #define UIWindowWindowed (UIWindowDisplayMode)0
 #define UIWindowFullscreen (UIWindowDisplayMode)1
 #define UIWindowBorderless (UIWindowDisplayMode)2
+
+// Properties
+#define UI_PROP_MAX_EVENTS (char*)"mocida.events.max"
+
+typedef struct {
+    const char* key;
+    void* value;
+} UIProp;
+
+typedef struct {
+    UIProp** props;
+    unsigned int count;
+    unsigned int capacity;
+} UIProps;
 
 /**
  * UIWindow structure representing a window in the UI framework.
@@ -33,6 +48,8 @@ typedef struct {
 
     SDL_Renderer* sdlRenderer;
     SDL_Window* sdlWindow;
+    UIEventCallbackData** events;
+    UIProps __ui_props;
 } UIWindow;
 
 /**
@@ -50,5 +67,47 @@ int UIWindow_Render(UIWindow* window);
  * @return A pointer to the created UIWindow object.
  */
 UIWindow* UIWindow_Create(const char* title, int width, int height);
+
+/**
+ * Sets the event callback for the UIWindow object.
+ * @param window Pointer to the UIWindow object.
+ * @param event Event type to be set.
+ * @param callback Callback function to be called on the event.
+ * @return None.
+ */
+void UIWindow_SetEventCallback(UIWindow* window, UI_EVENT event, UIEventCallback callback);
+
+/**
+ * Gets a property of the UIWindow object.
+ * @param window Pointer to the UIWindow object.
+ * @param property Property name to be retrieved.
+ * @return Pointer to the property value.
+ */
+void* UIWindow_GetProperty(UIWindow* window, const char* property);
+
+/**
+ * Sets a property of the UIWindow object.
+ * @param window Pointer to the UIWindow object.
+ * @param property Property name to be set.
+ * @param value Value to be set for the property.
+ * @return None.
+ */
+void UIWindow_SetProperty(UIWindow* window, const char* property, void* value);
+
+/**
+ * Destroys the UIWindow object and frees its resources.
+ * @param window Pointer to the UIWindow object to be destroyed.
+ * @return None.
+ */
+void UIWindow_Destroy(UIWindow* window);
+
+/**
+ * Emits an event to the UIWindow object.
+ * @param window Pointer to the UIWindow object.
+ * @param event Event type to be emitted.
+ * @param data Data associated with the event.
+ * @return None.
+ */
+void UIWindow_EmitEvent(UIWindow* app, UI_EVENT event, UIEventData data);
 
 #endif // UIKIT_WINDOW_H
