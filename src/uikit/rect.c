@@ -1,5 +1,4 @@
 #include <uikit/rect.h>
-#include <stdio.h>
 
 UIRectangle* UIRectangle_Create() {
     UIRectangle* rect = (UIRectangle*)malloc(sizeof(UIRectangle));
@@ -8,8 +7,8 @@ UIRectangle* UIRectangle_Create() {
         return NULL; // Memory allocation failed
     }
 
-    rect->color = UIColorWhite;
-    rect->borderColor = UIColorBlack;
+    rect->color = UI_COLOR_WHITE;
+    rect->borderColor = UI_COLOR_BLACK;
     rect->marginLeft = 0;
     rect->marginTop = 0;
     rect->marginRight = 0;
@@ -47,4 +46,11 @@ UIRectangle* UIRectangle_SetColor(UIRectangle* rect, UIColor color) {
 UIRectangle* UIRectangle_SetBorderColor(UIRectangle* rect, UIColor color) {
     rect->borderColor = color;
     return rect;
+}
+
+void UIRectangle_Destroy(UIRectangle* rect) {
+    if (rect) {
+        free(rect->__widget_type); 
+        free(rect);
+    }
 }

@@ -51,6 +51,7 @@ UIWidget* UIChildren_GetById(UIChildren* children, const char* id);
  * @return None.
  */
 void UIChildren_Destroy(UIChildren* children);
+
 /**
  * Clears all child widgets from the UIChildren object.
  * @param children Pointer to the UIChildren object to be cleared.

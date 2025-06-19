@@ -1,27 +1,47 @@
 #ifndef UIKIT_WINDOW_H
 #define UIKIT_WINDOW_H
 
+// UIKit includes
 #include <uikit/widget.h>
 #include <uikit/text.h>
 #include <uikit/color.h>
 #include <uikit/children.h>
 #include <uikit/event.h>
+#include <uikit/image.h>
+#include <uikit/extra.h>
+
+// SDL includes
 #include <SDL3/SDL.h>
+#include <SDL3_image/SDL_image.h>
+#include <SDL3_ttf/SDL_ttf.h>
 
-typedef int UIWindowDisplayMode;
+// Standard includes
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
 
-#define UIWindowWindowed (UIWindowDisplayMode)0
-#define UIWindowFullscreen (UIWindowDisplayMode)1
-#define UIWindowBorderless (UIWindowDisplayMode)2
+typedef enum UIWindowDisplayMode {
+    WINDOW_WINDOWED = 0,
+    WINDOW_FULLSCREEN,
+    WINDOW_BORDERLESS
+} UIWindowDisplayMode;
 
 // Properties
 #define UI_PROP_MAX_EVENTS (char*)"mocida.events.max"
 
+/**
+ * UIProp structure representing a property of the UIWindow object.
+ * It contains a key-value pair for the property.
+ */
 typedef struct {
     const char* key;
     void* value;
 } UIProp;
 
+/**
+ * UIProps structure representing a collection of properties.
+ * It contains an array of UIProp pointers, count, and capacity.
+ */
 typedef struct {
     UIProp** props;
     unsigned int count;
@@ -44,7 +64,7 @@ typedef struct {
     float framerate;
     UIChildren* children;
     UIColor backgroundColor;
-    UIWindowDisplayMode scaleMode;
+    UIWindowDisplayMode displayMode;
 
     SDL_Renderer* sdlRenderer;
     SDL_Window* sdlWindow;

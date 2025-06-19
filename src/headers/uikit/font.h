@@ -43,6 +43,10 @@ static const char* find_default_linux_font() {
 #include <stdlib.h>
 #include <string.h>
 
+/**
+ * FontEntry structure representing a font entry.
+ * It contains the font family name and the file path to the font.
+ */
 typedef struct FontEntry {
     char *family_name;
     char *file_path;
@@ -62,5 +66,17 @@ void UISearchFonts();
  * @return The file path of the font, or NULL if not found.
  */
 char* UIGetFont(const char* family_name);
+
+/**
+ * Destroys the UIFont object and frees allocated memory.
+ * @param font The UIFont object to destroy.
+ */
+void UIFont_Destroy();
+
+/**
+ * Destroys the UIFonts map and frees allocated memory.
+ * This function should be called when the application is closing or when fonts are no longer needed.
+ */
+void UIFonts_Destroy();
 
 #endif // UIKIT_FONT_H

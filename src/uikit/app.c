@@ -66,7 +66,7 @@ UIApp* UIApp_Create(const char* title, int width, int height) {
     // Initialize properties before creating the window, to avoid accessing uninitialized memory
     app->mainWidget = NULL;
     app->window = NULL;
-    app->backgroundColor = UIColorWhite;
+    app->backgroundColor = UI_COLOR_WHITE;
 
     UIWidget* mainWidget = widgc(NULL);
     if (!mainWidget) {
@@ -85,7 +85,7 @@ UIApp* UIApp_Create(const char* title, int width, int height) {
         return NULL;
     }
 
-    UIApp_SetBackgroundColor(app, UIColorWhite);
+    UIApp_SetBackgroundColor(app, UI_COLOR_WHITE);
     return app;
 }
 
@@ -139,22 +139,22 @@ void UIApp_SetEventCallback(UIApp* app, UI_EVENT event, UIEventCallback callback
     UIWindow_SetEventCallback(app->window, event, callback);
 }
 
-void UIApp_SetWindowDisplayMode(UIApp* app, UIWindowDisplayMode scaleMode) {
+void UIApp_SetWindowDisplayMode(UIApp* app, UIWindowDisplayMode displayMode) {
     if (!app || !app->window || !app->window->sdlWindow) return;
 
-    switch (scaleMode) {
-        case UIWindowWindowed:
+    switch (displayMode) {
+        case WINDOW_WINDOWED:
             SDL_SetWindowBordered(app->window->sdlWindow, 1);
             SDL_SetWindowFullscreen(app->window->sdlWindow, 0);
             break;
-        case UIWindowFullscreen:
-            SDL_SetWindowFullscreen(app->window->sdlWindow, SDL_WINDOW_FULLSCREEN);
+        case WINDOW_FULLSCREEN:
+            SDL_SetWindowFullscreen(app->window->sdlWindow, 1);
             break;
-        case UIWindowBorderless:
+        case WINDOW_BORDERLESS:
             SDL_SetWindowBordered(app->window->sdlWindow, 0);
             break;
     }
-    app->window->scaleMode = scaleMode;
+    app->window->displayMode = displayMode;
 }
 
 void UIApp_SetRenderDriver(UIApp* app, UIRenderDriver renderDriver) {
@@ -167,8 +167,6 @@ void UIApp_SetRenderDriver(UIApp* app, UIRenderDriver renderDriver) {
 
     switch (renderDriver) {
         case UI_RENDER_OPENGL:
-            SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
-            SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 16);
             SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
             driverName = "opengl";
             break;
@@ -282,6 +280,6 @@ void UIApp_Run(UIApp* app) {
         // Render and wait
         UIWindow_Render(app->window);
         
-        SDL_Delay(frameDelayMs);
+        // SDL_Delay(frameDelayMs);
     }
 }

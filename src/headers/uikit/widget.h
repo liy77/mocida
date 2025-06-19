@@ -4,6 +4,7 @@
 #define UI_WIDGET_RECTANGLE "@uikit/rectangle"
 #define UI_WIDGET_TEXT "@uikit/text"
 #define UI_WIDGET_WIDGET "@uikit/widget" // Base widget type
+#define UI_WIDGET_IMAGE "@uikit/image"
 
 #define UI_DYNAMIC_SIZE -1.0f // Dynamic size indicator
 
@@ -11,10 +12,12 @@
 typedef void* UIWidgetData;
 
 #include <uikit/alignment.h>
-
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /**
- * Base structure for UI widgets.
+ * UIWidgetBase structure representing the base structure for all UI widgets.
  * This structure contains common properties for all widgets.
  */
 typedef struct {
@@ -45,6 +48,7 @@ typedef struct {
     float y;
     int z;
     int visible;
+    float rotation; // Rotation angle in degrees
     float* width;
     float* height;
     float opacity;

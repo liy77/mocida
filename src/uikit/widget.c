@@ -1,7 +1,4 @@
 #include <uikit/widget.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <uikit/text.h>
 
 UIWidget* widgc(UIWidgetData data) {
@@ -26,6 +23,7 @@ UIWidget* UIWidget_Create(UIWidgetData data)  {
     widget->z = 0;
     widget->visible = 1;
     widget->opacity = 1.0f; // Default opacity
+    widget->rotation = 0.0f; // Default rotation
     widget->alignment = NULL; // Default alignment (NULL)
     widget->data = data; // Set the data pointer
     widget->id = NULL; // Default ID (NULL)
@@ -148,21 +146,23 @@ void UIWidget_Destroy(UIWidget* widget) {
     if (widget->data) {
         UIWidgetBase* base = (UIWidgetBase*)widget->data;
         if (!strcmp(base->__widget_type, UI_WIDGET_TEXT)) {
-            UIText* text = (UIText*)base;
-            UIText_DestroyTexture(text);
-            if (text->background) free(text->background);
-            if (text->text) free(text->text);
-            if (text->fontFamily) free(text->fontFamily);
-            free(text->__widget_type);
-        }
-        else if (!strcmp(base->__widget_type, UI_WIDGET_RECTANGLE)) {
-            UIRectangle* rect = (UIRectangle*)base;
-            free(rect->__widget_type);
+            UIText_Destroy((UIText*)base);
+        } else if (!strcmp(base->__widget_type, UI_WIDGET_RECTANGLE)) {
+            UIRectangle_Destroy((UIRectangle*)base);
         }
         free(base);
+    }
+
+    if (widget->parent) {
+        UIWidget* parent = (UIWidget*)widget->parent;
+        UIWidget_Destroy(parent); // Recursively destroy parent
     }
     
     if (widget->width) free(widget->width);
     if (widget->height) free(widget->height);
+    if (widget->id) free(widget->id);
+    if (widget->alignment) free(widget->alignment);
+
     free(widget);
 }
+

@@ -1,0 +1,47 @@
+# Doxyfile for UIKit Project
+
+# Project information
+PROJECT_NAME           = "MocidaUI"
+PROJECT_NUMBER         = 1.0
+PROJECT_BRIEF          = "UI Component Library"
+
+# Output directory
+OUTPUT_DIRECTORY       = "./docs"
+
+# Input files
+INPUT                  = .
+FILE_PATTERNS          = *.c *.h *.md
+RECURSIVE              = YES
+EXCLUDE_PATTERNS       = */build/* */dist/* */node_modules/* */SDL/* */SDL_ttf/* */SDL_image/* */.vscode/* */nasm/*
+
+# Output formats
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+HTML_OUTPUT            = html
+HTML_FILE_EXTENSION    = .html
+
+# Styling
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = YES
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+
+# Source browsing
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+
+# Diagrams and graphs
+HAVE_DOT               = YES
+CLASS_DIAGRAMS         = YES
+COLLABORATION_GRAPH    = YES
+UML_LOOK              = YES
+DOT_IMAGE_FORMAT       = svg
+
+# Documentation style
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = YES
+MARKDOWN_SUPPORT       = YES
+TOC_INCLUDE_HEADINGS   = 3
+
+# Language
+OUTPUT_LANGUAGE        = English

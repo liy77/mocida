@@ -18,35 +18,31 @@ add_executable(${PROJECT_NAME} ${SOURCES})
 
 install(TARGETS ${PROJECT_NAME} DESTINATION bin)
 
-include(FetchContent)
+add_subdirectory(SDL)
+add_subdirectory(SDL_image)
+add_subdirectory(SDL_ttf)
 
-FetchContent_Declare(
-  SDL3
-  GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-  GIT_TAG release-3.2.10  
+set(SDLTTF_VENDORED ON CACHE BOOL "" FORCE)
+set(SDLTTF_SAMPLES OFF CACHE BOOL "" FORCE)
+set(SDLIMAGE_VENDORED ON CACHE BOOL "" FORCE)
+set(SDLIMAGE_AVIF OFF)
+set(SDLIMAGE_SAMPLES OFF CACHE BOOL "" FORCE)
+
+find_package(CURL REQUIRED)
+
+target_link_libraries(uikit PRIVATE
+    SDL3::SDL3
+    SDL3_image::SDL3_image
+    SDL3_ttf::SDL3_ttf
+    CURL::libcurl
 )
-FetchContent_MakeAvailable(SDL3)
-
-FetchContent_Declare(
-  SDL3_ttf
-  GIT_REPOSITORY https://github.com/libsdl-org/SDL_ttf.git
-  GIT_TAG release-3.2.2 
-)
-set(SDL3TTF_VENDORED ON CACHE BOOL "Use vendored dependencies for building SDL3_ttf")
-set(SDL3TTF_SAMPLES OFF CACHE BOOL "Build the SDL3_ttf sample programs")
-FetchContent_MakeAvailable(SDL3_ttf)
-
-target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf)
 
 if(WIN32)
-    add_custom_command(
-        TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:SDL3::SDL3>
-            $<TARGET_FILE_DIR:${PROJECT_NAME}>
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:SDL3_ttf::SDL3_ttf>
-            $<TARGET_FILE_DIR:${PROJECT_NAME}>
-        COMMENT "Copying SDL3 and SDL3_ttf DLLs to output directory"
-    )
+    foreach(dep SDL3 SDL3_ttf SDL3_image)
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:${dep}::${dep}>
+                $<TARGET_FILE_DIR:${PROJECT_NAME}>
+        )
+    endforeach()
 endif()

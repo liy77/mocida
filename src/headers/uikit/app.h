@@ -126,10 +126,10 @@ void UIApp_SetWindowPosition(UIApp* app, int x, int y);
 /**
  * Sets the scale mode of the application window.
  * @param app Pointer to the UIApp object.
- * @param scaleMode Scale mode to be set.
+ * @param displayMode Display mode to be set.
  * @return None.
  */
-void UIApp_SetWindowDisplayMode(UIApp* app, UIWindowDisplayMode scaleMode);
+void UIApp_SetWindowDisplayMode(UIApp* app, UIWindowDisplayMode displayMode);
 
 /**
  * Sets the render driver of the application window.

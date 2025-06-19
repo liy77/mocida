@@ -20,29 +20,28 @@ void UpdateFrameRateText(UIEventData data) {
     UIText_SetText(text, buffer);
 }
 
-void main() {
-
+int main() {
     UIApp* app = UIApp_Create("My App", 800, 600);
     if (app == NULL) {
-        return;
+        return 1;
     }
 
-    UIApp_SetRenderDriver(app, UI_RENDER_3D9);
+    UIApp_SetRenderDriver(app, UI_RENDER_3D12);
 
     UIRectangle* redRect = UIRectangle_Create();
-    UIRectangle_SetColor(redRect, UIColorRed);
+    UIRectangle_SetColor(redRect, UI_COLOR_RED);
     UIRectangle_SetRadius(redRect, 50);
     UIRectangle_SetBorderWidth(redRect, 3);
     
     UIRectangle* blueRect = UIRectangle_Create();
-    UIRectangle_SetColor(blueRect, UIColorBlue);
+    UIRectangle_SetColor(blueRect, UI_COLOR_BLUE);
     UIRectangle_SetRadius(blueRect, 10);
     UIRectangle_SetMargins(blueRect, 150, 20, 0, 20);
 
     UIChildren* children = UIChildren_Create(10);
     if (children == NULL) {
         UIApp_Destroy(app);
-        return;
+        return 1;
     }
 
     UIWidget *redWidget = widgcs(redRect, 100, 100);
@@ -65,13 +64,13 @@ void main() {
 
     UISearchFonts(); // Search for available fonts
     UIText_SetFontFamily(text, UIGetFont("Times New Roman"));
-    UIText_SetColor(text, UIColorYellow);
+    UIText_SetColor(text, UI_COLOR_YELLOW);
 
     
     UIRectangle* textBackground = UIRectangle_Create();
-    UIRectangle_SetColor(textBackground, UIColorGray);
-    UIRectangle_SetRadius(textBackground, 0);
-    UIRectangle_SetBorderColor(textBackground, UIColorBlack);
+    UIRectangle_SetColor(textBackground, UI_COLOR_GRAY);
+    UIRectangle_SetRadius(textBackground, 5);
+    UIRectangle_SetBorderColor(textBackground, UI_COLOR_BLACK);
     UIRectangle_SetBorderWidth(textBackground, 0);
 
     UIText_SetBackground(text, textBackground);
@@ -82,11 +81,13 @@ void main() {
 
     UIChildren_Add(children, textWidget);
     UIApp_SetChildren(app, children);
-    UIApp_SetBackgroundColor(app, UIColorWhite);
+    UIApp_SetBackgroundColor(app, UI_COLOR_DARK_GRAY);
     UIApp_SetWindowTitle(app, "My App 2");
     UIApp_SetWindowSize(app, 1024, 768);
-    UIApp_SetWindowDisplayMode(app, UIWindowWindowed);
+    UIApp_SetWindowDisplayMode(app, WINDOW_WINDOWED);
 
     UIApp_ShowWindow(app);
     UIApp_Run(app);
+
+    return 0;
 }

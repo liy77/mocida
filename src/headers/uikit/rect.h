@@ -1,9 +1,15 @@
 #ifndef UIKIT_RECT_H
 #define UIKIT_RECT_H
 
-#include "color.h"
+#include "uikit/color.h"
 #include <uikit/widget.h>
+#include <stdio.h>
 
+/**
+ * UIRectangle structure representing a rectangle widget.
+ * It contains properties for margins, border radius,
+ * border width, color, and border color.
+ */
 typedef struct {
     const char* __widget_type;
 
@@ -66,5 +72,11 @@ UIRectangle* UIRectangle_SetColor(UIRectangle* rect, UIColor color);
  * @return Pointer to the updated UIRectangle object.
  */
 UIRectangle* UIRectangle_SetBorderColor(UIRectangle* rect, UIColor color);
+
+/**
+ * Destroys the UIRectangle object and frees its memory.
+ * @param rect Pointer to the UIRectangle object to be destroyed.
+ */
+void UIRectangle_Destroy(UIRectangle* rect);
 
 #endif // UIKIT_RECT_H

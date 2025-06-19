@@ -23,7 +23,6 @@ void UISearchFonts() {
 
 #ifdef _WIN32
     char searchPath[512] = {0};
-    printf("SYSTEM_FONTS_PATH: '%s'\n", SYSTEM_FONTS_PATH);
     snprintf(searchPath, sizeof(searchPath), "%s\\*.ttf", SYSTEM_FONTS_PATH);
     
     WIN32_FIND_DATA findFileData;
@@ -203,7 +202,7 @@ void UISearchFonts() {
 #endif
 
     printf("Fonts found: %d\n", fontCount);
-    TTF_Quit(); // Finalizar SDL_ttf
+    TTF_Quit();
 }
 
 char* UIGetFont(const char* family_name) {
@@ -231,4 +230,23 @@ char* UIGetFont(const char* family_name) {
 
     fprintf(stderr, "Font family '%s' not found\n", family_name);
     return NULL; 
+}
+
+void UIFont_Destroy(FontEntry* font) {
+    if (font == NULL) return;
+    free(font->family_name);
+    free(font->file_path);
+    free(font);
+}
+
+void UIFonts_Destroy() {
+    if (UIFonts == NULL) return;
+
+    for (int i = 0; UIFonts[i] != NULL; i++) {
+        FontEntry* fontEntry = UIFonts[i];
+        if (fontEntry == NULL) continue;
+        UIFont_Destroy(fontEntry);
+    }
+    free(UIFonts);
+    UIFonts = NULL;
 }

@@ -1,0 +1,28 @@
+var widget_8h =
+[
+    [ "UIWidgetBase", "struct_u_i_widget_base.html", "struct_u_i_widget_base" ],
+    [ "UIMarginsObject", "struct_u_i_margins_object.html", "struct_u_i_margins_object" ],
+    [ "UIWidget", "struct_u_i_widget.html", "struct_u_i_widget" ],
+    [ "UI_DYNAMIC_SIZE", "widget_8h.html#acfd2e2ab01f134947a9bbe5cb94b3460", null ],
+    [ "UI_WIDGET_RECTANGLE", "widget_8h.html#a09b9956e7ef42a0d8695493c724e2b2f", null ],
+    [ "UI_WIDGET_TEXT", "widget_8h.html#a85b5c0e646060ff27d91eca54a8d65df", null ],
+    [ "UI_WIDGET_WIDGET", "widget_8h.html#a2d73e04c0ab7392ccd833d2b51028e4c", null ],
+    [ "UIMarginsObject", "widget_8h.html#a34814903eac92e61ab9438f52b5e66bf", null ],
+    [ "UIWidgetData", "widget_8h.html#a18e629ded96bc0db6f9eda9b8b9f8895", null ],
+    [ "UIAlignment_Align", "widget_8h.html#a7eb96ce9f28f0d950c61382388a059fa", null ],
+    [ "UIAlignment_GetHTarget", "widget_8h.html#a48b0b5417666a0fe1a45b4cdf97ced50", null ],
+    [ "UIAlignment_GetVTarget", "widget_8h.html#af0f3b8a6270e18a6d21cc2e72be8cb5d", null ],
+    [ "UIWidget_Create", "widget_8h.html#ac79625461cee8b8abc92f1de8d524112", null ],
+    [ "UIWidget_Destroy", "widget_8h.html#a2d3d2edbfc4f6587c7444de94fc8b3af", null ],
+    [ "UIWidget_GetParent", "widget_8h.html#adfe36bfa7d12e3237ed64c96d265db38", null ],
+    [ "UIWidget_SetAlignment", "widget_8h.html#a1f69b83a95b4a1de8a1b7f4eb760ebda", null ],
+    [ "UIWidget_SetAlignmentByParent", "widget_8h.html#a650bb295272a0eafadd14e9be7ac57e0", null ],
+    [ "UIWidget_SetId", "widget_8h.html#a718f7fa6413c57ec3b0d8a22b330f1db", null ],
+    [ "UIWidget_SetParent", "widget_8h.html#a4cb759724e6c58b29a6cd5581e9f6d30", null ],
+    [ "UIWidget_SetPosition", "widget_8h.html#ae9078acd1da7344342574315cc34f564", null ],
+    [ "UIWidget_SetSize", "widget_8h.html#a877752525bd66ce61152d2b931ff4292", null ],
+    [ "UIWidget_SetVisible", "widget_8h.html#a5b7adfe91167703e34f472df1f272e84", null ],
+    [ "UIWidget_SetZIndex", "widget_8h.html#a6e2d04fecb4e0fb2e3f1f33e90fa7996", null ],
+    [ "widgc", "widget_8h.html#a301dedc333cb8c83a69c85415329fd8b", null ],
+    [ "widgcs", "widget_8h.html#ac00783f7509702732792cef08de6923c", null ]
+];

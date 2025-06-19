@@ -2,10 +2,10 @@
 #define UIKIT_TEXT_H
 
 #include <uikit/color.h>
-#include <uikit/widget.h>
 #include <uikit/rect.h>
 #include <uikit/font.h>
 #include <SDL3_ttf/SDL_ttf.h>
+#include <stdio.h>
 
 /**
  * Font styles for text rendering.
@@ -126,5 +126,12 @@ UIText* UIText_SetPadding(UIText* text, float left, float top, float right, floa
  * @return None.
  */
 void UIText_DestroyTexture(UIText* text);
+
+/**
+ * Destroys the UIText object and frees its memory.
+ * @param text Pointer to the UIText object to be destroyed.
+ * @return None.
+ */
+void UIText_Destroy(UIText* text);
 
 #endif // UIKIT_TEXT_H

@@ -1,5 +1,4 @@
 #include <uikit/text.h>
-#include <stdio.h>
 
 UIText* UIText_Create(char* text, float fontSize) {
     UIText* uiText = (UIText*)malloc(sizeof(UIText));
@@ -24,9 +23,9 @@ UIText* UIText_Create(char* text, float fontSize) {
     uiText->fontSize = fontSize;
     uiText->fontFamily = _strdup(DEFAULT_FONT_PATH); // Default font family
     uiText->fontStyle = Normal; // Default style
-    uiText->color = UIColorBlack; // Default color (black)
-    UIRectangle* UIRecN = UIRectangle_Create(0, 0); // Default rectangle
-    UIRectangle_SetColor(UIRecN, UIColorTransparent); // Set default color (white)
+    uiText->color = UI_COLOR_BLACK; // Default color (black)
+    UIRectangle* UIRecN = UIRectangle_Create(); // Default rectangle
+    UIRectangle_SetColor(UIRecN, UI_COLOR_TRANSPARENT); // Set default color (white)
 
     uiText->background = UIRecN; // Default background color (white
     uiText->text = _strdup(text);
@@ -73,7 +72,7 @@ UIText* UIText_SetBackground(UIText* text, UIRectangle* backgroundRect) {
     free(text->background); // Free previous background color
 
     if (backgroundRect == NULL) {
-        backgroundRect = UIRectangle_Create(0, 0); // Default rectangle if NULL
+        backgroundRect = UIRectangle_Create(); // Default rectangle if NULL
     } else {
         text->background = backgroundRect;
     }
@@ -128,4 +127,14 @@ void UIText_DestroyTexture(UIText* text) {
     if (!text || !text->__SDL_textTexture) return;
     SDL_DestroyTexture(text->__SDL_textTexture);
     text->__SDL_textTexture = NULL;
+}
+
+void UIText_Destroy(UIText* text) {
+    if (text) {
+        free(text->fontFamily); 
+        free(text->text);
+        UIRectangle_Destroy(text->background); 
+        UIText_DestroyTexture(text); 
+        free(text);
+    }
 }
