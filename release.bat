@@ -59,9 +59,17 @@ echo.
 
 :: Build with CMake
 color 0%WHITE%
+:: Detect the local vcpkg toolchain (libcurl installed by setup.ps1).
+set "VCPKG_TC=%~dp0vcpkg\scripts\buildsystems\vcpkg.cmake"
+set "TOOLCHAIN_ARG="
+if exist "%VCPKG_TC%" (
+    set "TOOLCHAIN_ARG=-DCMAKE_TOOLCHAIN_FILE=%VCPKG_TC%"
+    echo Using vcpkg toolchain: %VCPKG_TC%
+)
+
 echo Configuring CMake...
 cd %BUILD_DIR% || goto :error
-cmake .. -DCMAKE_BUILD_TYPE=Release || (
+cmake .. %TOOLCHAIN_ARG% -DCMAKE_BUILD_TYPE=Release || (
     color 0%RED%
     echo CMake configuration failed!
     cd ..
