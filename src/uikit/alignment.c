@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <uikit/widget.h>
+#include <uikit/debug.h>
 #include <string.h>
 
 UIAlignment UIAlignment_Create(UIAlign vertical, UIAlign horizontal) {
@@ -39,7 +40,7 @@ void UIAlignment_Align(UIWidget* widget) {
 
     if (targetH == NULL || targetV == NULL || 
         targetH->width == NULL || targetH->height == NULL) {
-        fprintf(stderr, "Target widget is NULL or has no defined size.\n");
+        UI_WARN(UI_CAT_LAYOUT, "alignment target is NULL or has no defined size");
         return;
     }
 
@@ -82,7 +83,6 @@ void UIAlignment_Align(UIWidget* widget) {
             break;
         case UI_ALIGN_H_RIGHT:
             widget->x = targetH_X + targetH_width + H_marginLeft - widgetWidth - H_marginRight;
-            printf("widget->x: %f\n", widget->x);
             break;
         default:
             break;
@@ -110,12 +110,12 @@ void UIWidget_SetAlignmentByParent(UIWidget* widget, uint8_t valign, uint8_t hal
 
     UIWidget* parent = UIWidget_GetParent(widget);
     if (parent == NULL) {
-        fprintf(stderr, "Parent widget is NULL, alignment will not work\n");
+        UI_WARN(UI_CAT_LAYOUT, "parent widget is NULL, alignment will not work");
         return;
     }
 
     if (parent->width == NULL || parent->height == NULL) {
-        fprintf(stderr, "Parent widget does not have a defined size.\n");
+        UI_WARN(UI_CAT_LAYOUT, "parent widget does not have a defined size");
         return;
     }
 
@@ -132,22 +132,21 @@ void UIWidget_SetAlignment(UIWidget* widget, UIAlignment alignment) {
         return;
     }
 
-    // Free existing alignment if it exists
-    if (widget->alignment != NULL) {
-        free(widget->alignment);
+    // Lazy-allocate the alignment slot once. Repeated calls now just
+    // overwrite the value in place rather than free()/malloc()-cycling
+    // a tiny struct on every update.
+    if (widget->alignment == NULL) {
+        widget->alignment = malloc(sizeof(UIAlignment));
+        if (widget->alignment == NULL) {
+            UI_ERROR(UI_CAT_LAYOUT, "out of memory allocating UIAlignment");
+            return;
+        }
     }
 
-    // Allocate memory for the new alignment
-    widget->alignment = malloc(sizeof(UIAlignment));
-    if (widget->alignment == NULL) {
-        fprintf(stderr, "Failed to allocate memory for alignment\n");
-        return;
-    }
-    
     *widget->alignment = alignment;
 
     if (widget->width == NULL || widget->height == NULL) {
-        fprintf(stderr, "Child widget does not have a defined size.\n");
+        UI_WARN(UI_CAT_LAYOUT, "child widget does not have a defined size");
         return;
     }
 

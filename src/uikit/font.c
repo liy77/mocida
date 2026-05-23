@@ -1,4 +1,5 @@
 #include <uikit/font.h>
+#include <uikit/debug.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,7 +18,7 @@ void UISearchFonts() {
     UIFonts = NULL;
 
     if (TTF_Init() != 1) {
-        fprintf(stderr, "Failed to initialize SDL_ttf: %s\n", SDL_GetError());
+        UI_ERROR(UI_CAT_FONT, "TTF_Init failed: %s", SDL_GetError());
         return;
     }
 
@@ -45,7 +46,7 @@ void UISearchFonts() {
         // Load the font temporarily to get the family name
         TTF_Font* font = TTF_OpenFont(fontPath, 12); // Arbitrary size, just to load the font
         if (font == NULL) {
-            fprintf(stderr, "Failed to load font %s: %s\n", fontPath, SDL_GetError());
+            UI_WARN(UI_CAT_FONT, "failed to load font '%s': %s", fontPath, SDL_GetError());
             continue;
         }
 
@@ -55,7 +56,7 @@ void UISearchFonts() {
         if (family_name) {
             family_name_copy = _strdup(family_name);
         } else {
-            fprintf(stderr, "No family name found in font %s\n", fontPath);
+            UI_WARN(UI_CAT_FONT, "no family name found in font '%s'", fontPath);
             family_name_copy = _strdup("Unknown Family"); // Fallback
         }
 
@@ -134,7 +135,7 @@ void UISearchFonts() {
         // Load the font temporarily to get the family name
         TTF_Font* font = TTF_OpenFont(fontPath, 12); // Arbitrary size, just to load the font
         if (!font) {
-            fprintf(stderr, "Failed to load font %s: %s\n", fontPath, TTF_GetError());
+            UI_WARN(UI_CAT_FONT, "failed to load font '%s': %s", fontPath, TTF_GetError());
             continue;
         }
 
@@ -144,7 +145,7 @@ void UISearchFonts() {
         if (family_name) {
             family_name_copy = strdup(family_name);
         } else {
-            fprintf(stderr, "No family name found in font %s\n", fontPath);
+            UI_WARN(UI_CAT_FONT, "no family name found in font '%s'", fontPath);
             family_name_copy = strdup("Unknown Family"); // Fallback
         }
 
@@ -207,19 +208,19 @@ void UISearchFonts() {
 
 char* UIGetFont(const char* family_name) {
     if (UIFonts == NULL || sizeof(UIFonts) == 0) {
-        fprintf(stderr, "Fonts not initialized. Call UISearchFonts() first.\n");
+        UI_WARN(UI_CAT_FONT, "fonts not initialized — call UISearchFonts() first");
         return NULL;
     }
 
     if (family_name == NULL) {
-        fprintf(stderr, "Family name is NULL\n");
+        UI_WARN(UI_CAT_FONT, "family name is NULL");
         return NULL;
     }
 
     for (int i = 0; UIFonts[i] != NULL; i++) {
         FontEntry* fontEntry = UIFonts[i];
         if (fontEntry == NULL || fontEntry->family_name == NULL || fontEntry->file_path == NULL) {
-            fprintf(stderr, "Invalid font entry at index %d\n", i);
+            UI_WARN(UI_CAT_FONT, "invalid font entry at index %d", i);
             continue;
         }
 
@@ -228,7 +229,7 @@ char* UIGetFont(const char* family_name) {
         }
     }
 
-    fprintf(stderr, "Font family '%s' not found\n", family_name);
+    UI_WARN(UI_CAT_FONT, "font family '%s' not found", family_name);
     return NULL; 
 }
 

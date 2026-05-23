@@ -1,10 +1,12 @@
 #include <uikit/color.h>
+#include <uikit/debug.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 UIColor* UIColor_RGBA(int r, int g, int b, float a) {
     UIColor* color = (UIColor*)malloc(sizeof(UIColor));
     if (color == NULL) {
-        fprintf(stderr, "Failed to allocate memory for UIColor\n");
+        UI_ERROR(UI_CAT_CORE, "out of memory allocating UIColor");
         return NULL;
     }
 

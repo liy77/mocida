@@ -1,9 +1,10 @@
 #include <uikit/rect.h>
+#include <uikit/debug.h>
 
 UIRectangle* UIRectangle_Create() {
     UIRectangle* rect = (UIRectangle*)malloc(sizeof(UIRectangle));
     if (rect == NULL) {
-        fprintf(stderr, "Failed to allocate memory for UIRectangle\n");
+        UI_ERROR(UI_CAT_WIDGET, "out of memory allocating UIRectangle");
         return NULL; // Memory allocation failed
     }
 
@@ -16,7 +17,23 @@ UIRectangle* UIRectangle_Create() {
     rect->radius = 0;
     rect->borderWidth = 0;
     rect->__widget_type = UI_WIDGET_RECTANGLE; // Set the widget type
+    rect->hasShadow = 0;
+    rect->shadow = UI_SHADOW_NONE;
 
+    return rect;
+}
+
+UIRectangle* UIRectangle_SetShadow(UIRectangle* rect, UIShadow shadow) {
+    if (!rect) return NULL;
+    rect->hasShadow = 1;
+    rect->shadow = shadow;
+    return rect;
+}
+
+UIRectangle* UIRectangle_ClearShadow(UIRectangle* rect) {
+    if (!rect) return NULL;
+    rect->hasShadow = 0;
+    rect->shadow = UI_SHADOW_NONE;
     return rect;
 }
 
@@ -50,7 +67,8 @@ UIRectangle* UIRectangle_SetBorderColor(UIRectangle* rect, UIColor color) {
 
 void UIRectangle_Destroy(UIRectangle* rect) {
     if (rect) {
-        free(rect->__widget_type); 
+        // __widget_type points at a string literal (UI_WIDGET_RECTANGLE);
+        // calling free() on it would be undefined behaviour.
         free(rect);
     }
 }
