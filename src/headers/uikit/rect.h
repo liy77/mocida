@@ -3,6 +3,7 @@
 
 #include "uikit/color.h"
 #include <uikit/widget.h>
+#include <uikit/shadow.h>
 #include <stdio.h>
 
 /**
@@ -11,17 +12,21 @@
  * border width, color, and border color.
  */
 typedef struct {
-    const char* __widget_type;
+    const char* __widget_type; /**< Widget type tag (== UI_WIDGET_RECTANGLE). */
 
-    float marginLeft;
-    float marginTop;
-    float marginRight;
-    float marginBottom;
-    float radius;
-    float borderWidth;
+    float marginLeft;          /**< Left outer margin (pixels). */
+    float marginTop;           /**< Top outer margin (pixels). */
+    float marginRight;         /**< Right outer margin (pixels). */
+    float marginBottom;        /**< Bottom outer margin (pixels). */
+    float radius;              /**< Corner radius. Equals min(w,h)/2 to render a circle. */
+    float borderWidth;         /**< Border thickness (pixels). 0 = no border. */
 
-    UIColor color;
-    UIColor borderColor;
+    UIColor color;             /**< Fill color. */
+    UIColor borderColor;       /**< Border color. */
+
+    /** When 0 the renderer skips the shadow pass entirely. Set via UIRectangle_SetShadow. */
+    int hasShadow;
+    UIShadow shadow;           /**< Shadow parameters (offset, blur, spread, color). */
 } UIRectangle;
 
 /**
@@ -72,6 +77,24 @@ UIRectangle* UIRectangle_SetColor(UIRectangle* rect, UIColor color);
  * @return Pointer to the updated UIRectangle object.
  */
 UIRectangle* UIRectangle_SetBorderColor(UIRectangle* rect, UIColor color);
+
+/**
+ * Sets a drop shadow on the rectangle.
+ * Use UI_SHADOW_DEFAULT as a sensible starting point.
+ *
+ * @param rect   Pointer to the UIRectangle.
+ * @param shadow Shadow configuration (offset, blur, spread, color).
+ * @return The same UIRectangle pointer (for chaining).
+ */
+UIRectangle* UIRectangle_SetShadow(UIRectangle* rect, UIShadow shadow);
+
+/**
+ * Clears any previously configured shadow.
+ *
+ * @param rect Pointer to the UIRectangle.
+ * @return The same UIRectangle pointer (for chaining).
+ */
+UIRectangle* UIRectangle_ClearShadow(UIRectangle* rect);
 
 /**
  * Destroys the UIRectangle object and frees its memory.

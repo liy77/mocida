@@ -11,7 +11,7 @@ typedef uint32_t UI_EVENT;
  * It contains a single field for frames per second (fps).
  */
 typedef struct UIEventFramerate {
-    double fps; // Frames per second
+    double fps; /**< Current frames-per-second measured by the renderer. */
 } UIEventFramerate;
 
 /**
@@ -19,9 +19,9 @@ typedef struct UIEventFramerate {
  * It contains the event type, child widgets, and framerate information.
  */
 typedef struct {
-    UI_EVENT type;
-    UIChildren* children;
-    UIEventFramerate framerate;
+    UI_EVENT type;               /**< Event ID (UI_EVENT_FRAMERATE_CHANGED, ...). */
+    UIChildren* children;        /**< Window's children tree at fire time. */
+    UIEventFramerate framerate;  /**< Populated for UI_EVENT_FRAMERATE_CHANGED. */
 } UIEventData;
 
 /**
@@ -35,7 +35,7 @@ typedef void (*UIEventCallback)(UIEventData data);
  * It contains a function pointer to the callback function.
  */
 typedef struct {
-    UIEventCallback cb;
+    UIEventCallback cb; /**< User-supplied callback fired when the event triggers. */
 } UIEventCallbackData;
 
 #endif // UIKIT_EVENT_H

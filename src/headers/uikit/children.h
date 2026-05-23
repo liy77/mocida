@@ -9,9 +9,9 @@
  * It contains properties for capacity, count, and an array of child widgets.
  */
 typedef struct {
-    int capacity;
-    int count;
-    UIWidget** children;
+    int capacity;        /**< Allocated slot count of the `children` array. */
+    int count;           /**< Number of valid entries currently in `children`. */
+    UIWidget** children; /**< Heap array of child widget pointers, length == capacity. */
 } UIChildren;
 
 /**
@@ -65,5 +65,13 @@ void UIChildren_Clear(UIChildren* children);
  * @return None.
  */
 void UIChildren_SortByZ(UIChildren* children);
+
+/**
+ * Re-runs UIAlignment_Align on every child widget that has an
+ * alignment target. Call this after the parent's size changes
+ * (e.g. on window resize) so anchored widgets reposition.
+ * @param children Pointer to the UIChildren object.
+ */
+void UIChildren_Relayout(UIChildren* children);
 
 #endif // UIKIT_CHILDREN_H

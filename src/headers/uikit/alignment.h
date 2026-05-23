@@ -8,8 +8,8 @@
  * It contains properties for vertical and horizontal alignment.
  */
 typedef struct {
-    uint8_t value;
-    void* target_widget;
+    uint8_t value;       /**< Bitmask of UI_ALIGN_* flags (one axis only). */
+    void* target_widget; /**< Optional UIWidget* this alignment anchors to; NULL = align inside parent. */
 } UIAlign;
 
 #define UI_ALIGN_V_CENTER (uint8_t)0x00000001
@@ -24,8 +24,8 @@ typedef struct {
  * It contains properties for vertical and horizontal alignment.
  */
 typedef struct {
-    UIAlign vertical;
-    UIAlign horizontal;
+    UIAlign vertical;    /**< Vertical alignment rule (top / center / bottom). */
+    UIAlign horizontal;  /**< Horizontal alignment rule (left / center / right). */
 } UIAlignment;
 
 /**

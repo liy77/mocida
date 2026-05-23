@@ -48,8 +48,8 @@ static const char* find_default_linux_font() {
  * It contains the font family name and the file path to the font.
  */
 typedef struct FontEntry {
-    char *family_name;
-    char *file_path;
+    char *family_name; /**< Family name reported by the font (e.g. "Arial"). */
+    char *file_path;   /**< Absolute path to the .ttf / .otf file on disk. */
 } FontEntry;
 
 static FontEntry **UIFonts = NULL;
@@ -71,7 +71,7 @@ char* UIGetFont(const char* family_name);
  * Destroys the UIFont object and frees allocated memory.
  * @param font The UIFont object to destroy.
  */
-void UIFont_Destroy();
+void UIFont_Destroy(FontEntry* font);
 
 /**
  * Destroys the UIFonts map and frees allocated memory.

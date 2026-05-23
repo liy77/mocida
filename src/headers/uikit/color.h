@@ -12,10 +12,10 @@
  * The values are in the range of 0-255 for RGB and 0.0-1.0 for alpha.
  */
 typedef struct {
-    int r;
-    int g;
-    int b;
-    float a; // alpha
+    int r;     /**< Red channel, 0-255. */
+    int g;     /**< Green channel, 0-255. */
+    int b;     /**< Blue channel, 0-255. */
+    float a;   /**< Alpha (opacity), 0.0 (transparent) to 1.0 (opaque). */
 } UIColor;
 
 // Predefined colors
