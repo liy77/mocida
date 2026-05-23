@@ -1,6 +1,324 @@
-<div style="display: flex; align-items: center; margin-bottom: 20px;">
-    <img src="assets/logo.svg" width="60" height="60">
-        <h1 style="margin-left: 15px; font-size: 2em;">Mocida</h1>
-    </div>
+<div align="center">
 
-A modular user interface toolkit aimed at simplifying UI development based on <img src="assets/sdl_logo.png" height="16" alt="SDL Logo" style="vertical-align: middle;" href="https://github.com/libsdl-org/SDL/tree/main">.
+<img src="assets/banner.svg" alt="Mocida — Modular UI toolkit in C" width="100%"/>
+
+<p>
+  <a href="#building"><img alt="C11" src="https://img.shields.io/badge/C-11-3949ab?style=flat-square"></a>
+  <a href="https://github.com/libsdl-org/SDL"><img alt="SDL3" src="https://img.shields.io/badge/SDL-3-2c5f9e?style=flat-square"></a>
+  <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2F11-0078d4?style=flat-square">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square">
+  <img alt="WIP" src="https://img.shields.io/badge/status-active-f59e0b?style=flat-square">
+</p>
+
+<p>
+  <b>A modular user interface toolkit in C</b>, built on top of
+  <a href="https://github.com/libsdl-org/SDL"><img src="assets/sdl_logo.png" height="14" alt="SDL" style="vertical-align: middle"></a>
+  with a focus on <b>visual quality</b>, <b>strict typing</b>, and a
+  developer experience that doesn't get in the way.
+</p>
+
+</div>
+
+---
+
+## What's inside
+
+- **Widgets that look right.** Rounded rectangles with analytic-coverage anti-aliasing, SDF-based drop shadows, configurable MSAA (1×/4×/16×/64× SPP), optional SSAA / FXAA / TAA on top.
+- **A real component model.** Buttons, text, images, text fields/areas, tabs, dialogs, popups, dropdowns, sliders, switches, file drop zones, scroll views, grids, video, and an embedded WebView2 surface — all built around the same `UIWidget` envelope.
+- **Built-in debug stack.** Logger with TCP/file/handler sinks · Chrome-Trace profiler · F9/F10/F11 overlay (bounds + FPS HUD + overdraw heatmap) · always-on crash handler with stack trace + widget-tree dump · optional ASAN/UBSAN.
+- **Modern allocator.** Optional Microsoft [mimalloc](https://github.com/microsoft/mimalloc) plugged in transparently via `mocida_alloc.h`.
+- **Themed C API.** Single header (`<uikit/app.h>`) re-exports the whole surface; consistent `UIType_Verb()` naming throughout.
+
+---
+
+## At a glance
+
+<img src="assets/feature-widgets.svg" alt="Mocida widget gallery" width="100%"/>
+
+<div align="center"><i>Buttons · controls · text inputs · dropdowns — all driven by the same `UIWidget` envelope.</i></div>
+
+---
+
+## Visual quality pipeline
+
+<img src="assets/feature-quality.svg" alt="Anti-aliasing pipeline" width="100%"/>
+
+The rasterizer computes per-pixel **coverage = samples_inside / N²** for circles and rounded corners, where N is `UI_QUALITY_{LOW,MEDIUM,HIGH,ULTRA}`. The output matches what hardware 16× or 64× MSAA would produce, is mathematically exact, and is **consistent across every backend** (D3D11, D3D12, OpenGL, Vulkan, Metal). On top of that you can stack:
+
+- **SSAA 2× / 4×** — render at higher resolution, bilinear downscale on present.
+- **FXAA** — CPU edge-detect + blur on the composed frame.
+- **TAA** — per-pixel temporal accumulation with motion rejection (no ghosting).
+
+Drop shadows are an SDF in one pass (`RasterizeShadowMask`); textures and shadows are cached by `(w, h, radius, blur, spread)` and re-colored at draw time via `SDL_SetTextureColorMod`, so changing color is free.
+
+---
+
+## Debug & profiling
+
+<img src="assets/feature-debug.svg" alt="Debug subsystem" width="100%"/>
+
+```c
+// One env var spawns a TCP debug stream — tail with `ncat 127.0.0.1 12345`.
+//   set MOCIDA_DEBUG_PORT=12345
+//   set MOCIDA_DEBUG_LEVEL=warn
+
+UI_INFO (UI_CAT_CORE,   "app started (%dx%d)", w, h);
+UI_WARN (UI_CAT_LAYOUT, "alignment target has no defined size");
+UI_ERROR(UI_CAT_RENDER, "SDL_CreateRenderer error: %s", SDL_GetError());
+
+UI_SCOPEC("layout_pass", UI_PROF_LAYOUT);   // adds to per-frame stats
+UI_ASSERT(widget != NULL);                  // crash dump + abort on failure
+UI_TRACK_ALLOC(UI_CAT_WIDGET);              // leak counter, per category
+
+UIProfile_TraceStart(0);
+// ... run the app ...
+UIProfile_TraceSave("trace.json");          // open in chrome://tracing
+```
+
+Press **F9** for widget bounds, **F10** for the FPS HUD, **F11** for the depth heatmap, **F12** to toggle them all. Crashes (segfault, abort, divide-by-zero, …) write `mocida_crash_YYYYMMDD_HHMMSS.log` with a symbolicated backtrace + recent log lines + widget tree snapshot — wherever the process was running.
+
+---
+
+## Prerequisites
+
+**OS** · Windows 10 (1809+) or Windows 11, **x64**. Most of the code is portable C11; only the WebView2 (`webview.c` + `webview_dcomp.cpp`) and Media Foundation (`video.c`) backends are Windows-only — every other widget builds without them in a future cross-platform port.
+
+**Required at build time** — all installed automatically by `setup.bat` via [winget](https://learn.microsoft.com/windows/package-manager/), so you typically don't need to install anything by hand:
+
+| Tool        | Why                                             | winget id                          |
+|-------------|-------------------------------------------------|------------------------------------|
+| Git         | Cloning SDL / mimalloc / vcpkg                  | `Git.Git`                          |
+| CMake ≥ 3.11 | Build system                                    | `Kitware.CMake`                    |
+| LLVM / clang| Default compiler (clang-cl mode)                | `LLVM.LLVM`                        |
+| Ninja       | Fast generator (falls back to `make` if absent) | `Ninja-build.Ninja`                |
+| Visual Studio Build Tools | MSVC CRT, Windows SDK headers       | `Microsoft.VisualStudio.2022.BuildTools` (workload: *Desktop development with C++*) |
+
+If you'd rather skip `setup.bat`, make sure the executables above are on `PATH`, then run `build.bat` directly. The script auto-detects an existing vcpkg / mimalloc checkout and won't re-clone them.
+
+**Required at runtime** — already on every supported Windows out of the box:
+
+- **WebView2 Runtime** — ships with Windows 10 21H2+ and all Win11; auto-updated by Microsoft. Only used by `UIWebView`.
+- **Media Foundation** + the codec packs Windows ships with — used by `UIVideo`. For HEVC playback specifically, install Microsoft's free [HEVC Video Extensions from Device Manufacturer](ms-windows-store://pdp/?productid=9n4wgh0z6vhq) once.
+
+**Optional**:
+
+| Tool      | What for                                                                | winget id                          |
+|-----------|-------------------------------------------------------------------------|------------------------------------|
+| Doxygen   | Generating the API docs (`docs.bat`)                                    | `DimitriVanHeesch.Doxygen`         |
+| ffmpeg    | Synthesizing `sample.mp4` + `click.wav` for `test_video` / `test_sound` via `assets/make-samples.ps1` | `Gyan.FFmpeg` |
+| Graphviz  | Class/include graphs in the docs (Doxygen calls `dot` if present)       | `Graphviz.Graphviz`                |
+| RenderDoc | GPU frame capture against the lib                                       | `BaezonDev.RenderDoc`              |
+
+**Disk** — a fresh clone + first `setup.bat` run pulls SDL/SDL_image/SDL_ttf + vcpkg + libcurl + WebView2 SDK + mimalloc, then builds everything. Reserve about **3–4 GB** total (vcpkg alone is ~2 GB once libcurl is built). Incremental rebuilds touch only `build/` and add ~200 MB.
+
+**Hardware** — any 64-bit CPU with SSE2 and a GPU that supports one of D3D11 / D3D12 / OpenGL 3.3+ / Vulkan 1.1. The default renderer picks the best available driver at startup; you can override via `UIApp_SetRenderDriver`.
+
+---
+
+## Building
+
+### First time on a fresh PC
+
+```bat
+setup.bat
+```
+
+Installs Git, CMake, LLVM/clang, Ninja, and Make via `winget` (skips what's already installed), bootstraps a local vcpkg, fetches libcurl + WebView2, clones SDL / SDL_image / SDL_ttf at pinned commits, then runs the first build for you.
+
+### Day-to-day
+
+```bat
+build.bat                 :: Debug, static lib, demo only (default flavour)
+build.bat --clean         :: wipe build/ and reconfigure from scratch
+release.bat               :: Release build + zipped distribution
+```
+
+`build.bat` auto-detects MSVC (via `vswhere`) and calls `vcvarsall.bat x64` for you, so it works from any console — you don't need to launch a "Developer Command Prompt for VS" first.
+
+### Build flavours
+
+`build.bat` exposes three independent toggles. All flags are order-agnostic and compose freely:
+
+| Flag           | What it does                                                                                          | Default |
+|----------------|-------------------------------------------------------------------------------------------------------|---------|
+| `--shared`     | Build `mocida.dll` instead of the static `mocida.lib`. Symbols are exported automatically via CMake's `WINDOWS_EXPORT_ALL_SYMBOLS` — no `__declspec` annotations needed in the source. The DLL is copied next to every executable in the build dir. | OFF (static) |
+| `--tests`      | Compile every `tests/test_*.c` into its own `.exe` (35 focused visual scenarios — one per feature). Skipped by default to keep incremental rebuilds fast. | OFF |
+| `--no-demo`    | Skip the showcase `demo.exe`. Useful when you only need the library.                                  | demo ON |
+| `--clean`      | Drop `build/` before configuring.                                                                     | — |
+| `--static`     | Force the static-lib flavour (overrides a previously cached `--shared`).                              | — |
+| `--no-tests`   | Force tests OFF (overrides a previously cached `--tests`).                                            | — |
+
+Common combinations:
+
+```bat
+build.bat                       :: static lib + demo (fastest, minimal)
+build.bat --shared              :: mocida.dll + demo
+build.bat --tests               :: static lib + demo + every test_*.exe
+build.bat --clean --shared      :: from-scratch DLL build
+build.bat --shared --no-demo    :: just the DLL — for embedding in your own project
+build.bat --shared --tests      :: DLL + every test linked against it
+```
+
+The same options exist on the CMake side if you prefer driving it directly:
+
+```bat
+cmake -B build -DMOCIDA_BUILD_SHARED=ON -DMOCIDA_BUILD_TESTS=ON ..
+cmake --build build --parallel
+```
+
+### What lands in `build/`
+
+After a default build:
+
+```
+build\
+├── mocida.lib        :: static archive (static flavour)
+└── demo.exe          :: showcase
+```
+
+After `--shared`:
+
+```
+build\
+├── mocida.dll        :: shared library
+├── mocida.lib        :: import library (link against this)
+├── demo.exe          :: small (~30 KB) — most code is in the DLL
+├── SDL3.dll          :: copied automatically by post-build hooks
+├── SDL3_ttf.dll
+├── SDL3_image.dll
+└── WebView2Loader.dll
+```
+
+After `--tests` you additionally get `test_button.exe`, `test_image.exe`, `test_shadows.exe`, `test_quality.exe`, `test_anchors.exe`, `test_textarea.exe`, … (one per file in `tests/`). Notable ones:
+
+```bat
+.\build\demo.exe              :: drag + AA cycle + FPS toggle
+.\build\test_anchors.exe      :: alignment / anchor system live resize
+.\build\test_quality.exe      :: cycles MSAA LOW/MEDIUM/HIGH/ULTRA
+.\build\test_button.exe       :: interactive button states + click
+.\build\test_shadows.exe      :: SDF drop shadows
+.\build\test_image.exe        :: fill modes + tint
+.\build\test_video.exe        :: requires assets/sample.mp4 — see assets/README.md
+.\build\test_sound.exe        :: generates assets/click.wav on first run
+```
+
+### Consuming mocida in your own project
+
+After building with `--shared`, link your app against the import library + ship the DLLs:
+
+```cmake
+# CMake (using mocida as a vendored/installed prebuilt)
+target_include_directories(myapp PRIVATE path/to/mocida/src/headers)
+target_link_libraries     (myapp PRIVATE path/to/mocida/build/mocida.lib)
+# At runtime, mocida.dll + SDL3*.dll + WebView2Loader.dll must sit next to myapp.exe
+```
+
+Or build mocida as a static library (default) and link directly — no DLL to ship, larger executable.
+
+### Optional sanitizers (clang / gcc only)
+
+```bat
+cmake -B build -DMOCIDA_SANITIZE=address ..
+cmake -B build -DMOCIDA_SANITIZE=address,undefined ..
+cmake --build build --parallel
+```
+
+Catches use-after-free, double-free, leaks (with `ASAN_OPTIONS=detect_leaks=1`), signed/unsigned overflow, and bad shifts. Not for production binaries — they slow the runtime down 2-3×.
+
+### Picking a render driver
+
+The default render driver is auto-selected (D3D12 on Windows 10+/11, D3D11 fallback). Override at startup:
+
+```c
+UIApp_SetRenderDriver(app, UI_RENDER_OPENGL);  // or UI_RENDER_VULKAN, UI_RENDER_3D11, ...
+```
+
+See the comment block in `src/headers/uikit/app.h:37` for the full list.
+
+---
+
+## Hello, world
+
+```c
+#include <uikit/app.h>
+
+int main(void) {
+    UIApp* app = UIApp_Create("My app", 800, 600);
+
+    UIApp_SetWindowIcon(app, "assets/logo.svg");
+    UISearchFonts();
+
+    UIChildren* children = UIChildren_Create(8);
+
+    UIButton* btn = UIButton_Create("Click me", 22.0f);
+    UIButton_SetFontFamily(btn, UIGetFont("Arial"));
+    UIButton_SetRadius   (btn, 8.0f);
+    UIButton_SetShadow   (btn, UI_SHADOW_DEFAULT);
+
+    UIWidget* w = widgcs(btn, 220.0f, 56.0f);
+    UIWidget_SetPosition(w, 290.0f, 270.0f);
+    UIChildren_Add(children, w);
+
+    UIApp_SetChildren       (app, children);
+    UIApp_SetBackgroundColor(app, (UIColor){ 248, 250, 252, 1.0f });
+
+    UIApp_ShowWindow(app);
+    UIApp_Run       (app);
+    UIApp_Destroy   (app);
+    return 0;
+}
+```
+
+---
+
+## Documentation
+
+The full API reference is generated by Doxygen and lives under `docs/generated/html/`.
+
+```bat
+docs.bat                     :: build only
+docs.bat --open              :: build + open the index in your browser
+docs.bat --serve             :: build + start a local HTTP server (default :8080)
+docs.bat --serve --port 4242 :: pick another port
+docs.bat --serve --no-build  :: just serve what's already there
+```
+
+`--serve` uses a native PowerShell HttpListener — no Python, Node, or extra tooling needed. The site supports **light / dark / auto** themes; click the moon/sun icon next to the logo to cycle. Your preference is remembered across reloads.
+
+---
+
+## Layout of the repo
+
+```
+src/
+├─ headers/uikit/    public C headers — include via <uikit/app.h>
+└─ uikit/            implementation (.c + .cpp for WebView2/DComp glue)
+
+tests/               one .c per visual feature; each builds to its own .exe
+assets/              logo, SVG showcases, optional media for tests (sample.mp4 etc)
+docs/                Doxyfile, mainpage.md, custom theme + serve.ps1
+SDL/, SDL_image/, SDL_ttf/   vendored at pinned commits (see setup.bat)
+mimalloc/            optional allocator (auto-detected by CMake)
+vcpkg/               local toolchain bootstrap for libcurl + webview2
+```
+
+---
+
+## Roadmap
+
+- [x] Widget primitives (rect, text, image, button)
+- [x] Form controls (textfield, textarea, checkbox, switch, radio, slider, progress)
+- [x] Layout containers (stack, grid, scroll, tabview, dialog, popup)
+- [x] Animations (tweens with easing curves)
+- [x] Media (UIVideo via Media Foundation, UISound via SDL audio)
+- [x] WebView (Edge Chromium via WebView2)
+- [x] Debug toolkit (logger, profiler, overlay, crash handler, ASAN/UBSAN)
+- [ ] Live tweak protocol (bidirectional debug TCP)
+- [ ] Inspector tree dump as JSON
+- [ ] Cross-platform port (Linux/macOS audio + video backends)
+
+---
+
+## License
+
+MIT. See [`LICENSE`](LICENSE) for details. SDL / SDL_image / SDL_ttf are vendored under their respective zlib licenses; mimalloc is MIT.

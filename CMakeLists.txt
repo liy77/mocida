@@ -1,48 +1,278 @@
 cmake_minimum_required(VERSION 3.11)
-project(uikit C)
+project(mocida C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Otimizações para Release (MSVC / Clang / MinGW)
+# Release optimizations (MSVC / Clang / MinGW).
 set(CMAKE_C_FLAGS_RELEASE "/O2 /GL /Gw /Gy /GF /DNDEBUG")
 set(CMAKE_EXE_LINKER_FLAGS_RELEASE "/LTCG /OPT:REF /OPT:ICF")
 
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src/headers)
+# Default to a Debug build if the user didn't pick one — keeps the
+# UI_TRACE/UI_DEBUG macros (gated behind NDEBUG in debug.h) live.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Debug CACHE STRING "" FORCE)
+endif()
 
-file(GLOB_RECURSE SOURCES_RECURSE "${CMAKE_CURRENT_SOURCE_DIR}/src/**/*.c")
-list(APPEND SOURCES ${SOURCES_RECURSE})
-list(APPEND SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.c")
-
-add_executable(${PROJECT_NAME} ${SOURCES})
-
-install(TARGETS ${PROJECT_NAME} DESTINATION bin)
+# ----------------------------------------------------------------------
+# Vendored dependencies. The flags below MUST be set before
+# add_subdirectory so that SDL_image / SDL_ttf use their bundled libs
+# (libpng, freetype, etc.) instead of looking for them in the system.
+# ----------------------------------------------------------------------
+set(SDLTTF_VENDORED ON CACHE BOOL "" FORCE)
+set(SDLTTF_SAMPLES OFF CACHE BOOL "" FORCE)
+set(SDLIMAGE_VENDORED ON CACHE BOOL "" FORCE)
+set(SDLIMAGE_AVIF OFF CACHE BOOL "" FORCE)
+set(SDLIMAGE_SAMPLES OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(SDL)
 add_subdirectory(SDL_image)
 add_subdirectory(SDL_ttf)
 
-set(SDLTTF_VENDORED ON CACHE BOOL "" FORCE)
-set(SDLTTF_SAMPLES OFF CACHE BOOL "" FORCE)
-set(SDLIMAGE_VENDORED ON CACHE BOOL "" FORCE)
-set(SDLIMAGE_AVIF OFF)
-set(SDLIMAGE_SAMPLES OFF CACHE BOOL "" FORCE)
-
 find_package(CURL REQUIRED)
 
-target_link_libraries(uikit PRIVATE
+# WebView2 (Microsoft Edge Chromium) - only on Windows. Provides the
+# native browser surface used by UIWebView. The runtime DLL ships next
+# to the exe via target_link_libraries below; the Edge runtime itself
+# is already installed on every Windows 10+ machine.
+if(WIN32)
+    find_package(unofficial-webview2 CONFIG REQUIRED)
+endif()
+
+# ----------------------------------------------------------------------
+# Optional: link Microsoft mimalloc as the allocator. When the vendored
+# mimalloc/ directory exists (cloned by setup.ps1), build the static
+# library and arrange for malloc/free in our code to route through
+# mi_malloc/mi_free via the mocida_alloc.h hook.
+#
+# To opt out of mimalloc:
+#     cmake -DMOCIDA_USE_MIMALLOC=OFF ..
+# ----------------------------------------------------------------------
+option(MOCIDA_USE_MIMALLOC "Use Microsoft mimalloc for malloc/free" ON)
+set(MOCIDA_MIMALLOC_AVAILABLE OFF)
+
+if(MOCIDA_USE_MIMALLOC AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/mimalloc/CMakeLists.txt)
+    set(MI_OVERRIDE     ON  CACHE BOOL "" FORCE)
+    set(MI_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    set(MI_BUILD_OBJECT OFF CACHE BOOL "" FORCE)
+    set(MI_BUILD_TESTS  OFF CACHE BOOL "" FORCE)
+    set(MI_INSTALL_TOPLEVEL OFF CACHE BOOL "" FORCE)
+    add_subdirectory(mimalloc)
+    set(MOCIDA_MIMALLOC_AVAILABLE ON)
+    message(STATUS "Mocida: using mimalloc as the allocator")
+endif()
+
+# ----------------------------------------------------------------------
+# Build flavour switches.
+#
+#   MOCIDA_BUILD_SHARED  : OFF -> `mocida` is a static lib (.lib / .a).
+#                         ON  -> `mocida` is a shared lib (.dll + import
+#                                .lib on Windows, .so / .dylib elsewhere).
+#                                On Windows we use WINDOWS_EXPORT_ALL_SYMBOLS
+#                                so every public function and global is
+#                                exported automatically, no annotation
+#                                needed in the source.
+#   MOCIDA_BUILD_TESTS   : OFF -> tests/test_*.c are excluded from the
+#                                default build. Opt in explicitly when
+#                                you actually want to compile them.
+#   MOCIDA_BUILD_DEMO    : ON  -> the showcase exe (src/main.c) is built.
+# ----------------------------------------------------------------------
+option(MOCIDA_BUILD_SHARED "Build mocida as a shared library (DLL) instead of a static archive" OFF)
+option(MOCIDA_BUILD_TESTS  "Build the tests/test_*.c programs"                                  OFF)
+option(MOCIDA_BUILD_DEMO   "Build the main demo executable (src/main.c)"                       ON)
+
+# ----------------------------------------------------------------------
+# Library `mocida`: every .c under src/uikit/.
+# Executables (demo + tests) link against it.
+# ----------------------------------------------------------------------
+file(GLOB_RECURSE MOCIDA_SOURCES   "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/*.c")
+file(GLOB_RECURSE MOCIDA_SOURCES_CXX "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/*.cpp")
+if(MOCIDA_BUILD_SHARED)
+    add_library(mocida SHARED ${MOCIDA_SOURCES} ${MOCIDA_SOURCES_CXX})
+    set_target_properties(mocida PROPERTIES
+        # Auto-emit a .def listing every function + global variable;
+        # callers don't need __declspec(dllexport) in the headers.
+        WINDOWS_EXPORT_ALL_SYMBOLS ON
+        # Keep the shared output named "mocida.dll" / "libmocida.so" —
+        # without these CMake on some platforms prepends/appends extras.
+        OUTPUT_NAME mocida
+    )
+    message(STATUS "Mocida: building as shared library (DLL)")
+else()
+    add_library(mocida STATIC ${MOCIDA_SOURCES} ${MOCIDA_SOURCES_CXX})
+    message(STATUS "Mocida: building as static library")
+endif()
+
+target_include_directories(mocida PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/headers
+)
+
+target_link_libraries(mocida PUBLIC
     SDL3::SDL3
     SDL3_image::SDL3_image
     SDL3_ttf::SDL3_ttf
     CURL::libcurl
 )
 
+# Windows Media Foundation (UIVideo backend) + WebView2 (UIWebView).
+# All MF libs ship with the Windows SDK. WebView2 is the vcpkg target.
+# ws2_32 is the WinSock2 import lib used by debug.c's TCP sink.
 if(WIN32)
-    foreach(dep SDL3 SDL3_ttf SDL3_image)
-        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                $<TARGET_FILE:${dep}::${dep}>
-                $<TARGET_FILE_DIR:${PROJECT_NAME}>
-        )
+    target_link_libraries(mocida PUBLIC
+        mfplat
+        mfreadwrite
+        mfuuid
+        ole32
+        propsys
+        ws2_32
+        dbghelp
+        dcomp           # ICoreWebView2CompositionController target
+        d3d11           # D3D11 device backing D2D for overlays
+        d2d1            # D2D rounded rect / drawing
+        dwrite          # text in overlays
+        dxgi            # surface allocation
+        unofficial::webview2::webview2
+    )
+endif()
+
+# ----------------------------------------------------------------------
+# Optional sanitizers (clang/gcc only). Enable with:
+#   cmake -DMOCIDA_SANITIZE=address       # AddressSanitizer
+#   cmake -DMOCIDA_SANITIZE=undefined     # UBSan
+#   cmake -DMOCIDA_SANITIZE=address,undefined
+# Catches a wide class of memory & UB bugs the crash handler can't see.
+# Not for production binaries.
+# ----------------------------------------------------------------------
+set(MOCIDA_SANITIZE "" CACHE STRING "Comma-separated sanitizers to enable (e.g. address,undefined)")
+if(MOCIDA_SANITIZE)
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+        message(STATUS "Mocida: enabling sanitizers: ${MOCIDA_SANITIZE}")
+        target_compile_options(mocida PUBLIC -fsanitize=${MOCIDA_SANITIZE} -fno-omit-frame-pointer)
+        target_link_options   (mocida PUBLIC -fsanitize=${MOCIDA_SANITIZE})
+    else()
+        message(WARNING "Mocida: MOCIDA_SANITIZE only supported under clang/gcc — ignored.")
+    endif()
+endif()
+
+# Force the MOCIDA_DEBUG marker on for Debug/RelWithDebInfo builds, so
+# UI_TRACE / UI_DEBUG / UI_TRACK_* stay live there. Release strips them.
+target_compile_definitions(mocida PUBLIC
+    $<$<CONFIG:Debug>:MOCIDA_DEBUG=1>
+    $<$<CONFIG:RelWithDebInfo>:MOCIDA_DEBUG=1>
+)
+
+# Silence MSVC's _CRT_INSECURE_DEPRECATE warnings for fopen / strcpy /
+# strdup / etc. The "secure" *_s alternatives are MSVC-only and not
+# portable; standard C functions are fine for our use cases (lifetime
+# and bound-checking is already handled at the call sites). Defined
+# unconditionally because non-MSVC toolchains simply ignore the
+# macros. PUBLIC so every test / demo linking against mocida inherits
+# them.
+target_compile_definitions(mocida PUBLIC
+    _CRT_SECURE_NO_WARNINGS
+    _CRT_NONSTDC_NO_WARNINGS
+)
+
+# Wire mimalloc into the lib's public link interface so that:
+#  - mocida.lib (and every consumer like demo / tests) get mi_malloc
+#    linked in.
+#  - MOCIDA_USE_MIMALLOC is defined for any TU that includes mocida
+#    headers, so widget.h's bottom #include of mocida_alloc.h kicks in.
+if(MOCIDA_MIMALLOC_AVAILABLE)
+    target_link_libraries(mocida PUBLIC mimalloc-static)
+    target_compile_definitions(mocida PUBLIC MOCIDA_USE_MIMALLOC=1)
+endif()
+
+# ----------------------------------------------------------------------
+# Helper: declares an executable that links against `mocida` and, on
+# Windows, copies the SDL DLLs next to the output binary so it can run.
+# ----------------------------------------------------------------------
+function(mocida_add_executable target_name source_file)
+    add_executable(${target_name} ${source_file})
+    target_link_libraries(${target_name} PRIVATE mocida)
+
+    if(WIN32)
+        foreach(dep SDL3 SDL3_ttf SDL3_image)
+            add_custom_command(TARGET ${target_name} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:${dep}::${dep}>
+                    $<TARGET_FILE_DIR:${target_name}>
+            )
+        endforeach()
+        # WebView2Loader.dll lives in vcpkg's bin/. Copy it next to the
+        # exe so loading it doesn't require setting PATH.
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-windows/bin/WebView2Loader.dll")
+            add_custom_command(TARGET ${target_name} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-windows/bin/WebView2Loader.dll"
+                    $<TARGET_FILE_DIR:${target_name}>
+            )
+        endif()
+        # When mocida itself is a shared library, ship mocida.dll next
+        # to each executable so it loads without PATH gymnastics.
+        if(MOCIDA_BUILD_SHARED)
+            add_custom_command(TARGET ${target_name} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:mocida>
+                    $<TARGET_FILE_DIR:${target_name}>
+            )
+        endif()
+    endif()
+endfunction()
+
+# ----------------------------------------------------------------------
+# Copy assets/ next to the executables in the build directory.
+# Together with UIAsset_LoadTexture/Surface (which also probes paths
+# relative to SDL_GetBasePath), this guarantees that the tests find
+# the assets no matter which CWD the .exe is launched from.
+# ----------------------------------------------------------------------
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets)
+    add_custom_target(mocida_copy_assets ALL
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets
+            ${CMAKE_CURRENT_BINARY_DIR}/assets
+        COMMENT "Copying assets/ into the build directory"
+    )
+endif()
+
+# ----------------------------------------------------------------------
+# Main demo (the former main.c / uikit.exe). Gated by MOCIDA_BUILD_DEMO
+# so library consumers can disable it (or build only the lib).
+# ----------------------------------------------------------------------
+if(MOCIDA_BUILD_DEMO)
+    mocida_add_executable(demo src/main.c)
+endif()
+
+# ----------------------------------------------------------------------
+# Test programs: one .exe per file in tests/test_*.c. Each is a focused
+# visual scenario for a single feature. They are NOT built by default
+# anymore (separate build flavour) — pass -DMOCIDA_BUILD_TESTS=ON or
+# `build.bat --tests` to include them.
+# ----------------------------------------------------------------------
+if(MOCIDA_BUILD_TESTS)
+    file(GLOB MOCIDA_TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_*.c")
+    foreach(test_src ${MOCIDA_TEST_SOURCES})
+        get_filename_component(test_name ${test_src} NAME_WE)
+        mocida_add_executable(${test_name} ${test_src})
     endforeach()
+    message(STATUS "Mocida: building tests (${CMAKE_CURRENT_SOURCE_DIR}/tests/test_*.c)")
+endif()
+
+# ----------------------------------------------------------------------
+# Optional `docs` target: runs Doxygen from the project root, dropping
+# the generated site into docs/generated/html. Only registered when
+# doxygen is found on PATH. Run with:
+#     cmake --build build --target docs
+# or directly via the convenience wrapper:
+#     docs.bat
+# ----------------------------------------------------------------------
+find_program(DOXYGEN_EXECUTABLE doxygen)
+if(DOXYGEN_EXECUTABLE)
+    add_custom_target(docs
+        COMMAND ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Generating API documentation with Doxygen"
+        VERBATIM)
 endif()
