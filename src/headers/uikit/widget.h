@@ -21,7 +21,7 @@ typedef void* UIWidgetData;
  * This structure contains common properties for all widgets.
  */
 typedef struct {
-    const char* __widget_type; // Type of the widget (e.g., "UIRectangle", "UIText", etc.)
+    const char* __widget_type; /**< Type tag ("@uikit/text", "@uikit/button", ...); first field of every widget data struct. */
 } UIWidgetBase;
 
 /**
@@ -29,12 +29,12 @@ typedef struct {
  * It contains properties for left, top, right, and bottom margins.
  */
 typedef struct UIMarginsObject {
-    const char* __widget_type;
+    const char* __widget_type; /**< Type tag (unused in practice; kept for layout parity). */
 
-    float marginLeft;
-    float marginTop;
-    float marginRight;
-    float marginBottom;
+    float marginLeft;          /**< Space reserved on the left edge (pixels). */
+    float marginTop;           /**< Space reserved on the top edge (pixels). */
+    float marginRight;         /**< Space reserved on the right edge (pixels). */
+    float marginBottom;        /**< Space reserved on the bottom edge (pixels). */
 } UIMarginsObject;
 
 
@@ -43,19 +43,28 @@ typedef struct UIMarginsObject {
  * It contains properties for position, visibility, and a pointer to the actual widget data.
  */
 typedef struct {
-    char* id; // Unique identifier for the widget
-    float x;
-    float y;
-    int z;
-    int visible;
-    float rotation; // Rotation angle in degrees
-    float* width;
-    float* height;
-    float opacity;
-    UIAlignment* alignment; // Alignment properties
-    UIWidgetData* parent; // Pointer to the parent widget (if any)
+    char* id;             /**< User-assigned identifier for lookups (UIChildren_GetById). */
+    float x;              /**< X position in parent space (pixels). */
+    float y;              /**< Y position in parent space (pixels). */
+    int z;                /**< Stacking order; higher draws on top of lower. */
+    int visible;          /**< 0 = skipped during render and hit-testing, 1 = drawn. */
+    float rotation;       /**< Rotation around the widget centre, in degrees. */
+    float* width;         /**< Explicit width pointer; NULL = dynamic (intrinsic size). */
+    float* height;        /**< Explicit height pointer; NULL = dynamic. */
+    float opacity;        /**< [0..1] alpha multiplier applied to the whole subtree. */
+    UIAlignment* alignment; /**< Optional anchor rules; NULL = absolute positioning. */
+    UIWidgetData* parent;   /**< Owning parent (UIWidget*) or NULL for root. */
 
-    UIWidgetData data; // Pointer to the actual widget data (e.g., UIRectangle, UIText, etc.)
+    /**
+     * Generic keyboard-focus flag. Updated by UIWidget_SetFocus and the
+     * mouse-down dispatchers; mirrored to widget-specific focused
+     * fields (UITextField.focused, UITextArea.focused, UIText.focused)
+     * for the widgets that already had them. Read it via
+     * UIWidget_IsFocused.
+     */
+    int focused;
+
+    UIWidgetData data; /**< Concrete widget payload (UIRectangle*, UIText*, ...). */
 } UIWidget;
 
 /**
@@ -124,6 +133,38 @@ UIWidget *UIWidget_SetZIndex(UIWidget* widget, int z);
 UIWidget *UIWidget_SetVisible(UIWidget *widget, int visible);
 
 /**
+ * Generic keyboard focus control. Works on ANY widget (button, text
+ * field, slider, ...). When focusing, the previously focused widget is
+ * blurred first, so only one widget at a time owns keyboard focus.
+ *
+ * For text-input widgets (UITextField, UITextArea) this also drives
+ * SDL_StartTextInput / SDL_StopTextInput on the active window.
+ *
+ * Returns the widget for chaining.
+ */
+UIWidget* UIWidget_SetFocus(UIWidget* widget, int focused);
+
+/** True when this widget currently has keyboard focus. */
+int       UIWidget_IsFocused(const UIWidget* widget);
+
+/**
+ * Returns the widget that currently has keyboard focus, or NULL when
+ * no widget is focused. Pointer is borrowed; do not free.
+ */
+UIWidget* UIWidget_GetFocused(void);
+
+/** Clears focus from whatever widget currently owns it. */
+void      UIWidget_ClearFocus(void);
+
+/**
+ * Reverse-lookup: finds the UIWidget in the active window's children
+ * whose `data` matches the given pointer. Returns NULL when not found.
+ * Used by widget-type-specific helpers (UITextField_SetFocus, etc.)
+ * that want to flow through the generic focus system.
+ */
+UIWidget* UIWidget_FindByData(void* data);
+
+/**
  * Destroys the UIWidget object and frees its memory.
  * @param widget Pointer to the UIWidget object to be destroyed.
  * @return None.
@@ -182,5 +223,10 @@ UIWidget* UIAlignment_GetHTarget(UIAlignment* alignment);
  * @return Vertical alignment value (e.g., UI_ALIGN_V_CENTER).
  */
 void UIAlignment_Align(UIWidget* widget);
+
+// Allocator override hook. Placed at the very bottom on purpose - the
+// stdlib.h above must be processed BEFORE mimalloc-override.h defines
+// its malloc/free macros, otherwise the system prototypes get mangled.
+#include <uikit/mocida_alloc.h>
 
 #endif // UIKIT_WIDGET_H

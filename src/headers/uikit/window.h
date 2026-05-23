@@ -34,8 +34,8 @@ typedef enum UIWindowDisplayMode {
  * It contains a key-value pair for the property.
  */
 typedef struct {
-    const char* key;
-    void* value;
+    const char* key;   /**< Property name (e.g. UI_PROP_MAX_EVENTS). */
+    void* value;       /**< Caller-owned value pointer (type depends on key). */
 } UIProp;
 
 /**
@@ -43,9 +43,9 @@ typedef struct {
  * It contains an array of UIProp pointers, count, and capacity.
  */
 typedef struct {
-    UIProp** props;
-    unsigned int count;
-    unsigned int capacity;
+    UIProp** props;        /**< Heap array of property pointers, length == capacity. */
+    unsigned int count;    /**< Number of valid entries in `props`. */
+    unsigned int capacity; /**< Allocated slot count in `props`. */
 } UIProps;
 
 /**
@@ -54,23 +54,71 @@ typedef struct {
  * title, background color, and child widgets.
  */
 typedef struct {
-    int width;
-    int height;
-    float x;
-    float y;
-    int z;
-    char* title;
-    int visible;
-    float framerate;
-    UIChildren* children;
-    UIColor backgroundColor;
-    UIWindowDisplayMode displayMode;
+    int width;                       /**< Logical width in pixels. */
+    int height;                      /**< Logical height in pixels. */
+    float x;                         /**< Window X on the screen. */
+    float y;                         /**< Window Y on the screen. */
+    int z;                           /**< Z-order hint for multi-window setups. */
+    char* title;                     /**< Heap-owned window title string. */
+    int visible;                     /**< 0 = hidden, 1 = shown. */
+    float framerate;                 /**< Last measured FPS (driven by UIApp_Run). */
+    UIChildren* children;            /**< Root children tree rendered into this window. */
+    UIColor backgroundColor;         /**< Clear color used at the start of each frame. */
+    UIWindowDisplayMode displayMode; /**< Windowed / borderless / fullscreen. */
 
-    SDL_Renderer* sdlRenderer;
-    SDL_Window* sdlWindow;
-    UIEventCallbackData** events;
-    UIProps __ui_props;
+    SDL_Renderer* sdlRenderer;       /**< Backing SDL renderer; NULL after destroy. */
+    SDL_Window*   sdlWindow;         /**< Backing SDL window; NULL after destroy. */
+    UIEventCallbackData** events;    /**< Sparse array of registered callbacks, indexed by UI_EVENT. */
+    UIProps __ui_props;              /**< Internal property bag (see UIWindow_GetProperty). */
 } UIWindow;
+
+/**
+ * Sets how many samples-per-side the analytic-coverage AA pipeline uses
+ * for circles and rounded corners. When called before any UIWindow_Create,
+ * also enables hardware MSAA on the OpenGL backend. When called later,
+ * it merely invalidates the cache and regenerates the textures at the
+ * new quality.
+ *
+ * Typical values: 1 (no AA), 2, 4 (default), 8 (ultra).
+ */
+void UIWindow_SetMSAASamples(int samples);
+
+/**
+ * Returns the currently configured samples-per-side.
+ */
+int UIWindow_GetMSAASamples(void);
+
+/**
+ * Sets the AA pipeline (1 = COVERAGE only, 2 = SSAA 2x, 3 = SSAA 4x,
+ * 4 = FXAA post, 5 = TAA). Forwarded by UIApp_SetAAMode. Mirrors the
+ * integer values of UIAAMode in app.h to avoid pulling that header
+ * here.
+ */
+void UIWindow_SetAAMode(int mode);
+int  UIWindow_GetAAMode(void);
+
+/**
+ * History weight for the TAA pass (0..1). 0.5 by default.
+ */
+void  UIWindow_SetTAABlend(float alpha);
+float UIWindow_GetTAABlend(void);
+
+/**
+ * Sets the motion threshold (0..255) used by TAA's per-pixel rejection.
+ * Lower = more sensitive (less ghosting but also less smoothing on slow
+ * motion); higher = more permissive blending (smoother but a bit of
+ * ghosting can appear on fast motion). Default 24 (~9% per channel).
+ */
+void UIWindow_SetTAAMotionThreshold(int threshold);
+int  UIWindow_GetTAAMotionThreshold(void);
+
+/**
+ * Drops every renderer-owned cache: circle textures, shadow textures,
+ * the AA offscreen target and the TAA history. Useful in low-memory
+ * situations or when the user finishes an interaction-heavy screen.
+ * The next render rebuilds whatever it needs lazily.
+ */
+void UIWindow_TrimCaches(void);
 
 /**
  * Renders the UIWindow and its child widgets.
@@ -87,6 +135,17 @@ int UIWindow_Render(UIWindow* window);
  * @return A pointer to the created UIWindow object.
  */
 UIWindow* UIWindow_Create(const char* title, int width, int height);
+
+/**
+ * Returns the active window - the last one created via UIWindow_Create
+ * or assigned via UIWindow_SetActive. Used by widget-level focus
+ * helpers (UITextField_SetFocus, etc.) so callers don't have to thread
+ * a window pointer through. Returns NULL when no window exists.
+ */
+UIWindow* UIWindow_GetActive(void);
+
+/** Override the active window. Pass NULL to clear. */
+void UIWindow_SetActive(UIWindow* window);
 
 /**
  * Sets the event callback for the UIWindow object.
