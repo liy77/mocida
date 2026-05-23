@@ -9,6 +9,30 @@
 #include <uikit/rect.h>
 #include <uikit/alignment.h>
 #include <uikit/font.h>
+#include <uikit/button.h>
+#include <uikit/mouse_area.h>
+#include <uikit/container.h>
+#include <uikit/controls.h>
+#include <uikit/textfield.h>
+#include <uikit/textarea.h>
+#include <uikit/webview.h>
+#include <uikit/stack.h>
+#include <uikit/dialog.h>
+#include <uikit/tab.h>
+#include <uikit/theme.h>
+#include <uikit/popup.h>
+#include <uikit/sound.h>
+#include <uikit/video.h>
+#include <uikit/file_drop.h>
+#include <uikit/file_dialog.h>
+#include <uikit/anim.h>
+#include <uikit/clipboard.h>
+#include <uikit/cursor.h>
+#include <uikit/debug.h>
+#include <uikit/profile.h>
+#include <uikit/overlay.h>
+#include <uikit/crash.h>
+#include <uikit/walker.h>
 
 typedef int UIRenderDriver;
 
@@ -28,15 +52,83 @@ typedef int UIRenderDriver;
 
 #define UI_RENDER_GPU (UIRenderDriver)7
 
+// Pass this value (or any <= 0) to UIApp_SetTargetFPS to unlock the
+// frame rate (renders as fast as possible).
+#define UI_FPS_UNLIMITED 0
+
+/**
+ * Anti-aliasing quality presets. The value represents "samples per side"
+ * used by the analytic-coverage rasterizer for circles and rounded
+ * corners (e.g. HIGH = 4 -> 4*4 = 16 samples per pixel, equivalent in
+ * quality to 16x MSAA for those shapes).
+ *
+ * Also enables hardware MSAA on the OpenGL backend with the same sample
+ * count (no effect on D3D / Vulkan / Metal, where the analytic-coverage
+ * path already produces a superior, backend-consistent result).
+ */
+typedef enum {
+    UI_QUALITY_LOW    = 1, // no AA - aliased edges, maximum performance
+    UI_QUALITY_MEDIUM = 2, // 4 SPP  - good for small/fast UI
+    UI_QUALITY_HIGH   = 4, // 16 SPP - default, strong MSAA-equivalent
+    UI_QUALITY_ULTRA  = 8  // 64 SPP - for close-ups and screenshots
+} UIRenderQuality;
+
+/**
+ * Anti-aliasing pipeline. UI_AA_COVERAGE is the default and uses the
+ * analytic-coverage rasterizer at the quality configured via
+ * UIApp_SetRenderQuality. The other modes add a full-frame stage on
+ * top of it:
+ *
+ *   - SSAA_2X / SSAA_4X : renders the whole frame to a 2x / 4x texture
+ *                         and bilinear-downscales to the window. Best
+ *                         pure quality, GPU-bound.
+ *   - FXAA              : after the frame is composed, a CPU edge-blur
+ *                         pass detects high-contrast luma edges and
+ *                         softens them. Cheap visual smoothing for
+ *                         everything (text, image borders, geometry).
+ *   - TAA               : blends the current frame with the previous
+ *                         frame (final = lerp(prev, current, alpha)).
+ *                         Excellent for static UI; can ghost on motion.
+ */
+typedef enum {
+    UI_AA_NONE      = 0, /**< Coverage AA disabled (samples-per-side = 1). */
+    UI_AA_COVERAGE  = 1, /**< Default: analytic-coverage AA only. */
+    UI_AA_SSAA_2X   = 2, /**< Render at 2x, downscale.   ~4x fill cost. */
+    UI_AA_SSAA_4X   = 3, /**< Render at 4x, downscale.   ~16x fill cost. */
+    UI_AA_FXAA      = 4, /**< Coverage + post-process FXAA-style edge blur. */
+    UI_AA_TAA       = 5  /**< Coverage + temporal accumulation. */
+} UIAAMode;
+
 /**
  * UIApp structure representing the main application.
  * It contains properties for the main window, background color,
  * and other application settings.
  */
+/**
+ * Resize callback: fires every time the window changes size, including
+ * mid-drag during the OS modal sizing loop. Use it to adjust widget
+ * dimensions that aren't covered by the alignment system (e.g. to keep
+ * a UIWebView filling the available area).
+ */
+typedef void (*UIAppResizeCallback)(int width, int height, void* userdata);
+
+/**
+ * Top-level application object. Owns the main window, the root widget,
+ * and global render / animation tuning knobs. One UIApp is enough for
+ * the vast majority of programs; multi-window apps share these
+ * settings across windows.
+ */
 typedef struct {
-    UIWindow* window;
-    UIWidget* mainWidget;
-    UIColor backgroundColor;
+    UIWindow* window;          /**< Backing window the app is rendering into. */
+    UIWidget* mainWidget;      /**< Root widget mounted under `window->children`. */
+    UIColor backgroundColor;   /**< Window clear color used between frames. */
+    int targetFps;             /**< Target frame rate; 60 by default. <= 0 unlocks. */
+    int msaaSamples;           /**< Samples-per-side for analytic-coverage AA. Default 4. */
+    int aaMode;                /**< UIAAMode; default UI_AA_COVERAGE. */
+    float taaBlend;            /**< [0..1] history weight when aaMode == UI_AA_TAA. 0.5 default. */
+
+    UIAppResizeCallback onResize; /**< Fires on every window resize (incl. live-drag). */
+    void*               onResizeUserdata; /**< Opaque pointer forwarded to onResize. */
 } UIApp;
 
 /**
@@ -106,6 +198,25 @@ void UIApp_SetBackgroundColor(UIApp* app, UIColor color);
 void UIApp_SetWindowTitle(UIApp* app, const char* title);
 
 /**
+ * Sets the window icon from an image file (PNG, JPG, BMP, ICO - any
+ * format supported by SDL_image). For sharp results in taskbars, prefer
+ * PNG/ICO with multiple sizes (16, 32, 48, 256).
+ *
+ * @param app  Pointer to the UIApp object.
+ * @param path Icon file path (absolute or relative; resolved via
+ *             UIAsset_LoadSurface, which tries CWD then exe dir).
+ * @return 1 on success, 0 on failure (see stderr for details).
+ */
+int UIApp_SetWindowIcon(UIApp* app, const char* path);
+
+/**
+ * Variant taking an already-loaded SDL_Surface. Useful when the icon
+ * comes from memory (e.g. embedded resources, procedural generation).
+ * The surface is NOT consumed; the caller remains its owner.
+ */
+int UIApp_SetWindowIconFromSurface(UIApp* app, SDL_Surface* surface);
+
+/**
  * Sets the size of the application window.
  * @param app Pointer to the UIApp object.
  * @param width Width to be set.
@@ -164,11 +275,119 @@ void UIApp_SetRenderDriver(UIApp* app, UIRenderDriver renderDriver);
 void UIApp_SetEventCallback(UIApp* app, UI_EVENT event, UIEventCallback callback);
 
 /**
+ * Registers a callback fired every time the window is resized. The
+ * callback receives the new width/height and the userdata pointer passed
+ * here. Useful for updating widget sizes (the alignment system
+ * repositions widgets but doesn't resize them).
+ */
+void UIApp_OnResize(UIApp* app, UIAppResizeCallback cb, void* userdata);
+
+/**
+ * Declares this process's AppUserModelID (AUMID). Windows uses it as
+ * the app identity for taskbar pinning, jump lists, and crucially
+ * Task Manager grouping. Without it, WebView2's child processes show
+ * up as "Gerenciador WebView2" in Task Manager; with it, they nest
+ * under your app's name (similar to how WhatsApp Desktop groups).
+ *
+ * Call this VERY early - ideally right after UIApp_Create, before any
+ * UIWebView is constructed. WebView2 child processes inherit the
+ * AUMID from their parent at spawn time, so anything started before
+ * this call keeps the default group.
+ *
+ * Format: "Vendor.Product" or "Vendor.Product.Component" (max 128
+ * ASCII chars, no whitespace). Example: "Mocida.Demo".
+ *
+ * No-op on non-Windows. Note: 100%-clean Task Manager grouping
+ * (matching WhatsApp's MSIX behaviour) requires distributing the app
+ * as an MSIX/AppX package; AUMID is the 90% solution for plain .exe.
+ */
+void UIApp_SetAppId(UIApp* app, const char* aumid);
+
+/**
  * Destroys the UIApp object and frees its resources.
  * @param app Pointer to the UIApp object to be destroyed.
  * @return None.
  */
 void UIApp_Destroy(UIApp* app);
+
+/**
+ * Sets the main loop's target FPS.
+ * @param app Pointer to the UIApp object.
+ * @param fps Target FPS (>= 1). Pass UI_FPS_UNLIMITED (0) or any value
+ *            <= 0 to unlock the frame rate.
+ */
+void UIApp_SetTargetFPS(UIApp* app, int fps);
+
+/**
+ * Returns the currently configured target FPS (0 = unlimited).
+ * @param app Pointer to the UIApp object.
+ */
+int UIApp_GetTargetFPS(UIApp* app);
+
+/**
+ * Sets the number of samples-per-side used by the analytic-coverage AA
+ * (rasterization of circles and rounded corners). Recommended values
+ * come from the UIRenderQuality enum (1, 2, 4, 8). Invalidates the
+ * texture cache so it can be regenerated at the new quality.
+ *
+ * Note: for the OpenGL hardware MSAA hint to take effect, this must be
+ * called BEFORE UIApp_Create. After the window is created only the
+ * CPU coverage AA is affected.
+ */
+void UIApp_SetMSAASamples(UIApp* app, int samples);
+
+/**
+ * Returns the currently configured samples-per-side.
+ */
+int UIApp_GetMSAASamples(UIApp* app);
+
+/**
+ * Sets the render quality for the app (shortcut that forwards to
+ * UIApp_SetMSAASamples).
+ */
+void UIApp_SetRenderQuality(UIApp* app, UIRenderQuality quality);
+
+/**
+ * Selects the anti-aliasing pipeline. See UIAAMode for the trade-offs.
+ * Can be changed at runtime - the per-frame pipeline picks up the new
+ * value on the next UIWindow_Render call.
+ */
+void UIApp_SetAAMode(UIApp* app, UIAAMode mode);
+
+/**
+ * Returns the current AA mode.
+ */
+UIAAMode UIApp_GetAAMode(UIApp* app);
+
+/**
+ * Sets the blend weight used by UI_AA_TAA. 0.0 = ignore history (no
+ * smoothing), 1.0 = ignore current frame (frozen). Sensible range
+ * is 0.3 .. 0.7. Default 0.5.
+ */
+void UIApp_SetTAABlend(UIApp* app, float alpha);
+
+/**
+ * Releases every cached renderer resource (circle/shadow textures,
+ * AA target, TAA history). Subsequent renders rebuild what's needed
+ * lazily. Call this when transitioning between heavy and light UI
+ * states (eg leaving a gallery screen) to free GPU/RAM.
+ */
+void UIApp_TrimCaches(UIApp* app);
+
+/**
+ * Snapshot of allocator stats reported by mimalloc when MOCIDA_USE_MIMALLOC
+ * is on. All sizes are in bytes. When the build was made without
+ * mimalloc, every field is 0.
+ */
+typedef struct {
+    size_t current;       /**< Live allocated bytes right now.        */
+    size_t peak;          /**< Highest live bytes during this run.    */
+    size_t reserved;      /**< Virtual address space reserved.        */
+    size_t committed;     /**< Physically committed bytes.            */
+    size_t mallocRequests;/**< Total bytes requested by callers.      */
+} UIMemoryStats;
+
+void UIApp_GetMemoryStats(UIApp* app, UIMemoryStats* out);
 
 /**
  * Runs the main loop of the application.
