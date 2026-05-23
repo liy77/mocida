@@ -1,0 +1,1754 @@
+/*
+ * Mocida custom Doxygen theme.
+ *
+ * Loaded via HTML_EXTRA_STYLESHEET so it stacks on top of Doxygen's
+ * defaults (we override the bits we care about and let the rest fall
+ * back). Light is the default; dark theme kicks in automatically when
+ * the OS reports prefers-color-scheme: dark.
+ */
+
+/* ----- Design tokens -------------------------------------------------- */
+
+:root {
+    /* Surfaces */
+    --m-bg:           #ffffff;
+    --m-surface:      #f8fafc;
+    --m-surface-2:    #eef2f7;
+    --m-elevated:     #ffffff;
+    --m-border:       #e2e8f0;
+    --m-border-strong:#cbd5e1;
+
+    /* Text */
+    --m-text:         #0f172a;
+    --m-text-muted:   #475569;
+    --m-text-dim:     #64748b;
+    --m-link:         #0284c7;
+    --m-link-hover:   #0369a1;
+
+    /* Accent (mocida blue) */
+    --m-accent:       #0ea5e9;
+    --m-accent-soft:  #e0f2fe;
+    --m-accent-ring:  rgba(14, 165, 233, 0.25);
+
+    /* Code */
+    --m-code-bg:      #f1f5f9;
+    --m-code-text:    #1e293b;
+    --m-code-border:  #e2e8f0;
+
+    /* Syntax highlight */
+    --m-syn-keyword:  #db2777;
+    --m-syn-type:     #7c3aed;
+    --m-syn-string:   #16a34a;
+    --m-syn-comment:  #94a3b8;
+    --m-syn-number:   #ea580c;
+    --m-syn-fn:       #2563eb;
+    --m-syn-preproc:  #b45309;
+
+    /* Shadow */
+    --m-shadow-sm:    0 1px 2px rgba(15, 23, 42, 0.06);
+    --m-shadow:       0 4px 12px rgba(15, 23, 42, 0.08);
+    --m-shadow-lg:    0 12px 28px rgba(15, 23, 42, 0.12);
+
+    /* Radius */
+    --m-radius-sm:    6px;
+    --m-radius:       10px;
+    --m-radius-lg:    14px;
+
+    /* Spacing */
+    --m-gap:          16px;
+
+    /* Type */
+    --m-font-body:    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+                      Roboto, Helvetica, Arial, sans-serif;
+    --m-font-mono:    "JetBrains Mono", "Cascadia Code", "Fira Code",
+                      ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Dark token block — applied either automatically (OS in dark mode AND
+ * the user hasn't picked a manual theme) OR explicitly via the toggle
+ * button (data-theme="dark"). Light is the default. */
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --m-bg:           #0b1220;
+        --m-surface:      #111827;
+        --m-surface-2:    #1f2937;
+        --m-elevated:     #161f33;
+        --m-border:       #1f2937;
+        --m-border-strong:#334155;
+
+        --m-text:         #e2e8f0;
+        --m-text-muted:   #94a3b8;
+        --m-text-dim:     #64748b;
+        --m-link:         #38bdf8;
+        --m-link-hover:   #7dd3fc;
+
+        --m-accent:       #38bdf8;
+        --m-accent-soft:  rgba(56, 189, 248, 0.12);
+        --m-accent-ring:  rgba(56, 189, 248, 0.35);
+
+        --m-code-bg:      #0f1a2e;
+        --m-code-text:    #e2e8f0;
+        --m-code-border:  #1f2937;
+
+        --m-syn-keyword:  #f472b6;
+        --m-syn-type:     #c4b5fd;
+        --m-syn-string:   #86efac;
+        --m-syn-comment:  #64748b;
+        --m-syn-number:   #fdba74;
+        --m-syn-fn:       #93c5fd;
+        --m-syn-preproc:  #fcd34d;
+
+        --m-shadow-sm:    0 1px 2px rgba(0, 0, 0, 0.4);
+        --m-shadow:       0 4px 12px rgba(0, 0, 0, 0.45);
+        --m-shadow-lg:    0 12px 28px rgba(0, 0, 0, 0.55);
+    }
+}
+
+/* Explicit dark, regardless of OS preference. Same token values as the
+ * @media block above. */
+:root[data-theme="dark"] {
+    --m-bg:           #0b1220;
+    --m-surface:      #111827;
+    --m-surface-2:    #1f2937;
+    --m-elevated:     #161f33;
+    --m-border:       #1f2937;
+    --m-border-strong:#334155;
+
+    --m-text:         #e2e8f0;
+    --m-text-muted:   #94a3b8;
+    --m-text-dim:     #64748b;
+    --m-link:         #38bdf8;
+    --m-link-hover:   #7dd3fc;
+
+    --m-accent:       #38bdf8;
+    --m-accent-soft:  rgba(56, 189, 248, 0.12);
+    --m-accent-ring:  rgba(56, 189, 248, 0.35);
+
+    --m-code-bg:      #0f1a2e;
+    --m-code-text:    #e2e8f0;
+    --m-code-border:  #1f2937;
+
+    --m-syn-keyword:  #f472b6;
+    --m-syn-type:     #c4b5fd;
+    --m-syn-string:   #86efac;
+    --m-syn-comment:  #64748b;
+    --m-syn-number:   #fdba74;
+    --m-syn-fn:       #93c5fd;
+    --m-syn-preproc:  #fcd34d;
+
+    --m-shadow-sm:    0 1px 2px rgba(0, 0, 0, 0.4);
+    --m-shadow:       0 4px 12px rgba(0, 0, 0, 0.45);
+    --m-shadow-lg:    0 12px 28px rgba(0, 0, 0, 0.55);
+}
+
+/* ----- Reset / globals ----------------------------------------------- */
+
+html, body {
+    background: var(--m-bg);
+    color: var(--m-text);
+    font-family: var(--m-font-body);
+    font-size: 15px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* The Doxygen page is structured: #top header, #side-nav sidebar,
+ * #doc-content content. Doxygen's default doxygen.css/tabs.css fight us
+ * with specific selectors and even inline table styles for #titlearea,
+ * so we have to be aggressive here. */
+#top,
+.navbar,
+#titlearea,
+#titlearea table,
+#titlearea td,
+#titlearea tr,
+div.header {
+    background: var(--m-surface) !important;
+    background-image: none !important;
+    border-bottom: 1px solid var(--m-border) !important;
+    color: var(--m-text) !important;
+}
+
+#titlearea {
+    padding: 14px 24px !important;
+    box-shadow: var(--m-shadow-sm);
+}
+
+#projectalign, #projecttext {
+    padding-left: 14px !important;
+}
+
+#projectname,
+#projectbrief,
+#projectnumber,
+.title {
+    color: var(--m-text) !important;
+    font-family: var(--m-font-body);
+    text-shadow: none !important;
+}
+
+#projectname {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+
+#projectbrief {
+    color: var(--m-text-muted);
+    font-size: 13px;
+    margin-top: 2px;
+}
+
+#projectnumber {
+    color: var(--m-text-dim);
+    font-size: 12px;
+}
+
+#projectlogo img {
+    height: 38px;
+    width: auto;
+}
+
+/* ----- Top tab bar / "sliding menu" --------------------------------- *
+ * Doxygen's tabs.css uses a gradient/background-image and per-tab solid
+ * fills. With HTML_DYNAMIC_MENUS the navbar becomes a #main-nav block
+ * with a <ul class="sm sm-dox" id="main-menu"> inside — none of which
+ * match our older .tabs/.tablist rules. Cover both shapes here. */
+.tabs, .tabs2, .tabs3,
+.tablist,
+ul.tablist,
+#main-nav,
+#main-nav-mobile,
+.sm, .sm-dox,
+ul.sm, ul.sm-dox,
+#main-menu,
+#main-menu ul,
+.sm-dox ul,
+.sm-dox > li,
+.sm-dox a, .sm-dox a:link, .sm-dox a:visited,
+.sm-dox a:hover, .sm-dox a:focus, .sm-dox a:active {
+    background: var(--m-surface) !important;
+    background-image: none !important;
+    color: var(--m-text-muted) !important;
+    text-shadow: none !important;
+}
+
+#main-nav,
+#main-nav-mobile {
+    border-bottom: 1px solid var(--m-border) !important;
+    box-shadow: none !important;
+    padding: 6px 16px !important;
+}
+
+#main-menu {
+    list-style: none;
+    padding: 0 !important;
+    margin: 0 !important;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+
+#main-menu > li {
+    background: transparent !important;
+    border: none !important;
+    margin: 0 !important;
+}
+
+#main-menu > li > a,
+.sm-dox > li > a,
+.sm-dox a.SelectItem {
+    color: var(--m-text-muted) !important;
+    background: transparent !important;
+    background-image: none !important;
+    border: 1px solid transparent !important;
+    border-radius: var(--m-radius-sm) !important;
+    padding: 8px 14px !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    letter-spacing: 0.01em;
+    text-decoration: none !important;
+    text-shadow: none !important;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    line-height: 1.2 !important;
+    /* anchor for our custom chevron */
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+#main-menu > li > a:hover,
+.sm-dox > li > a:hover,
+.sm-dox > li > a:focus,
+.sm-dox > li > a:active,
+#main-menu > li > a.highlighted,
+#main-menu > li:hover > a {
+    color: var(--m-text) !important;
+    background: var(--m-surface-2) !important;
+    border-color: var(--m-border) !important;
+}
+
+#main-menu > li.current > a,
+#main-menu > li > a.current,
+.sm-dox > li.current > a {
+    color: var(--m-accent) !important;
+    background: var(--m-accent-soft) !important;
+    border-color: var(--m-accent-ring) !important;
+}
+
+/* ----- Dropdown chevron --------------------------------------------- *
+ * Doxygen renders the dropdown arrow as a literal "+" inside a
+ * <span class="sub-arrow"> (it becomes "-" when the menu opens) — looks
+ * like junk in our themed navbar. Hide it and paint a tidy chevron via
+ * ::after on parent links that actually have a submenu. */
+.sm-dox a span.sub-arrow,
+.sm-dox > li > a span.sub-arrow,
+#main-menu .sub-arrow,
+#main-menu span.sub-arrow {
+    display: none !important;
+    visibility: hidden !important;
+    width: 0 !important;
+    height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+/* :has() is supported in every evergreen browser since 2023. Older
+ * engines just won't render the chevron — no broken diamond either. */
+#main-menu > li:has(> ul) > a::after,
+.sm-dox > li:has(> ul) > a::after {
+    content: "";
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-left: 2px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(45deg) translateY(-2px);
+    opacity: 0.55;
+    transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+#main-menu > li:has(> ul):hover > a::after,
+.sm-dox > li:has(> ul):hover > a::after,
+#main-menu > li:has(> ul) > a.highlighted::after {
+    opacity: 1;
+    transform: rotate(225deg) translate(-1px, 0);
+}
+
+/* Submenu dropdown panels (Classes ▾ / Files ▾) */
+.sm-dox ul,
+#main-menu ul {
+    background: var(--m-elevated) !important;
+    border: 1px solid var(--m-border) !important;
+    border-radius: var(--m-radius) !important;
+    box-shadow: var(--m-shadow-lg) !important;
+    padding: 6px !important;
+    min-width: 220px;
+    list-style: none;
+    margin: 4px 0 0 !important;
+}
+
+.sm-dox ul a,
+#main-menu ul a {
+    color: var(--m-text-muted) !important;
+    background: transparent !important;
+    padding: 7px 12px !important;
+    border-radius: var(--m-radius-sm) !important;
+    font-size: 13px !important;
+    display: block;
+}
+
+.sm-dox ul a:hover,
+#main-menu ul a:hover {
+    color: var(--m-text) !important;
+    background: var(--m-surface) !important;
+}
+
+/* Older .tabs/.tablist (some Doxygen modes still emit them) */
+ul.tablist {
+    display: flex !important;
+    gap: 4px;
+    padding: 8px 12px !important;
+    list-style: none;
+}
+
+.tabs, .tabs2, .tabs3, .tablist {
+    border-bottom: 1px solid var(--m-border) !important;
+}
+
+ul.tablist {
+    display: flex !important;
+    gap: 4px;
+    padding: 8px 12px !important;
+    list-style: none;
+}
+
+.tablist li,
+ul.tablist li {
+    background: transparent !important;
+    background-image: none !important;
+    border: none !important;
+    box-shadow: none !important;
+    margin: 0 !important;
+    display: inline-flex;
+}
+
+.tablist li a,
+.tablist li span,
+ul.tablist li a {
+    color: var(--m-text-muted) !important;
+    background: transparent !important;
+    background-image: none !important;
+    border: 1px solid transparent !important;
+    border-radius: var(--m-radius-sm) !important;
+    padding: 6px 12px !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    text-decoration: none !important;
+    transition: background-color 0.12s ease, color 0.12s ease;
+    text-shadow: none !important;
+    display: inline-block;
+}
+
+.tablist li a:hover,
+ul.tablist li a:hover {
+    background: var(--m-surface-2) !important;
+    color: var(--m-text) !important;
+}
+
+.tablist li.current a,
+ul.tablist li.current a {
+    background: var(--m-accent-soft) !important;
+    color: var(--m-accent) !important;
+    border-color: var(--m-accent-ring) !important;
+    text-shadow: none !important;
+}
+
+/* The horizontal "Main Page > Related Pages" breadcrumb strip */
+.navpath, .navpath ul, .navpath li {
+    background: var(--m-surface) !important;
+    background-image: none !important;
+    border: none !important;
+    color: var(--m-text-muted) !important;
+}
+
+.navpath li.navelem a {
+    color: var(--m-link) !important;
+    text-shadow: none !important;
+    background: transparent !important;
+    background-image: none !important;
+}
+
+.navpath li.footer {
+    color: var(--m-text-dim) !important;
+}
+
+/* ----- Sidebar tree -------------------------------------------------- */
+#side-nav {
+    background: var(--m-surface);
+    border-right: 1px solid var(--m-border);
+    padding: 0;
+}
+
+#nav-tree, #nav-tree-contents {
+    background: transparent;
+    color: var(--m-text-muted);
+    font-family: var(--m-font-body);
+    font-size: 13px;
+}
+
+#nav-tree .item {
+    padding: 4px 8px;
+    border-radius: var(--m-radius-sm);
+    margin: 1px 4px;
+    line-height: 1.4;
+}
+
+#nav-tree .item:hover {
+    background: var(--m-surface-2);
+}
+
+#nav-tree .selected {
+    background: var(--m-accent-soft);
+}
+
+#nav-tree .selected,
+#nav-tree .selected a,
+#nav-tree .selected .label,
+#nav-tree .selected .label a {
+    color: var(--m-accent);
+    font-weight: 600;
+}
+
+#nav-tree a {
+    color: var(--m-text-muted);
+    text-decoration: none;
+}
+
+#nav-tree a:hover {
+    color: var(--m-text);
+}
+
+/* ----- Right-side page-nav (in-page TOC) ---------------------------
+ * Newer Doxygen versions inject #page-nav after the main content area
+ * with a collapsible outline of the current page's sections. Defaults
+ * ship light backgrounds on each row that ignore our theme — wipe
+ * every descendant background and rebuild the styling on top.
+ * ----------------------------------------------------------------- */
+#page-nav {
+    background: var(--m-surface) !important;
+    color: var(--m-text-muted) !important;
+    font-family: var(--m-font-body) !important;
+    font-size: 13px !important;
+    border-left: 1px solid var(--m-border) !important;
+}
+
+/* Nuke every inherited background on rows / containers Doxygen renders
+ * inside the panel. Whatever JS-generated class name is in use, this
+ * catch-all will neutralize it. */
+#page-nav *,
+#page-nav-tree *,
+#page-nav-contents * {
+    background: transparent !important;
+    background-image: none !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+}
+
+#page-nav-tree {
+    border-left: none !important;
+    padding: 8px 4px;
+}
+
+#page-nav-resize-handle {
+    background: var(--m-border) !important;
+    width: 4px;
+}
+
+#page-nav a {
+    display: block;
+    padding: 6px 10px;
+    margin: 1px 4px;
+    border-radius: var(--m-radius-sm);
+    color: var(--m-text-muted) !important;
+    text-decoration: none !important;
+    line-height: 1.4;
+    transition: background-color 120ms ease, color 120ms ease;
+}
+
+#page-nav a:hover {
+    background: var(--m-surface-2) !important;
+    color: var(--m-text) !important;
+}
+
+#page-nav summary {
+    display: block;
+    padding: 6px 10px;
+    margin: 1px 4px;
+    border-radius: var(--m-radius-sm);
+    color: var(--m-text) !important;
+    font-weight: 600;
+    cursor: pointer;
+    line-height: 1.4;
+    list-style: none;
+    transition: background-color 120ms ease, color 120ms ease;
+}
+
+#page-nav summary::-webkit-details-marker { display: none; }
+#page-nav summary::marker                 { display: none; content: ""; }
+
+/* Custom chevron in front of the summary that flips when open */
+#page-nav summary::before {
+    content: "›";
+    display: inline-block;
+    width: 14px;
+    margin-right: 4px;
+    color: var(--m-text-dim);
+    font-weight: 700;
+    transform: rotate(0deg);
+    transition: transform 150ms ease;
+}
+#page-nav details[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+#page-nav summary:hover {
+    background: var(--m-surface-2) !important;
+    color: var(--m-text) !important;
+}
+
+#page-nav .selected,
+#page-nav .selected > a,
+#page-nav a.selected {
+    background: var(--m-accent-soft) !important;
+    color: var(--m-accent) !important;
+    font-weight: 600;
+}
+
+/* Indentation for nested levels */
+#page-nav .level2 > a,
+#page-nav .level2 a { padding-left: 24px; }
+#page-nav .level3 > a,
+#page-nav .level3 a { padding-left: 36px; }
+#page-nav .level4 > a,
+#page-nav .level4 a { padding-left: 48px; }
+
+/* Hide on narrow screens — the panel takes a lot of horizontal space
+ * and the in-page anchors still work via the main content. */
+@media (max-width: 1100px) {
+    #page-nav { display: none !important; }
+}
+
+/* ----- Search box ---------------------------------------------------- */
+
+#MSearchBox,
+#MSearchBox.MSearchBoxInactive,
+#MSearchBox.MSearchBoxActive {
+    background: var(--m-elevated) !important;
+    background-image: none !important;
+    border: 1px solid var(--m-border) !important;
+    border-radius: 999px !important;          /* full pill */
+    color: var(--m-text) !important;
+    box-shadow: var(--m-shadow-sm) !important;
+    padding: 4px 6px 4px 4px !important;
+    display: inline-flex !important;
+    align-items: center;
+    min-width: 220px;
+    height: 34px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+#MSearchBox:hover {
+    border-color: var(--m-border-strong) !important;
+}
+
+#MSearchBox.MSearchBoxActive,
+#MSearchBox:focus-within {
+    border-color: var(--m-accent) !important;
+    box-shadow: 0 0 0 3px var(--m-accent-ring) !important;
+}
+
+#MSearchBox .left, #MSearchBox .right {
+    background: transparent !important;
+    background-image: none !important;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
+/* Hide the "close" icon (it has a hard-coded image) — clearing the
+ * field works via Esc / backspace anyway. */
+#MSearchClose, #MSearchCloseImg {
+    display: none !important;
+}
+
+/* Search icon (magnifying glass + dropdown chevron).
+ *
+ * Doxygen renders the glass as a CSS circle (::before) + diagonal stem
+ * (::after) with hardcoded #909090 borders. Pixel-art geometry never
+ * lines up cleanly across browsers / zoom levels, so we ditch it and
+ * draw the icon from an SVG via mask-image — sharp at any DPI and
+ * tinted by currentColor (so it follows the active theme). */
+#MSearchSelect.search-icon,
+.search-icon {
+    width: 44px !important;
+    height: 26px !important;
+    margin-right: 2px;
+    cursor: pointer;
+    position: relative;
+    border-radius: 999px;
+    color: var(--m-text-muted);
+    transition: background-color 0.15s ease, color 0.15s ease;
+    /* Stop the Doxygen base rule from injecting a background image. */
+    background: transparent !important;
+    background-image: none !important;
+    border: none !important;
+}
+
+#MSearchSelect.search-icon:hover,
+.search-icon:hover {
+    background: var(--m-surface-2) !important;
+    color: var(--m-text);
+}
+
+/* The magnifying glass itself — full vector via SVG mask. */
+.search-icon::before {
+    content: '' !important;
+    position: absolute !important;
+    top: 50% !important;
+    left: 8px !important;
+    width: 16px !important;
+    height: 16px !important;
+    transform: translateY(-50%);
+    background-color: currentColor !important;
+    background-image: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><circle cx='10.5' cy='10.5' r='6.5'/><line x1='20' y1='20' x2='15.2' y2='15.2'/></svg>");
+    mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><circle cx='10.5' cy='10.5' r='6.5'/><line x1='20' y1='20' x2='15.2' y2='15.2'/></svg>");
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+    -webkit-mask-position: center;
+    mask-position: center;
+}
+
+/* Kill Doxygen's stem ::after — the SVG already includes it. */
+.search-icon::after {
+    display: none !important;
+    content: none !important;
+}
+
+/* Dropdown chevron — same language as the navbar's submenu indicator.
+ * Doxygen ships a triangle via border tricks; we replace its content
+ * box with our own rotated mini-square. */
+.search-icon-dropdown {
+    position: absolute !important;
+    top: 50% !important;
+    right: 8px !important;
+    left: auto !important;
+    width: 6px !important;
+    height: 6px !important;
+    border: none !important;
+    border-right: 1.5px solid currentColor !important;
+    border-bottom: 1.5px solid currentColor !important;
+    background: transparent !important;
+    transform: translateY(-70%) rotate(45deg);
+    opacity: 0.7;
+    transition: opacity 0.15s ease;
+}
+
+.search-icon:hover .search-icon-dropdown { opacity: 1; }
+
+/* Input field itself */
+#MSearchField {
+    background: transparent !important;
+    color: var(--m-text) !important;
+    font-family: var(--m-font-body) !important;
+    font-size: 13px !important;
+    border: none !important;
+    padding: 4px 10px !important;
+    outline: none !important;
+    width: 160px;
+    line-height: 1.4;
+}
+
+#MSearchField::placeholder { color: var(--m-text-dim); opacity: 1; }
+
+/* ----- Search filter dropdown ---------------------------------------- *
+ * The "All / Classes / Files / Functions / Variables / Pages" panel
+ * appears when you click the chevron. Doxygen renders it with a near-
+ * white translucent panel that doesn't survive dark mode. */
+#MSearchSelectWindow {
+    background: var(--m-elevated) !important;
+    border: 1px solid var(--m-border) !important;
+    border-radius: var(--m-radius) !important;
+    color: var(--m-text) !important;
+    box-shadow: var(--m-shadow-lg) !important;
+    padding: 6px !important;
+    min-width: 180px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    z-index: 10001;
+}
+
+.SelectItem,
+a.SelectItem,
+a.SelectItem:focus,
+a.SelectItem:active {
+    display: flex !important;
+    align-items: center;
+    gap: 8px;
+    font: 500 13px/1.4 var(--m-font-body) !important;
+    color: var(--m-text-muted) !important;
+    background: transparent !important;
+    padding: 7px 12px !important;
+    border-radius: var(--m-radius-sm) !important;
+    border: 0 !important;
+    text-decoration: none !important;
+    cursor: pointer;
+    transition: background-color 0.12s ease, color 0.12s ease;
+    outline: none !important;
+}
+
+a.SelectItem:hover {
+    color: var(--m-text) !important;
+    background: var(--m-surface) !important;
+}
+
+/* The "•" active-filter indicator. Replace the ugly bullet with a small
+ * filled circle in the accent color, fixed-size so it doesn't shift the
+ * label when present/absent. */
+span.SelectionMark {
+    display: inline-block !important;
+    width: 8px;
+    height: 8px;
+    margin: 0 !important;
+    border-radius: 50%;
+    background: transparent;
+    color: transparent !important;
+    font-size: 0 !important;
+    flex-shrink: 0;
+    transition: background 0.12s ease;
+}
+
+a.SelectItem .SelectionMark {
+    /* Reserve the slot so labels align even on inactive items. */
+    background: transparent;
+}
+
+a.SelectItem:has(.SelectionMark:not(:empty)) .SelectionMark,
+a.SelectItem .SelectionMark:not(:empty) {
+    background: var(--m-accent);
+    box-shadow: 0 0 0 3px var(--m-accent-ring);
+}
+
+/* ----- Search results window ----------------------------------------- */
+.SRPage, .SRSymbol, .SRStatus, .SRResult {
+    background: var(--m-elevated) !important;
+    color: var(--m-text) !important;
+    border-color: var(--m-border) !important;
+}
+
+#MSearchResultsWindow {
+    background: var(--m-elevated) !important;
+    border: 1px solid var(--m-border) !important;
+    color: var(--m-text) !important;
+    box-shadow: var(--m-shadow-lg) !important;
+    border-radius: var(--m-radius);
+    overflow: hidden;
+}
+
+#nav-sync {
+    background: var(--m-elevated) !important;
+    border: 1px solid var(--m-border) !important;
+    border-radius: var(--m-radius-sm) !important;
+}
+
+/* The vertical splitter between nav and content */
+.ui-resizable-handle {
+    background: var(--m-border);
+}
+
+/* ----- Content area -------------------------------------------------- */
+#doc-content {
+    background: var(--m-bg);
+}
+
+.contents, div.contents {
+    max-width: 920px;
+    margin: 24px auto;
+    padding: 0 24px 64px;
+    color: var(--m-text);
+}
+
+div.header {
+    background: var(--m-surface);
+    border-bottom: 1px solid var(--m-border);
+    padding: 18px 24px;
+}
+
+div.headertitle, .title {
+    color: var(--m-text);
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin: 0;
+    padding: 0;
+}
+
+div.summary {
+    background: transparent;
+    color: var(--m-text-muted);
+    border: none;
+    padding: 6px 0;
+    font-size: 13px;
+}
+
+div.summary a {
+    color: var(--m-link);
+    text-decoration: none;
+}
+
+div.summary a:hover {
+    color: var(--m-link-hover);
+    text-decoration: underline;
+}
+
+/* ----- Typography ---------------------------------------------------- */
+h1, h2, h3, h4, h5 {
+    color: var(--m-text);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1.3;
+}
+
+h1 { font-size: 26px; margin: 32px 0 12px; }
+h2 {
+    font-size: 21px;
+    margin: 28px 0 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--m-border);
+}
+h3 { font-size: 17px; margin: 22px 0 8px; }
+h4 { font-size: 15px; margin: 18px 0 8px; color: var(--m-text-muted); }
+
+p, ul, ol, dl {
+    color: var(--m-text);
+    margin: 8px 0 14px;
+}
+
+a {
+    color: var(--m-link);
+    text-decoration: none;
+    transition: color 0.12s ease;
+}
+
+a:hover {
+    color: var(--m-link-hover);
+    text-decoration: underline;
+}
+
+a.el {
+    color: var(--m-link);
+    font-weight: 500;
+}
+
+/* ----- Code & fragments ---------------------------------------------- *
+ * Doxygen wraps inline literals in <span class="tt">, file/symbol refs
+ * in <a class="el">, and \c output in <tt>. We unify the look with high
+ * specificity so Doxygen's defaults don't bleed through. */
+code, tt, .tt,
+span.tt, p .tt,
+.computeroutput,
+code.JavaDocLink {
+    font-family: var(--m-font-mono) !important;
+    background: var(--m-code-bg) !important;
+    color: var(--m-code-text) !important;
+    padding: 1px 6px !important;
+    border-radius: 4px !important;
+    font-size: 0.88em !important;
+    border: 1px solid var(--m-code-border) !important;
+    text-shadow: none !important;
+    white-space: normal;
+}
+
+/* Refs that act as inline links (file refs, struct refs). Doxygen often
+ * renders these as bare <a class="el"> — give them the link color, no
+ * code background by default. */
+a.el, a.elRef {
+    color: var(--m-link) !important;
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    font-family: var(--m-font-body);
+    font-weight: 500 !important;
+    text-decoration: none;
+}
+
+a.el:hover, a.elRef:hover {
+    color: var(--m-link-hover) !important;
+    text-decoration: underline;
+}
+
+/* When a ref lives inside .tt (looks like `UIApp` typed as code), keep
+ * the dark code background but use the link color for the text. */
+.tt a.el,
+.tt a.elRef,
+code a.el,
+tt a.el,
+span.tt a.el {
+    color: var(--m-link) !important;
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    font-family: var(--m-font-mono) !important;
+    font-weight: 500 !important;
+}
+
+.tt a.el:hover,
+.tt a.elRef:hover {
+    color: var(--m-link-hover) !important;
+    text-decoration: underline;
+}
+
+pre.fragment, div.fragment {
+    background: var(--m-code-bg);
+    color: var(--m-code-text);
+    border: 1px solid var(--m-code-border);
+    border-radius: var(--m-radius);
+    padding: 14px 16px;
+    margin: 14px 0;
+    font-family: var(--m-font-mono);
+    font-size: 13px;
+    line-height: 1.55;
+    overflow-x: auto;
+    box-shadow: var(--m-shadow-sm);
+}
+
+div.line {
+    color: var(--m-code-text);
+    background: transparent;
+}
+
+/* Source-code line numbers. Doxygen's default uses hardcoded light-grey
+ * backgrounds (#E8E8E8, #D8D8D8) and black text — invisible in dark
+ * mode and the link variant produces the "white highlighted lines"
+ * artifact when the symbol's source range is anchored in the URL. */
+span.lineno,
+.lineno {
+    display: inline-block;
+    background: transparent !important;
+    color: var(--m-text-muted) !important;
+    border-right: 1px solid var(--m-border) !important;
+    padding-right: 10px;
+    margin-right: 10px;
+    text-align: right;
+    user-select: none;
+}
+
+span.lineno a,
+span.lineno a:visited,
+.lineno a,
+.lineno a:visited {
+    background: transparent !important;
+    color: var(--m-text-muted) !important;
+    text-decoration: none !important;
+}
+
+span.lineno a:hover,
+.lineno a:hover {
+    background: transparent !important;
+    color: var(--m-accent) !important;
+}
+
+/* :target line highlight (anchored line range — e.g. when you arrive
+ * from a "Definition at line N of file X" link). Default Doxygen uses
+ * cyan glow which clashes with dark mode. */
+div.line.glow,
+div.line:target {
+    background-color: var(--m-accent-soft) !important;
+    box-shadow: 0 0 0 1px var(--m-accent-ring) !important;
+    border-radius: 2px;
+}
+
+/* Doxygen syntax highlight classes inside <div class="fragment"> */
+span.keyword,   .keyword     { color: var(--m-syn-keyword); font-weight: 600; }
+span.keywordtype, .keywordtype { color: var(--m-syn-type);  font-weight: 600; }
+span.keywordflow, .keywordflow { color: var(--m-syn-keyword); font-weight: 600; }
+span.stringliteral, .stringliteral { color: var(--m-syn-string); }
+span.charliteral, .charliteral { color: var(--m-syn-string); }
+span.comment, .comment       { color: var(--m-syn-comment); font-style: italic; }
+span.preprocessor, .preprocessor { color: var(--m-syn-preproc); }
+
+/* ----- Tables -------------------------------------------------------- */
+table.markdownTable, table.doxtable, table.directory {
+    border-collapse: collapse;
+    margin: 14px 0;
+    width: 100%;
+    border: 1px solid var(--m-border);
+    border-radius: var(--m-radius);
+    overflow: hidden;
+    box-shadow: var(--m-shadow-sm);
+    background: var(--m-elevated);
+}
+
+table.markdownTable th, table.doxtable th {
+    background: var(--m-surface-2);
+    color: var(--m-text);
+    font-weight: 600;
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--m-border);
+    border-right: none;
+    font-size: 13px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+table.markdownTable td, table.doxtable td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--m-border);
+    border-right: none;
+    color: var(--m-text);
+    vertical-align: top;
+}
+
+/* Doxygen sets background-color directly on tr.even / tr.odd (which is
+ * why dark mode showed bright white stripes — the default value is
+ * #f7f8fb or similar). Override with high specificity. */
+table tr.even,
+table tr.odd,
+tr.markdownTableRowEven,
+tr.markdownTableRowOdd,
+table.markdownTable tr,
+table.directory tr.even,
+table.directory tr.odd {
+    background: transparent !important;
+    background-image: none !important;
+    color: var(--m-text) !important;
+}
+
+table tr.even,
+tr.markdownTableRowEven,
+table.directory tr.even {
+    background: var(--m-surface) !important;
+}
+
+table tr:last-child td {
+    border-bottom: none;
+}
+
+/* Class list / file list rows */
+table.directory td.entry, table.directory td.desc {
+    background: transparent !important;
+    color: var(--m-text);
+    padding: 8px 12px;
+}
+
+table.directory td.desc {
+    color: var(--m-text-muted) !important;
+    font-size: 13px;
+}
+
+/* ----- Member items (functions, structs) ----------------------------- */
+.memitem {
+    background: var(--m-elevated);
+    border: 1px solid var(--m-border);
+    border-radius: var(--m-radius);
+    margin: 18px 0;
+    box-shadow: var(--m-shadow-sm);
+    overflow: hidden;
+    transition: box-shadow 0.15s ease;
+}
+
+.memitem:hover {
+    box-shadow: var(--m-shadow);
+}
+
+.memproto, .memname, dl.reflist dt {
+    background: var(--m-surface);
+    color: var(--m-text);
+    border: none;
+    border-bottom: 1px solid var(--m-border);
+    padding: 12px 16px;
+    font-family: var(--m-font-mono);
+    font-size: 14px;
+    font-weight: 600;
+    text-shadow: none;
+}
+
+.memdoc, dl.reflist dd {
+    background: var(--m-elevated);
+    border: none;
+    color: var(--m-text);
+    padding: 14px 16px;
+    box-shadow: none;
+}
+
+.memname td {
+    color: var(--m-text);
+    font-family: var(--m-font-mono);
+    background: transparent;
+}
+
+.memname .paramname {
+    color: var(--m-syn-fn);
+    font-style: normal;
+}
+
+.paramtype, .paramkey {
+    color: var(--m-syn-type);
+}
+
+table.memberdecls .glow {
+    box-shadow: 0 0 0 3px var(--m-accent-ring);
+}
+
+/* Grouped tables of member declarations */
+table.memberdecls {
+    border: 1px solid var(--m-border);
+    border-radius: var(--m-radius);
+    box-shadow: var(--m-shadow-sm);
+    overflow: hidden;
+    margin: 14px 0;
+    /* Without border-collapse, the HTML default 2px border-spacing
+     * leaves slim gaps between cells that show the page bg through —
+     * the "white strip" symptom in dark mode. Collapse them. */
+    border-collapse: collapse !important;
+    border-spacing: 0 !important;
+    width: 100%;
+}
+
+table.memberdecls td.memItemLeft,
+table.memberdecls td.memItemRight,
+table.memberdecls td.memTemplItemLeft,
+table.memberdecls td.memTemplItemRight {
+    background: var(--m-elevated);
+    border-bottom: 1px solid var(--m-border);
+    padding: 8px 14px;
+    font-family: var(--m-font-mono);
+    font-size: 13px;
+}
+
+table.memberdecls td.memItemLeft {
+    color: var(--m-syn-type);
+    text-align: right;
+    white-space: nowrap;
+}
+
+table.memberdecls td.memItemRight a.el {
+    color: var(--m-syn-fn);
+    font-weight: 600;
+}
+
+table.memberdecls .mdescLeft,
+table.memberdecls .mdescRight {
+    background: var(--m-surface);
+    border-bottom: 1px solid var(--m-border);
+    color: var(--m-text-muted);
+    padding: 4px 14px 10px;
+    font-size: 13px;
+}
+
+table.memberdecls .heading td {
+    background: var(--m-surface-2) !important;
+    background-image: none !important;
+    color: var(--m-text) !important;
+    padding: 0 !important;
+    border-bottom: 1px solid var(--m-border);
+}
+
+/* Section heading h2 — used both inline inside .memberdecls tables and
+ * standalone for "Detailed Description" / "Member Data Documentation".
+ * Doxygen's default gives them a light gradient that doesn't extend
+ * the full width — that's the "white edge strip" you see in dark mode.
+ * Override fully with a flat fill. */
+h2.groupheader {
+    display: block;
+    background: var(--m-surface-2) !important;
+    background-image: none !important;
+    color: var(--m-text) !important;
+    font-size: 14px !important;
+    font-weight: 700 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 10px 14px !important;
+    margin: 28px 0 12px !important;
+    border: 1px solid var(--m-border) !important;
+    border-radius: var(--m-radius-sm) !important;
+    text-shadow: none !important;
+    /* The Doxygen default paints "white frame" side-shadows
+     * (box-shadow: 12px 0 white, -12px 0 white, ...) that bleed past
+     * the heading rect into the dark page bg. Kill them. */
+    box-shadow: none !important;
+}
+
+td h2.groupheader {
+    box-shadow: none !important;
+}
+
+/* When the same h2 lives inside a memberdecls table heading row, it's
+ * the cell that owns the border/radius — let the h2 itself be flat. */
+table.memberdecls .heading td h2.groupheader {
+    margin: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+}
+
+/* ----- Per-member section header (h2.memtitle) -----------------------
+ * Doxygen emits one of these per documented field/method ("◆ color",
+ * "◆ rect", ...). The default has a white gradient bg. Re-skin to a
+ * compact dark pill that sits on top of the memitem card. */
+h2.memtitle,
+.memtitle {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 6px;
+    background: var(--m-surface-2) !important;
+    background-image: none !important;
+    color: var(--m-text) !important;
+    border: 1px solid var(--m-border) !important;
+    border-bottom: none !important;
+    border-radius: var(--m-radius-sm) var(--m-radius-sm) 0 0 !important;
+    padding: 8px 14px !important;
+    margin: 14px 0 0 !important;
+    font-size: 14px !important;
+    font-weight: 700 !important;
+    font-family: var(--m-font-mono);
+    text-shadow: none !important;
+    text-transform: none;
+    letter-spacing: 0;
+    /* Doxygen's default paints a light "tab-like" extension below the
+     * pill via box-shadow + a ::after pseudo. Both bleed white into
+     * dark mode — kill them. */
+    box-shadow: none !important;
+    float: none !important;
+    position: relative;
+}
+
+h2.memtitle::after,
+.memtitle::after {
+    display: none !important;
+    content: none !important;
+    background: transparent !important;
+}
+
+h2.memtitle .permalink,
+.memtitle .permalink,
+h2.memtitle .permalink a,
+.memtitle .permalink a {
+    background: transparent !important;
+    color: var(--m-text-dim) !important;
+    text-decoration: none !important;
+    margin-right: 2px;
+}
+h2.memtitle .permalink a:hover,
+.memtitle .permalink a:hover {
+    color: var(--m-accent) !important;
+}
+
+/* The .memitem that follows a .memtitle should fuse with it (no double
+ * border on top). */
+h2.memtitle + .memitem,
+.memtitle + .memitem {
+    margin-top: 0 !important;
+    border-top-left-radius: 0 !important;
+}
+
+/* ----- Callouts / admonitions / blockquotes -------------------------- */
+blockquote {
+    background: var(--m-accent-soft);
+    border: 1px solid var(--m-accent-ring);
+    border-left: 3px solid var(--m-accent);
+    color: var(--m-text);
+    margin: 14px 0;
+    padding: 12px 18px;
+    border-radius: var(--m-radius);
+    font-style: normal;
+}
+
+blockquote p:last-child { margin-bottom: 0; }
+
+dl.note, dl.warning, dl.attention, dl.bug, dl.deprecated {
+    margin: 14px 0;
+    padding: 12px 18px;
+    border-radius: var(--m-radius);
+    border: 1px solid var(--m-border);
+    background: var(--m-surface);
+}
+
+dl.note          { border-left: 3px solid #0ea5e9; }
+dl.warning       { border-left: 3px solid #f59e0b; }
+dl.attention     { border-left: 3px solid #ef4444; }
+dl.bug           { border-left: 3px solid #ec4899; }
+dl.deprecated    { border-left: 3px solid #6b7280; opacity: 0.85; }
+
+dl.note dt, dl.warning dt, dl.attention dt {
+    color: var(--m-text);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 12px;
+}
+
+/* ----- Bullet lists -------------------------------------------------- */
+ul, ol {
+    padding-left: 24px;
+}
+
+ul li, ol li {
+    margin: 4px 0;
+}
+
+ul li::marker {
+    color: var(--m-accent);
+}
+
+/* ----- Form / Inputs ------------------------------------------------- */
+input[type="text"], select, textarea {
+    background: var(--m-elevated);
+    color: var(--m-text);
+    border: 1px solid var(--m-border);
+    border-radius: var(--m-radius-sm);
+    padding: 6px 10px;
+    font-family: var(--m-font-body);
+    font-size: 13px;
+}
+
+/* ----- Misc Doxygen widgets ------------------------------------------ */
+.directory td.entry { padding: 6px 10px; }
+.directory tr.even  { background: var(--m-surface); }
+
+/* Class-type badge ("C" / "S" / "I") shown in the annotated list and
+ * navtree. The default Doxygen rendering nests an .icon inside an
+ * .icona; both need explicit sizing so the badge doesn't visually
+ * overlap the class name link that follows it. */
+.icona {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    margin-right: 10px;
+    vertical-align: middle;
+    background-color: var(--m-accent);
+    color: white;
+    border-radius: 4px;
+    font-weight: 700;
+    font-size: 12px;
+    line-height: 1;
+}
+
+.icona .icon,
+.icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    color: inherit;
+    border-radius: inherit;
+    font-weight: 700;
+    font-size: 12px;
+    line-height: 1;
+}
+
+/* Class name in the directory list: add breathing room around the
+ * link so it doesn't sit flush against the badge. */
+table.directory td.entry > a.el,
+table.directory td.entry > b {
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+.arrow {
+    color: var(--m-text-dim);
+}
+
+img[src*="closed.png"], img[src*="open.png"] {
+    /* Soften the default folder icons */
+    opacity: 0.7;
+    filter: saturate(0.5);
+}
+
+/* Footer */
+.footer, address.footer {
+    color: var(--m-text-dim);
+    background: var(--m-surface);
+    border-top: 1px solid var(--m-border);
+    padding: 18px 24px;
+    font-size: 12px;
+    text-align: center;
+}
+
+/* Selection */
+::selection {
+    background: var(--m-accent);
+    color: white;
+}
+
+/* Scrollbar (WebKit only, but most users on Win/Mac use Chromium-ish) */
+::-webkit-scrollbar       { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--m-surface); }
+::-webkit-scrollbar-thumb {
+    background: var(--m-border-strong);
+    border-radius: 5px;
+    border: 2px solid var(--m-surface);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--m-text-dim); }
+
+/* Responsive: hide the heavy sidebar on small screens, let the page
+ * stack vertically. Doxygen's default has a fixed left col that breaks
+ * mobile reading. */
+@media (max-width: 800px) {
+    #side-nav { display: none; }
+    #doc-content { margin-left: 0 !important; }
+    .contents { padding: 0 16px 48px; }
+}
+
+/* ----- Theme toggle button ------------------------------------------- *
+ * Injected by mocida.js into #mocida-theme-slot (a <td> in the title
+ * area table). Floating fallback when the slot isn't present. */
+#mocida-theme-slot {
+    width: 1px;
+    white-space: nowrap;
+    padding: 0 12px !important;
+    vertical-align: middle !important;
+    background: transparent !important;
+    background-image: none !important;
+    border: none !important;
+    text-align: right;
+}
+
+#mocida-theme-toggle {
+    -webkit-appearance: none;
+    appearance: none;
+    background: var(--m-elevated);
+    color: var(--m-text-muted);
+    border: 1px solid var(--m-border);
+    border-radius: var(--m-radius-sm);
+    width: 34px;
+    height: 34px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    margin: 0;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+    box-shadow: var(--m-shadow-sm);
+}
+
+#mocida-theme-toggle:hover {
+    color: var(--m-accent);
+    border-color: var(--m-accent-ring);
+    background: var(--m-surface);
+}
+
+#mocida-theme-toggle:active {
+    transform: scale(0.95);
+}
+
+#mocida-theme-toggle:focus-visible {
+    outline: none;
+    border-color: var(--m-accent);
+    box-shadow: 0 0 0 3px var(--m-accent-ring);
+}
+
+#mocida-theme-toggle[data-mode="light"] { color: #f59e0b; }
+#mocida-theme-toggle[data-mode="dark"]  { color: var(--m-accent); }
+
+#mocida-theme-toggle svg {
+    width: 16px;
+    height: 16px;
+    display: block;
+}
+
+.mocida-theme-toggle-floating {
+    position: fixed !important;
+    top: 12px;
+    right: 12px;
+    z-index: 1000;
+}
+
+/* ----- Late, aggressive overrides for stragglers --------------------- *
+ * Some Doxygen stylesheets set things via element-level rules that beat
+ * our :root tokens (eg .index .even has its own bg). Force them. */
+.index .even, .index .odd,
+.directory .even, .directory .odd,
+.memberdecls .even, .memberdecls .odd,
+.indexkey, .indexvalue,
+.memberdecls td.glow,
+div.qindex, div.qindexHL {
+    background: transparent !important;
+    background-image: none !important;
+    color: var(--m-text) !important;
+    border-color: var(--m-border) !important;
+}
+
+.index .even, .directory .even, .memberdecls .even {
+    background: var(--m-surface) !important;
+}
+
+/* Class index pages: the big alphabetical list */
+table.indextab {
+    background: var(--m-elevated) !important;
+    border-color: var(--m-border) !important;
+}
+
+div.qindex {
+    border: 1px solid var(--m-border) !important;
+    border-radius: var(--m-radius-sm);
+    padding: 6px 12px;
+    margin: 8px 0 16px;
+}
+
+div.qindex a, div.qindexHL a {
+    color: var(--m-link) !important;
+    background: transparent !important;
+    padding: 2px 6px !important;
+    text-shadow: none !important;
+}
+
+div.qindex a:hover, div.qindexHL a {
+    color: var(--m-link-hover) !important;
+}
+
+/* "Modules", "Files" headings that index pages use */
+h1.titlehead, .header .title {
+    color: var(--m-text) !important;
+}
+
+/* Anchored hash icons next to headings */
+a.anchorlink, h1 a, h2 a, h3 a, h4 a {
+    color: var(--m-text-dim) !important;
+}
+a.anchorlink:hover, h2 a:hover, h3 a:hover {
+    color: var(--m-accent) !important;
+}
+
+/* ---------------------------------------------------------------------
+ * Class Index page
+ *
+ * Doxygen emits one <dl class="classindex even/odd"> per letter, with a
+ * <dt class="alphachar"> for the heading and many <dd> entries inside.
+ * The default theme gives each <dl> a full-width white block — wrong on
+ * a dark background and very chunky. We replace it with a card layout:
+ * the letter sits in a circular chip on the left, and the class names
+ * flow as link pills on the right.
+ * ------------------------------------------------------------------ */
+
+/* Sticky alphabet jump bar */
+div.qindex {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    background: var(--m-surface) !important;
+    border: 1px solid var(--m-border) !important;
+    border-radius: var(--m-radius);
+    padding: 10px 14px !important;
+    margin: 12px 0 24px !important;
+    backdrop-filter: blur(8px);
+}
+
+div.qindex a, div.qindexHL a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    height: 28px;
+    padding: 0 8px !important;
+    border-radius: 999px;
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--m-link) !important;
+    background: transparent !important;
+    text-shadow: none !important;
+    transition: background-color 120ms ease, color 120ms ease;
+}
+
+div.qindex a:hover, div.qindexHL a {
+    background: var(--m-accent-soft) !important;
+    color: var(--m-link-hover) !important;
+}
+
+/* Hide the | separators that Doxygen wedges between letters */
+div.qindex .alphasepar {
+    display: none !important;
+}
+
+/* Container that holds all the per-letter <dl>s */
+div.classindex {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+/* Each letter group becomes a card with a chip on the left and class
+ * pills flowing in the remaining space. Doxygen's default theme puts
+ * the dl in a 3-column newspaper layout (column-count: 3) which fights
+ * our chip-on-the-left design, so we kill column flow first. */
+dl.classindex,
+dl.classindex.even,
+dl.classindex.odd {
+    display: flex !important;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 8px;
+    column-count: 1 !important;
+    columns: auto !important;
+    -webkit-column-count: 1 !important;
+    -moz-column-count: 1 !important;
+    background: var(--m-elevated) !important;
+    background-image: none !important;
+    border: 1px solid var(--m-border) !important;
+    border-radius: var(--m-radius) !important;
+    padding: 14px 16px !important;
+    margin: 0 !important;
+    box-shadow: var(--m-shadow-sm);
+    transition: border-color 150ms ease;
+}
+
+dl.classindex:hover {
+    border-color: var(--m-border-strong) !important;
+}
+
+/* The letter sits in a circular accent chip as the first flex item */
+dl.classindex dt.alphachar {
+    flex: 0 0 auto;
+    align-self: center;
+    width: 40px;
+    height: 40px;
+    margin: 0 8px 0 0 !important;
+    padding: 0 !important;
+    background: var(--m-accent-soft) !important;
+    background-image: none !important;
+    border: none !important;
+    border-radius: 999px;
+    color: var(--m-accent) !important;
+    font-size: 17px !important;
+    font-weight: 700;
+    font-family: var(--m-font-body);
+    line-height: 40px;
+    text-align: center;
+}
+
+dl.classindex dt.alphachar a {
+    display: block;
+    width: 100%;
+    height: 100%;
+    color: inherit !important;
+    text-decoration: none !important;
+    /* anchor for the qindex jump links */
+    scroll-margin-top: 80px;
+}
+
+/* Items: inline pills that wrap next to (and below) the chip */
+dl.classindex dd {
+    flex: 0 0 auto;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: transparent !important;
+    border: none !important;
+    line-height: 1;
+}
+
+/* Class-name pills */
+dl.classindex dd a.el {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: var(--m-surface);
+    border: 1px solid var(--m-border);
+    color: var(--m-link) !important;
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1.2;
+    text-decoration: none !important;
+    transition: background-color 120ms ease,
+                border-color 120ms ease,
+                color 120ms ease,
+                transform 120ms ease;
+}
+
+dl.classindex dd a.el:hover {
+    background: var(--m-accent-soft);
+    border-color: var(--m-accent);
+    color: var(--m-link-hover) !important;
+    transform: translateY(-1px);
+}

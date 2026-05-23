@@ -1,0 +1,101 @@
+# Doxygen configuration for Mocida
+# Generated docs live in docs/generated/html/index.html
+
+# --- Project info ------------------------------------------------------
+PROJECT_NAME           = "Mocida"
+PROJECT_NUMBER         = 1.0
+PROJECT_BRIEF          = "Modular UI toolkit in C on top of SDL3"
+PROJECT_LOGO           = assets/logo.svg
+
+# --- I/O ---------------------------------------------------------------
+OUTPUT_DIRECTORY       = docs/generated
+HTML_OUTPUT            = html
+HTML_FILE_EXTENSION    = .html
+
+# Only public headers + implementation files of the lib + main pages.
+INPUT                  = src/headers \
+                         src/uikit \
+                         docs/mainpage.md \
+                         README.md
+USE_MDFILE_AS_MAINPAGE = docs/mainpage.md
+FILE_PATTERNS          = *.c *.h *.md
+RECURSIVE              = YES
+
+# Skip vendor / build / IDE / dist trees explicitly (belt + suspenders;
+# we already restrict INPUT but RECURSIVE may still scan side dirs).
+EXCLUDE_PATTERNS       = */build/* \
+                         */vcpkg/* \
+                         */dist/* \
+                         */node_modules/* \
+                         */SDL/* \
+                         */SDL_ttf/* \
+                         */SDL_image/* \
+                         */.vscode/* \
+                         */.idea/* \
+                         */nasm/*
+
+# --- Output ------------------------------------------------------------
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+FULL_SIDEBAR           = NO
+HTML_DYNAMIC_SECTIONS  = YES
+HTML_DYNAMIC_MENUS     = YES
+HTML_TIMESTAMP         = NO
+# Force LIGHT — our custom CSS handles dark mode via @prefers-color-scheme.
+HTML_COLORSTYLE        = LIGHT
+
+# Custom theme: layered on top of Doxygen's defaults. The CSS lives in
+# docs/theme/ and is bundled in the generated site (paths inside the
+# generated HTML are flattened to the same directory).
+HTML_EXTRA_STYLESHEET  = docs/theme/mocida.css
+
+# Custom <head> template — injects the synchronous theme bootstrap and a
+# <script> tag for mocida.js, both used by the in-page theme switcher.
+HTML_HEADER            = docs/theme/header.html
+
+# Extra files copied next to the generated HTML (so mocida.js is loadable
+# from the <script src="mocida.js"> tag in our custom header).
+HTML_EXTRA_FILES       = docs/theme/mocida.js
+
+# Width of the sidebar tree. 290 px gives long header names room without
+# eating into reading width.
+TREEVIEW_WIDTH         = 290
+
+# --- Extraction --------------------------------------------------------
+# We want every public symbol to show up, even when the doc block is
+# missing — Doxygen will then highlight what is undocumented.
+EXTRACT_ALL            = NO
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+HIDE_UNDOC_MEMBERS     = NO
+
+# Treat the leading sentence of /** ... */ as the @brief automatically.
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = YES
+MARKDOWN_SUPPORT       = YES
+TOC_INCLUDE_HEADINGS   = 4
+
+# --- Warnings (so we notice missing docs) ------------------------------
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = YES
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = YES
+WARN_AS_ERROR          = NO
+
+# --- Diagrams ----------------------------------------------------------
+# Only emit graphs if Graphviz (dot) is available. Easier to read on
+# small repos than the heavy UML view.
+HAVE_DOT               = NO
+CLASS_DIAGRAMS         = NO
+
+# --- Source browsing ---------------------------------------------------
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+REFERENCED_BY_RELATION = YES
+REFERENCES_RELATION    = YES
+
+# --- Language ----------------------------------------------------------
+OUTPUT_LANGUAGE        = English
