@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 280" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Anti-aliasing pipeline">
+  <title>Anti-aliasing: aliased → analytic coverage</title>
+
+  <defs>
+    <pattern id="px" width="2" height="2" patternUnits="userSpaceOnUse">
+      <rect width="2" height="2" fill="#1f2937"/>
+      <rect width="1" height="1" fill="#161f33"/>
+    </pattern>
+    <linearGradient id="g1" x1="0" x2="1">
+      <stop offset="0" stop-color="#ef4444"/>
+      <stop offset="1" stop-color="#f97316"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0" x2="1">
+      <stop offset="0" stop-color="#0ea5e9"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="700" height="280" rx="14" fill="#0b1220"/>
+
+  <!-- Aliased side -->
+  <g transform="translate(60, 60)">
+    <text x="0" y="-20" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#94a3b8" letter-spacing="0.08em">BEFORE · 1 SAMPLE / PIXEL</text>
+    <!-- Pixelated representation via stepped polygon emulating a jagged disk -->
+    <g fill="url(#g1)">
+      <rect x="35" y="0"  width="50" height="10"/>
+      <rect x="20" y="10" width="80" height="10"/>
+      <rect x="10" y="20" width="100" height="10"/>
+      <rect x="5"  y="30" width="110" height="10"/>
+      <rect x="0"  y="40" width="120" height="10"/>
+      <rect x="0"  y="50" width="120" height="10"/>
+      <rect x="5"  y="60" width="110" height="10"/>
+      <rect x="10" y="70" width="100" height="10"/>
+      <rect x="20" y="80" width="80" height="10"/>
+      <rect x="35" y="90" width="50" height="10"/>
+    </g>
+    <!-- pixel grid overlay -->
+    <g stroke="#1f2937" stroke-width="0.5" fill="none">
+      <line x1="0" y1="0"   x2="120" y2="0"/>
+      <line x1="0" y1="10"  x2="120" y2="10"/>
+      <line x1="0" y1="20"  x2="120" y2="20"/>
+      <line x1="0" y1="30"  x2="120" y2="30"/>
+      <line x1="0" y1="40"  x2="120" y2="40"/>
+      <line x1="0" y1="50"  x2="120" y2="50"/>
+      <line x1="0" y1="60"  x2="120" y2="60"/>
+      <line x1="0" y1="70"  x2="120" y2="70"/>
+      <line x1="0" y1="80"  x2="120" y2="80"/>
+      <line x1="0" y1="90"  x2="120" y2="90"/>
+      <line x1="0" y1="100" x2="120" y2="100"/>
+    </g>
+  </g>
+
+  <!-- Arrow -->
+  <g transform="translate(300, 110)" fill="#38bdf8">
+    <path d="M0,0 L60,0 M44,-10 L60,0 L44,10" stroke="#38bdf8" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <animate attributeName="opacity" values="0.4;1;0.4" dur="2s" repeatCount="indefinite"/>
+    </path>
+    <text x="0" y="-22" font-family="Inter, sans-serif" font-size="11" fill="#94a3b8" font-weight="600">N²</text>
+    <text x="20" y="-22" font-family="Inter, sans-serif" font-size="11" fill="#94a3b8" font-weight="600">subpixel</text>
+    <text x="0" y="32" font-family="Inter, sans-serif" font-size="11" fill="#94a3b8" font-weight="600">UI_QUALITY_HIGH</text>
+  </g>
+
+  <!-- Smooth side -->
+  <g transform="translate(460, 60)">
+    <text x="0" y="-20" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#e2e8f0" letter-spacing="0.08em">AFTER · 16 SAMPLES / PIXEL</text>
+    <circle cx="60" cy="50" r="50" fill="url(#g2)"/>
+    <!-- ring pulse -->
+    <circle cx="60" cy="50" r="50" fill="none" stroke="#38bdf8" stroke-width="2">
+      <animate attributeName="r" values="50;58;50" dur="2.4s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.6;0;0.6" dur="2.4s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- Caption -->
+  <text x="350" y="240" text-anchor="middle" font-family="Inter, sans-serif" font-size="13" fill="#94a3b8">
+    Coverage rasterizer: <tspan fill="#e2e8f0" font-weight="600">coverage = samples_inside / N²</tspan> per pixel
+  </text>
+  <text x="350" y="258" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#64748b">
+    Mathematically exact · backend-consistent across D3D, OpenGL, Vulkan, Metal
+  </text>
+</svg>

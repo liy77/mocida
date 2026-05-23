@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 280" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Mocida widget gallery">
+  <title>Widget gallery (buttons, switch, slider, checkbox, dropdown, progress)</title>
+  <defs>
+    <linearGradient id="primary" x1="0" x2="1"><stop offset="0" stop-color="#0ea5e9"/><stop offset="1" stop-color="#38bdf8"/></linearGradient>
+    <filter id="dropshadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4"/>
+      <feOffset dx="0" dy="4"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.35"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="700" height="280" rx="14" fill="#0b1220"/>
+
+  <!-- Row 1: buttons -->
+  <g transform="translate(40, 50)">
+    <!-- primary -->
+    <rect width="120" height="40" rx="10" fill="url(#primary)" filter="url(#dropshadow)"/>
+    <text x="60" y="25" text-anchor="middle" fill="white" font-family="Inter, sans-serif" font-size="13" font-weight="600">Primary</text>
+
+    <!-- outline -->
+    <g transform="translate(140, 0)">
+      <rect width="120" height="40" rx="10" fill="transparent" stroke="#38bdf8" stroke-width="1.5"/>
+      <text x="60" y="25" text-anchor="middle" fill="#38bdf8" font-family="Inter, sans-serif" font-size="13" font-weight="600">Outline</text>
+    </g>
+
+    <!-- ghost with hover pulse -->
+    <g transform="translate(280, 0)">
+      <rect width="120" height="40" rx="10" fill="#1f2937">
+        <animate attributeName="fill" values="#1f2937;#334155;#1f2937" dur="2.5s" repeatCount="indefinite"/>
+      </rect>
+      <text x="60" y="25" text-anchor="middle" fill="#e2e8f0" font-family="Inter, sans-serif" font-size="13" font-weight="600">Hover me</text>
+    </g>
+
+    <!-- disabled -->
+    <g transform="translate(420, 0)" opacity="0.5">
+      <rect width="120" height="40" rx="10" fill="#475569"/>
+      <text x="60" y="25" text-anchor="middle" fill="#94a3b8" font-family="Inter, sans-serif" font-size="13" font-weight="600">Disabled</text>
+    </g>
+  </g>
+
+  <!-- Row 2: controls -->
+  <g transform="translate(40, 120)">
+    <!-- Switch -->
+    <g>
+      <rect width="56" height="30" rx="15" fill="#0ea5e9" opacity="0.4"/>
+      <circle cy="15" r="11" fill="#fff">
+        <animate attributeName="cx" values="15;41;41;15;15" keyTimes="0;0.25;0.5;0.75;1" dur="4s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+
+    <!-- Checkbox -->
+    <g transform="translate(80, 0)">
+      <rect width="30" height="30" rx="6" fill="transparent" stroke="#38bdf8" stroke-width="1.5"/>
+      <path d="M8,16 L14,22 L24,10" fill="none" stroke="#38bdf8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="30" stroke-dashoffset="30">
+        <animate attributeName="stroke-dashoffset" values="30;0;0;30;30" keyTimes="0;0.25;0.65;0.8;1" dur="4s" repeatCount="indefinite"/>
+      </path>
+    </g>
+
+    <!-- Radio -->
+    <g transform="translate(140, 15)">
+      <circle r="13" fill="transparent" stroke="#38bdf8" stroke-width="1.5"/>
+      <circle r="6" fill="#38bdf8">
+        <animate attributeName="r" values="6;0;6;6;6" keyTimes="0;0.2;0.6;0.8;1" dur="4s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+
+    <!-- Slider -->
+    <g transform="translate(180, 15)">
+      <rect width="180" height="4" y="-2" rx="2" fill="#1f2937"/>
+      <rect height="4" y="-2" rx="2" fill="url(#primary)">
+        <animate attributeName="width" values="20;160;160;20" keyTimes="0;0.45;0.55;1" dur="5s" repeatCount="indefinite"/>
+      </rect>
+      <circle cy="0" r="9" fill="#fff" stroke="#0ea5e9" stroke-width="2">
+        <animate attributeName="cx" values="20;160;160;20" keyTimes="0;0.45;0.55;1" dur="5s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+
+    <!-- Progress -->
+    <g transform="translate(380, 13)">
+      <rect width="180" height="6" rx="3" fill="#1f2937"/>
+      <rect height="6" rx="3" fill="url(#primary)">
+        <animate attributeName="width" values="0;180;0" dur="3s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+  </g>
+
+  <!-- Row 3: text field + dropdown -->
+  <g transform="translate(40, 190)">
+    <!-- TextField -->
+    <g>
+      <rect width="260" height="36" rx="8" fill="#111827" stroke="#1f2937"/>
+      <text x="14" y="23" font-family="Inter, sans-serif" font-size="13" fill="#e2e8f0">
+        type here
+        <animate attributeName="opacity" values="1;0;1" dur="1.5s" repeatCount="indefinite"/>
+      </text>
+      <!-- caret -->
+      <rect x="90" y="9" width="2" height="18" fill="#38bdf8">
+        <animate attributeName="opacity" values="1;1;0;0;1" keyTimes="0;0.5;0.5;1;1" dur="1.2s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+
+    <!-- Dropdown -->
+    <g transform="translate(280, 0)">
+      <rect width="200" height="36" rx="8" fill="#161f33" stroke="#1f2937"/>
+      <text x="14" y="23" font-family="Inter, sans-serif" font-size="13" fill="#e2e8f0">Choose…</text>
+      <path d="M 178 14 l 6 6 l 6 -6" stroke="#94a3b8" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+
+    <!-- Tag/Badge -->
+    <g transform="translate(500, 8)">
+      <rect width="60" height="20" rx="10" fill="#22c55e" opacity="0.2"/>
+      <text x="30" y="14" text-anchor="middle" fill="#22c55e" font-family="Inter, sans-serif" font-size="10" font-weight="700" letter-spacing="0.08em">READY</text>
+    </g>
+  </g>
+</svg>

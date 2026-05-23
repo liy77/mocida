@@ -1,1 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="500" zoomAndPan="magnify" viewBox="0 0 375 374.999991" height="500" preserveAspectRatio="xMidYMid meet" version="1.0"><defs><clipPath id="873ac6d26f"><path d="M 0 0 L 328.433594 0 L 328.433594 327.207031 L 0 327.207031 Z M 0 0 " clip-rule="nonzero"/></clipPath><clipPath id="860e3e9cf8"><path d="M 81.140625 85.957031 L 375 85.957031 L 375 375 L 81.140625 375 Z M 81.140625 85.957031 " clip-rule="nonzero"/></clipPath></defs><g clip-path="url(#873ac6d26f)"><path fill="#5271ff" d="M -7.710938 0 L 328.441406 0 L 328.441406 327.207031 L -7.710938 327.207031 Z M -7.710938 0 " fill-opacity="1" fill-rule="nonzero"/></g><g clip-path="url(#860e3e9cf8)"><path fill="#ff3131" d="M 81.140625 85.957031 L 374.695312 85.957031 L 374.695312 375 L 81.140625 375 Z M 81.140625 85.957031 " fill-opacity="1" fill-rule="nonzero"/></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 420" width="420" height="420" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Mocida">
+  <title>Mocida</title>
+  <defs>
+    <!-- Soft outward glow used on both squares. Kept compact so the
+         visible content fills the canvas tightly for icon use. -->
+    <filter id="m-glow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="10" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Tight 50% overlap (Mocida mark). 240px squares sit with ~30px of
+       glow margin to every canvas edge, so the icon doesn't waste
+       space when shrunk to 16/32/48px favicons or window icons. -->
+  <rect x="30"  y="30"  width="240" height="240" rx="32" fill="#5271ff" filter="url(#m-glow)" opacity="0.95"/>
+  <rect x="150" y="150" width="240" height="240" rx="32" fill="#ff3131" filter="url(#m-glow)" opacity="0.95"/>
+</svg>
