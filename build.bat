@@ -16,7 +16,7 @@ echo Mocida Build Script - Debug Mode with Clang
 :: that are not always on the PATH of console windows opened BEFORE the
 :: install ran.
 :: ----------------------------------------------------------------------
-set "PATH=%LocalAppData%\Microsoft\WinGet\Links;C:\Program Files\LLVM\bin;%LocalAppData%\Programs\LLVM\bin;C:\Program Files\CMake\bin;C:\Program Files (x86)\GnuWin32\bin;%PATH%"
+set "PATH=%LocalAppData%\Microsoft\WinGet\Links;C:\Program Files\LLVM\bin;%LocalAppData%\Programs\LLVM\bin;C:\Program Files\CMake\bin;C:\Program Files (x86)\GnuWin32\bin;%ProgramFiles(x86)%\Microsoft Visual Studio\Installer;%PATH%"
 
 :: ----------------------------------------------------------------------
 :: Make sure MSVC's headers / libs / RC compiler are on the environment.

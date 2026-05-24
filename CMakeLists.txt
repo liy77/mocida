@@ -20,6 +20,20 @@ endif()
 # Vendored dependencies. The flags below MUST be set before
 # add_subdirectory so that SDL_image / SDL_ttf use their bundled libs
 # (libpng, freetype, etc.) instead of looking for them in the system.
+#
+# Note on static linking: ideally a static `mocida` build would also
+# bundle SDL3 / SDL_image / SDL_ttf into the final exe so users only
+# distribute one file. In practice the SDL3 ecosystem expects the
+# `SDL3::SDL3` shared alias to be present whenever SDL_image or
+# SDL_ttf are added as in-tree subdirs (their find_package(SDL3)
+# resolves through it), so flipping SDL_STATIC=ON breaks the SDL_image
+# / SDL_ttf configure step with "Could not find a package
+# configuration file provided by SDL3".
+#
+# Until we wire a custom SDL3_DIR / SDL3_INCLUDE_DIRS / SDL3_LIBRARIES
+# bridge, SDL3* always ship as DLLs alongside the exe. mocida_add_executable
+# is already future-proofed: it inspects the SDL target type and only
+# copies a DLL when one was actually produced.
 # ----------------------------------------------------------------------
 set(SDLTTF_VENDORED ON CACHE BOOL "" FORCE)
 set(SDLTTF_SAMPLES OFF CACHE BOOL "" FORCE)
@@ -109,6 +123,23 @@ target_include_directories(mocida PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/headers
 )
 
+# Note on the DLL situation: SDL3, SDL3_image and SDL3_ttf are always
+# built as shared libs from this tree, even in the MOCIDA_BUILD_SHARED=OFF
+# (static-mocida) path. The SDL3_image / SDL3_ttf CMakeLists insist on
+# the SDL3 shared alias being available for their find_package(SDL3),
+# and they export INTERFACE_SDL3_SHARED=ON through their public link
+# interface — linking mocida against SDL3-static while SDL3_image still
+# wants SDL3-shared makes CMake's generate step refuse the combination
+# with "INTERFACE_SDL3_SHARED ... does not agree".
+#
+# In practice this means: a static mocida.lib still ships next to
+# SDL3.dll / SDL3_image.dll / SDL3_ttf.dll / WebView2Loader.dll. Only
+# mocida's own code is baked into the consumer .exe. Bundling SDL into
+# the exe too is a future item that would require either:
+#   - switching the vcpkg triplet to x64-windows-static and rebuilding
+#     SDL_image / SDL_ttf with their static loaders, or
+#   - patching SDL_image / SDL_ttf to expose SDL3_image-static /
+#     SDL3_ttf-static targets compatible with SDL3-static.
 target_link_libraries(mocida PUBLIC
     SDL3::SDL3
     SDL3_image::SDL3_image
@@ -194,15 +225,29 @@ function(mocida_add_executable target_name source_file)
     target_link_libraries(${target_name} PRIVATE mocida)
 
     if(WIN32)
+        # Only copy SDL3*.dll alongside the exe when those targets were
+        # actually built as shared libraries. In the default static
+        # build (MOCIDA_BUILD_SHARED=OFF) they are STATIC archives
+        # linked directly into the exe and there is no DLL to copy —
+        # any attempt would emit a CMake error about missing
+        # TARGET_FILE for a static archive.
         foreach(dep SDL3 SDL3_ttf SDL3_image)
-            add_custom_command(TARGET ${target_name} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    $<TARGET_FILE:${dep}::${dep}>
-                    $<TARGET_FILE_DIR:${target_name}>
-            )
+            if(TARGET ${dep}::${dep})
+                get_target_property(_deptype ${dep}::${dep} TYPE)
+                if(_deptype STREQUAL "SHARED_LIBRARY")
+                    add_custom_command(TARGET ${target_name} POST_BUILD
+                        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                            $<TARGET_FILE:${dep}::${dep}>
+                            $<TARGET_FILE_DIR:${target_name}>
+                    )
+                endif()
+            endif()
         endforeach()
-        # WebView2Loader.dll lives in vcpkg's bin/. Copy it next to the
-        # exe so loading it doesn't require setting PATH.
+        # WebView2Loader.dll + libcurl.dll come from vcpkg's
+        # x64-windows triplet (DLLs). They have to be copied next to
+        # the exe regardless of how mocida is built; switching them
+        # to fully-static would require swapping the vcpkg triplet to
+        # x64-windows-static and rebuilding the world.
         if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-windows/bin/WebView2Loader.dll")
             add_custom_command(TARGET ${target_name} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -258,6 +303,40 @@ if(MOCIDA_BUILD_TESTS)
         mocida_add_executable(${test_name} ${test_src})
     endforeach()
     message(STATUS "Mocida: building tests (${CMAKE_CURRENT_SOURCE_DIR}/tests/test_*.c)")
+endif()
+
+# ----------------------------------------------------------------------
+# Optional GUI installer (installer/installer.c). The installer itself
+# is a Mocida app — it ships the headers + DLLs from this build dir to
+# a user-chosen target folder and publishes MOCIDA_INCLUDE_DIR /
+# MOCIDA_LIB_DIR / PATH via the Windows registry.
+#
+# Requires MOCIDA_BUILD_SHARED=ON because the payload it distributes is
+# mocida.dll plus the import .lib.
+# ----------------------------------------------------------------------
+option(MOCIDA_BUILD_INSTALLER "Build the GUI installer (installer/installer.c)" OFF)
+if(MOCIDA_BUILD_INSTALLER)
+    if(NOT MOCIDA_BUILD_SHARED)
+        message(FATAL_ERROR
+            "MOCIDA_BUILD_INSTALLER requires MOCIDA_BUILD_SHARED=ON — the installer "
+            "ships mocida.dll, so it has to be built as a DLL.")
+    endif()
+    mocida_add_executable(mocida_installer installer/installer.c)
+    if(WIN32)
+        # shlwapi: StrStrIA (case-insensitive substring for PATH probing).
+        # advapi32: registry APIs (HKLM/HKCU\\Environment).
+        # user32:   SendMessageTimeoutA (WM_SETTINGCHANGE broadcast).
+        target_link_libraries(mocida_installer PRIVATE shlwapi advapi32 user32)
+    endif()
+
+    # Stage the public headers next to the installer.exe so they form
+    # part of the payload it copies at install time.
+    add_custom_command(TARGET mocida_installer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/headers
+            $<TARGET_FILE_DIR:mocida_installer>/include
+        COMMENT "Staging Mocida headers next to the installer"
+    )
 endif()
 
 # ----------------------------------------------------------------------
