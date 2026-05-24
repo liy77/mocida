@@ -357,7 +357,95 @@ static void mocida_crash_tree_dump(FILE* f, void* user) {
     UIChildren_WalkTree(c, 0, mocida_crash_visit, f);
 }
 
+// --------------------------------------------------------------------
+// Console window control (Windows). Mocida apps link as the GUI
+// subsystem (via WIN32_EXECUTABLE TRUE in CMake), so no console is
+// allocated at process start. In Debug builds we attach one at
+// runtime so logs are visible; the user can opt out with the
+// MOCIDA_NO_CONSOLE env var or by calling UIApp_HideConsole().
+// --------------------------------------------------------------------
+#ifdef _WIN32
+static int g_consoleOwned = 0;   /* 1 if Mocida itself allocated the console */
+
+/* Turn on ANSI escape processing on the freshly-attached console so
+ * the debug subsystem's coloured log output ("\033[32mINFO\033[0m"
+ * etc.) renders as actual colours instead of literal `←[32m` glyphs.
+ * Available since Windows 10 build 16257; older builds silently
+ * ignore the flag and just print uncoloured text — acceptable. */
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+#ifndef DISABLE_NEWLINE_AUTO_RETURN
+#define DISABLE_NEWLINE_AUTO_RETURN        0x0008
+#endif
+
+static void EnableVTProcessing(void) {
+    HANDLE handles[2] = { GetStdHandle(STD_OUTPUT_HANDLE),
+                          GetStdHandle(STD_ERROR_HANDLE) };
+    for (int i = 0; i < 2; i++) {
+        HANDLE h = handles[i];
+        if (h == INVALID_HANDLE_VALUE || h == NULL) continue;
+        DWORD mode = 0;
+        if (GetConsoleMode(h, &mode)) {
+            SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING
+                                  | DISABLE_NEWLINE_AUTO_RETURN);
+        }
+    }
+}
+
+void UIApp_EnableConsole(void) {
+    HWND existing = GetConsoleWindow();
+    if (existing) {
+        ShowWindow(existing, SW_SHOW);
+        EnableVTProcessing();
+        return;
+    }
+    if (AllocConsole()) {
+        FILE* f = NULL;
+        freopen_s(&f, "CONOUT$", "w", stdout);
+        freopen_s(&f, "CONOUT$", "w", stderr);
+        freopen_s(&f, "CONIN$",  "r", stdin);
+        g_consoleOwned = 1;
+        EnableVTProcessing();
+    }
+}
+
+void UIApp_HideConsole(void) {
+    HWND h = GetConsoleWindow();
+    if (h) ShowWindow(h, SW_HIDE);
+}
+
+int UIApp_IsConsoleVisible(void) {
+    HWND h = GetConsoleWindow();
+    return (h && IsWindowVisible(h)) ? 1 : 0;
+}
+
+/* Called by UIApp_Create — auto-attach in debug unless opted out. */
+static void EnsureDebugConsole(void) {
+#ifdef MOCIDA_DEBUG
+    /* Already running under a console (launched from cmd / Windows
+     * Terminal etc.) — leave it alone, the process inherits stdio. */
+    if (GetConsoleWindow() != NULL) return;
+
+    /* MOCIDA_NO_CONSOLE=1 / true silences the auto-allocate. */
+    const char* opt = getenv("MOCIDA_NO_CONSOLE");
+    if (opt && *opt && opt[0] != '0' && opt[0] != 'f' && opt[0] != 'F') return;
+
+    UIApp_EnableConsole();
+#endif
+}
+#else
+void UIApp_EnableConsole    (void) { /* no-op outside Windows */ }
+void UIApp_HideConsole      (void) { /* no-op outside Windows */ }
+int  UIApp_IsConsoleVisible (void) { return 0; }
+static void EnsureDebugConsole(void) { /* no-op */ }
+#endif
+
 UIApp* UIApp_Create(const char* title, int width, int height) {
+    /* Debug-only console attach. No-op in release (no logs to see
+     * anyway; the WIN32 subsystem suppressed any auto-console). */
+    EnsureDebugConsole();
+
     /* Crash handler first — anything that explodes after this point
      * (including the debug subsystem) gets caught. */
     UICrash_Install();

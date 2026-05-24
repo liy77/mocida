@@ -62,7 +62,11 @@ UIText* UIText_SetFontStyle(UIText* text, int fontStyle) {
         return NULL;
     }
 
+    if (text->fontStyle == fontStyle) return text;
     text->fontStyle = fontStyle;
+    // The cached glyph texture was baked at the previous style — drop
+    // it so the next render reruns TTF_SetFontStyle and rebuilds.
+    UIText_DestroyTexture(text);
     return text;
 }
 

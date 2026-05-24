@@ -32,6 +32,7 @@ struct UITextField {
     int      placeholderAnimated; /**< 1 makes the placeholder gently pulse opacity while the field is unfocused. */
     char*    fontFamily;       /**< Heap-owned font path (.ttf / .otf). */
     float    fontSize;         /**< Font size in points. */
+    int      fontStyle;        /**< Bitmask of FontStyle flags (Bold | Italic | Underline | Strikethrough). */
     UIColor  textColor;        /**< Glyph color. */
     UIColor  placeholderColor; /**< Placeholder glyph color. */
     UIColor  caretColor;       /**< Caret bar color. */
@@ -97,6 +98,12 @@ UITextField* UITextField_SetPlaceholderAnimated(UITextField* tf, int yes);
 UITextField* UITextField_SetCaretBlinkRate(UITextField* tf, int halfPeriodMs);
 UITextField* UITextField_SetFontFamily(UITextField* tf, char* family);
 UITextField* UITextField_SetFontSize (UITextField* tf, float size);
+
+/**
+ * Sets the font style as a bitmask of FontStyle flags. Invalidates the
+ * cached text texture so the change takes effect on the next render.
+ */
+UITextField* UITextField_SetFontStyle(UITextField* tf, int fontStyle);
 UITextField* UITextField_SetPassword (UITextField* tf, int yes);
 UITextField* UITextField_SetMaxLength(UITextField* tf, int maxLen);
 UITextField* UITextField_SetSelectionColor(UITextField* tf, UIColor color);

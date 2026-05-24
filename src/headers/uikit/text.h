@@ -11,16 +11,27 @@
 #include <stdio.h>
 
 /**
- * Font styles for text rendering.
- * These styles can be combined using bitwise OR.
- * Normal is the default style.
- * Bold, Italic, and Underscore can be combined with Normal.
+ * Font styles for text rendering. Bitmask — combine flags with `|`.
+ *
+ *     UIText_SetFontStyle(label, Bold | Italic);
+ *
+ * The bit values intentionally mirror SDL_ttf's TTF_STYLE_* constants
+ * so the renderer can pass them through directly:
+ *
+ *     Bold          == TTF_STYLE_BOLD
+ *     Italic        == TTF_STYLE_ITALIC
+ *     Underscore    == TTF_STYLE_UNDERLINE   (alias: Underline)
+ *     Strikethrough == TTF_STYLE_STRIKETHROUGH
+ *
+ * Applies to: UIText, UIButton (via the label), UITextField, UITextArea.
  */
 typedef enum FontStyle {
-    Normal = 0,
-    Bold = 1 << 0,
-    Italic = 1 << 1,
-    Underscore = 1 << 2
+    Normal        = 0,
+    Bold          = 1 << 0,
+    Italic        = 1 << 1,
+    Underscore    = 1 << 2,
+    Underline     = 1 << 2, /**< Alias for Underscore — more conventional name. */
+    Strikethrough = 1 << 3
 } FontStyle;
 
 /**

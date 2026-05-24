@@ -92,6 +92,12 @@ UIButton* UIButton_SetFontSize(UIButton* btn, float size) {
     return btn;
 }
 
+UIButton* UIButton_SetFontStyle(UIButton* btn, int fontStyle) {
+    if (!btn || !btn->label) return btn;
+    UIText_SetFontStyle(btn->label, fontStyle);
+    return btn;
+}
+
 UIButton* UIButton_SetRadius(UIButton* btn, float radius) {
     if (!btn) return btn;
     UIRectangle_SetRadius(btn->background, radius);

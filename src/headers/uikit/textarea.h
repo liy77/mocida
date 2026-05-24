@@ -44,6 +44,7 @@ struct UITextArea {
     int      placeholderAnimated; /**< 1 makes the placeholder gently pulse opacity while the area is unfocused. */
     char*    fontFamily;       /**< Heap-owned font path (.ttf / .otf). */
     float    fontSize;         /**< Font size in points. */
+    int      fontStyle;        /**< Bitmask of FontStyle flags (Bold | Italic | Underline | Strikethrough). */
     UIColor  textColor;        /**< Glyph color. */
     UIColor  placeholderColor; /**< Placeholder glyph color. */
     UIColor  caretColor;       /**< Caret bar color. */
@@ -130,6 +131,13 @@ UITextArea* UITextArea_SetPaddingTop   (UITextArea* ta, float v);
 UITextArea* UITextArea_SetPaddingBottom(UITextArea* ta, float v);
 UITextArea* UITextArea_SetSelectionColor(UITextArea* ta, UIColor color);
 UITextArea* UITextArea_SetFontSize   (UITextArea* ta, float size);
+
+/**
+ * Sets the font style as a bitmask of FontStyle flags. Invalidates the
+ * per-line glyph cache so the change is picked up on the next render.
+ */
+UITextArea* UITextArea_SetFontStyle  (UITextArea* ta, int fontStyle);
+
 UITextArea* UITextArea_SetCursor     (UITextArea* ta, UICursor cursor);
 UITextArea* UITextArea_SetWrapMode   (UITextArea* ta, UIWrapMode mode);
 UITextArea* UITextArea_OnChange      (UITextArea* ta, UITextAreaChangedCallback cb, void* userdata);

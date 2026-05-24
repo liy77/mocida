@@ -168,6 +168,15 @@ UITextField* UITextField_SetFontSize(UITextField* tf, float size) {
     return tf;
 }
 
+UITextField* UITextField_SetFontStyle(UITextField* tf, int fontStyle) {
+    if (!tf) return tf;
+    if (tf->fontStyle != fontStyle) {
+        tf->fontStyle = fontStyle;
+        DropTextTexture(tf);
+    }
+    return tf;
+}
+
 UITextField* UITextField_SetBgColor(UITextField* tf, UIColor color) {
     if (tf) tf->bgColor = color;
     return tf;

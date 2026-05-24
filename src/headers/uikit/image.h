@@ -99,6 +99,28 @@ UIImage* UIImage_Create(const char* source, int animated, int nineSlice,
 UIImage* UIImage_LoadSource(const char* source, int animated);
 
 /**
+ * Creates a UIImage from an in-memory byte buffer (PNG, JPG, SVG, ...).
+ * Used to embed assets directly in the binary so they don't have to
+ * ship as files alongside the .exe.
+ *
+ * The texture is created **eagerly** from `renderer` — pass the active
+ * SDL renderer (e.g. `app->window->sdlRenderer`). Unlike UIImage_Create
+ * which lazy-loads at first render, this constructor needs the renderer
+ * up front because there is no source path to retry on later frames.
+ *
+ * @param renderer Active SDL renderer.
+ * @param data     Pointer to the raw image bytes.
+ * @param size     Number of bytes at `data`.
+ * @param fillMode Fill strategy (see UIFillMode).
+ * @param tintColor Tint applied via SDL_SetTextureColorMod
+ *                  (UI_COLOR_TRANSPARENT disables tinting).
+ * @return UIImage with the texture pre-populated, or NULL on failure.
+ */
+UIImage* UIImage_FromMemory(SDL_Renderer* renderer,
+                            const void* data, size_t size,
+                            UIFillMode fillMode, UIColor tintColor);
+
+/**
  * Releases all resources of a UIImage: the SDL texture (if loaded) and
  * the source string. nineSliceMargins is NOT freed (borrowed pointer).
  *

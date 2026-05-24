@@ -31,4 +31,16 @@ SDL_Texture* UIAsset_LoadTexture(SDL_Renderer* renderer, const char* path);
  */
 SDL_Surface* UIAsset_LoadSurface(const char* path);
 
+/**
+ * Decodes an image from an in-memory byte buffer (PNG, JPG, BMP, GIF,
+ * WEBP, SVG — anything SDL_image accepts). Useful for embedding
+ * assets directly inside the executable so they don't ship as files.
+ *
+ * @param data Pointer to the raw image bytes.
+ * @param size Number of bytes at `data`.
+ * @return Newly-allocated SDL_Surface (caller-owned, free with
+ *         SDL_DestroySurface), or NULL on decode failure.
+ */
+SDL_Surface* UIAsset_LoadSurfaceFromMemory(const void* data, size_t size);
+
 #endif // UIKIT_ASSET_H

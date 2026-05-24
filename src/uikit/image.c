@@ -1,4 +1,5 @@
 #include <uikit/image.h>
+#include <uikit/asset.h>
 #include <uikit/debug.h>
 
 UIImage* UIImage_Create(const char* source, int animated, int nineSlice,
@@ -36,6 +37,40 @@ UIImage* UIImage_LoadSource(const char* source, int animated) {
     }
 
     UIImage* image = UIImage_Create(source, animated, 0, NULL, FILL_NONE, UI_COLOR_TRANSPARENT);
+    return image;
+}
+
+UIImage* UIImage_FromMemory(SDL_Renderer* renderer,
+                            const void* data, size_t size,
+                            UIFillMode fillMode, UIColor tintColor) {
+    if (!renderer || !data || size == 0) {
+        UI_WARN(UI_CAT_IMAGE,
+                "UIImage_FromMemory: invalid args (renderer=%p data=%p size=%zu)",
+                (void*)renderer, data, size);
+        return NULL;
+    }
+    SDL_Surface* surf = UIAsset_LoadSurfaceFromMemory(data, size);
+    if (!surf) return NULL;
+    SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
+    SDL_DestroySurface(surf);
+    if (!tex) {
+        UI_ERROR(UI_CAT_IMAGE,
+                 "UIImage_FromMemory: SDL_CreateTextureFromSurface failed: %s",
+                 SDL_GetError());
+        return NULL;
+    }
+    SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
+
+    // Empty source string keeps the renderer's lazy-load path from
+    // trying to reload it from disk (it short-circuits when
+    // __SDL_texture is already set, but better to be explicit).
+    UIImage* image = UIImage_Create("", 0, 0, NULL, fillMode, tintColor);
+    if (!image) {
+        SDL_DestroyTexture(tex);
+        return NULL;
+    }
+    image->__SDL_texture = tex;
+    image->loadState     = IMAGE_LOAD_SUCCESS;
     return image;
 }
 

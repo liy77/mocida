@@ -294,6 +294,21 @@ void UIApp_SetEventCallback(UIApp* app, UI_EVENT event, UIEventCallback callback
 void UIApp_OnResize(UIApp* app, UIAppResizeCallback cb, void* userdata);
 
 /**
+ * Console window control (Windows only). Mocida apps link as the
+ * GUI subsystem, so no console window appears by default. In Debug
+ * builds (MOCIDA_DEBUG defined) UIApp_Create automatically allocates
+ * a console at startup so logs are visible — you can suppress that by
+ * setting the env var MOCIDA_NO_CONSOLE=1 before launching, or by
+ * calling UIApp_HideConsole() right after UIApp_Create.
+ *
+ * In Release builds no console is allocated and these calls are
+ * no-ops; the logs simply have nowhere to go.
+ */
+void UIApp_EnableConsole(void);
+void UIApp_HideConsole  (void);
+int  UIApp_IsConsoleVisible(void);
+
+/**
  * Declares this process's AppUserModelID (AUMID). Windows uses it as
  * the app identity for taskbar pinning, jump lists, and crucially
  * Task Manager grouping. Without it, WebView2's child processes show

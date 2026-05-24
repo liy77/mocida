@@ -1002,6 +1002,131 @@ static void DrawDropShadow(SDL_Renderer* renderer, SDL_FRect rect,
 // The unified flow works for any radius (including r ~ min(w,h)/2, i.e.
 // a pill / perfect circle). For radius 0 it collapses to a single
 // RenderFillRect.
+// --------------------------------------------------------------------
+// CPU-rasterised rotated rounded rectangle with analytic coverage AA.
+//
+// Why this exists: rendering the rect upright into an offscreen target
+// and then SDL_RenderTextureRotated'ing it produces visible diagonal
+// stair-stepping on the rounded corners — bilinear filtering can't
+// reconstruct sharp edges that fall on sub-pixel positions. Bumping
+// the supersample factor helps a little but the fundamental issue is
+// the sampling, not the source resolution.
+//
+// This function computes coverage directly in SCREEN space. For each
+// output pixel it inverse-rotates the pixel centre back into the
+// rect's local frame, evaluates the rounded-rect signed distance, and
+// derives ~1px feathered alpha from it. The result is uploaded as a
+// flat ARGB texture and blit 1:1 — no rotation at sample time, so
+// every angle looks identical in quality.
+//
+// Cost: ~50 ns/pixel inside the rotated bounding box. A 40×40 rect
+// at ~7° rotation works out to ~56×56 = ~3 K pixels = ~150 µs per
+// frame, per rect. Comfortable for the typical handful of rotated
+// rects an app has on screen.
+// --------------------------------------------------------------------
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+void DrawRotatedRoundedRectFill(SDL_Renderer* rend,
+                                SDL_FRect rect,
+                                float angleDeg,
+                                float radius,
+                                UIColor color) {
+    if (!rend || rect.w <= 0.0f || rect.h <= 0.0f) return;
+    if (radius < 0.0f) radius = 0.0f;
+    float halfW = rect.w * 0.5f;
+    float halfH = rect.h * 0.5f;
+    if (radius > halfW) radius = halfW;
+    if (radius > halfH) radius = halfH;
+
+    const float cx = rect.x + halfW;
+    const float cy = rect.y + halfH;
+
+    // Inverse rotation matrix (screen → local). Pre-compute once.
+    const float aRad = -angleDeg * (float)(M_PI / 180.0);
+    const float cosA = cosf(aRad);
+    const float sinA = sinf(aRad);
+
+    // Half extents of the inner (corner-radius-shrunk) rect — the SDF
+    // for a rounded rect is the SDF of this smaller rect minus radius.
+    const float hw = halfW - radius;
+    const float hh = halfH - radius;
+
+    // Axis-aligned screen bounding box of the rotated rect, padded by
+    // 1 px on every side to leave room for the AA falloff.
+    const float ang = angleDeg * (float)(M_PI / 180.0);
+    const float absC = fabsf(cosf(ang));
+    const float absS = fabsf(sinf(ang));
+    const float bboxHW = halfW * absC + halfH * absS + 1.0f;
+    const float bboxHH = halfW * absS + halfH * absC + 1.0f;
+
+    const int x0 = (int)floorf(cx - bboxHW) - 1;
+    const int y0 = (int)floorf(cy - bboxHH) - 1;
+    const int x1 = (int)ceilf (cx + bboxHW) + 1;
+    const int y1 = (int)ceilf (cy + bboxHH) + 1;
+    const int W = x1 - x0 + 1;
+    const int H = y1 - y0 + 1;
+    if (W <= 0 || H <= 0) return;
+
+    Uint32* pixels = (Uint32*)malloc((size_t)W * (size_t)H * sizeof(Uint32));
+    if (!pixels) return;
+
+    const Uint8 fR = (Uint8)color.r;
+    const Uint8 fG = (Uint8)color.g;
+    const Uint8 fB = (Uint8)color.b;
+    const float fA = color.a;
+
+    for (int py = 0; py < H; py++) {
+        // Distance from the rect's centre, fixed for this row.
+        const float dy0 = (float)(y0 + py) + 0.5f - cy;
+        Uint32* row = pixels + (size_t)py * (size_t)W;
+        for (int px = 0; px < W; px++) {
+            const float dx = (float)(x0 + px) + 0.5f - cx;
+
+            // Inverse rotation → local coords of the unrotated rect.
+            const float lx = dx * cosA - dy0 * sinA;
+            const float ly = dx * sinA + dy0 * cosA;
+
+            // Signed distance to the rounded rectangle:
+            //   sdf = length(max(|p| - inner, 0)) + min(max(qx,qy),0) - r
+            const float qx = fabsf(lx) - hw;
+            const float qy = fabsf(ly) - hh;
+            const float ax = qx > 0.0f ? qx : 0.0f;
+            const float ay = qy > 0.0f ? qy : 0.0f;
+            const float outDist = sqrtf(ax * ax + ay * ay);
+            const float qmax    = qx > qy ? qx : qy;
+            const float inDist  = qmax < 0.0f ? qmax : 0.0f;
+            const float sdf     = outDist + inDist - radius;
+
+            // ~1 px feather: sdf <= -0.5 = fully inside (cov=1),
+            // sdf >= 0.5 = fully outside (cov=0), linear in between.
+            float cov;
+            if      (sdf <= -0.5f) cov = 1.0f;
+            else if (sdf >=  0.5f) cov = 0.0f;
+            else                   cov = 0.5f - sdf;
+
+            const Uint8 a = (Uint8)(fA * 255.0f * cov + 0.5f);
+            row[px] = ((Uint32)a << 24) |
+                      ((Uint32)fR << 16) |
+                      ((Uint32)fG <<  8) |
+                      ((Uint32)fB);
+        }
+    }
+
+    SDL_Texture* tex = SDL_CreateTexture(rend, SDL_PIXELFORMAT_ARGB8888,
+                                         SDL_TEXTUREACCESS_STATIC, W, H);
+    if (tex) {
+        SDL_UpdateTexture(tex, NULL, pixels, W * (int)sizeof(Uint32));
+        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
+        SDL_FRect dst = { (float)x0, (float)y0, (float)W, (float)H };
+        SDL_RenderTexture(rend, tex, NULL, &dst);
+        SDL_DestroyTexture(tex);
+    }
+    free(pixels);
+}
+
 void DrawRoundedRectFill(SDL_Renderer* rend, SDL_FRect rect, UIColor color, float radius) {
     if (!rend || rect.w <= 0.0f || rect.h <= 0.0f) return;
 
@@ -1380,6 +1505,10 @@ static void RenderSingleWidget(UIWindow* window, UIWidget* el) {
         const float tabW = W / (float)tv->tabCount;
         TTF_Font* font = (tv->fontFamily && tv->fontSize > 0.0f)
             ? GetFont(tv->fontFamily, tv->fontSize) : NULL;
+        // Cached fonts are shared across all widgets — reset the style
+        // bits so a Bold/Italic UIText rendered earlier doesn't leak
+        // into these labels (TabView has no fontStyle field).
+        if (font) TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
 
         for (int i = 0; i < tv->tabCount; i++) {
             SDL_FRect h = { el->x + i * tabW, el->y, tabW, headerH };
@@ -1447,6 +1576,33 @@ static void RenderSingleWidget(UIWindow* window, UIWidget* el) {
             DrawDropShadow(window->sdlRenderer, g_tempRect1, rect->radius, sh);
         }
         if (g_tempRect1.w > 0 && g_tempRect1.h > 0) {
+            // Rotated path: render the rect's shape into an offscreen
+            // target at 4× resolution, then RenderTextureRotated it onto
+            // the final destination. The 4× supersample + the linear
+            // downsample during the rotated blit gives ~16:1 effective
+            // AA per output pixel, enough to kill the diagonal stair-
+            // step ("serrilhado") that even 2× still showed on the
+            // rounded corners at the small rotation angles the logo
+            // uses. Shadows are drawn upright by the call above — the
+            // rect rotates over them.
+            if (el->rotation != 0.0f) {
+                // Rasterise the rotated rect with analytic per-pixel
+                // coverage AA at the screen resolution. This avoids
+                // the bilinear-sampling stair-step on the rounded
+                // corners that texture rotation produces at small
+                // angles. Border in rotation mode isn't supported yet
+                // — fall back to the unrotated path if one is set.
+                if (rect->borderWidth <= 0.0f) {
+                    DrawRotatedRoundedRectFill(window->sdlRenderer,
+                                               g_tempRect1,
+                                               el->rotation,
+                                               rect->radius,
+                                               fillC);
+                    return;
+                }
+                // Borderless fallback: draw upright if the caller
+                // really did want a border + rotation.
+            }
             if (fabsf(g_tempRect1.w - g_tempRect1.h) < 0.5f &&
                 fabsf(rect->radius - g_tempRect1.w/2) < 0.5f) {
                 float centerX = g_tempRect1.x + g_tempRect1.w/2;
@@ -1499,6 +1655,9 @@ static void RenderSingleWidget(UIWindow* window, UIWidget* el) {
             TTF_Font *font = GetFont(twid->fontFamily, twid->fontSize);
             if (!font) return;
             TTF_SetFontHinting(font, TTF_HINTING_NORMAL);
+            // Apply the widget's bold/italic/underline/strike bitmask.
+            // The FontStyle enum bit values mirror TTF_STYLE_* exactly.
+            TTF_SetFontStyle(font, (TTF_FontStyleFlags)twid->fontStyle);
 
             const int needRebuild =
                 twid->__cachedTextLen  != twid->textLength ||
@@ -1773,6 +1932,7 @@ static void RenderSingleWidget(UIWindow* window, UIWidget* el) {
             TTF_Font *font = GetFont(twid->fontFamily, twid->fontSize);
             if (font) {
                 TTF_SetFontHinting(font, TTF_HINTING_NORMAL);
+                TTF_SetFontStyle(font, (TTF_FontStyleFlags)twid->fontStyle);
                 SDL_Color sc = {(Uint8)twid->color.r,
                                 (Uint8)twid->color.g,
                                 (Uint8)twid->color.b,
@@ -1964,6 +2124,7 @@ static void RenderSingleWidget(UIWindow* window, UIWidget* el) {
                 TTF_Font* font = GetFont(btn->label->fontFamily, btn->label->fontSize);
                 if (font) {
                     TTF_SetFontHinting(font, TTF_HINTING_NORMAL);
+                    TTF_SetFontStyle(font, (TTF_FontStyleFlags)btn->label->fontStyle);
                     const SDL_Color white = {255, 255, 255, 255};
                     SDL_Surface* surf = TTF_RenderText_Blended(
                         font, btn->label->text, btn->label->textLength, white);
@@ -1985,8 +2146,33 @@ static void RenderSingleWidget(UIWindow* window, UIWidget* el) {
                 float txw = 0.0f, txh = 0.0f;
                 SDL_GetTextureSize(btn->label->__SDL_textTexture, &txw, &txh);
                 const float pressOffset = (btn->state == UI_BUTTON_STATE_PRESSED) ? 1.0f : 0.0f;
-                g_tempRect2.x = g_tempRect1.x + (g_tempRect1.w - txw) * 0.5f;
-                g_tempRect2.y = g_tempRect1.y + (g_tempRect1.h - txh) * 0.5f + pressOffset;
+
+                // Optical centring: SDL_ttf surfaces are ascent + descent
+                // tall regardless of which glyphs are in them, so a
+                // string like "Browse..." (no descenders) leaves an
+                // empty band at the bottom of the bbox. Geometric centre
+                // of the bbox therefore sits below the visual centre of
+                // the ink — the text reads as drifting low. We pull it
+                // back up by |descent|/2 to align the optical centre
+                // with the button's vertical middle.
+                float opticalShift = 0.0f;
+                {
+                    TTF_Font* metricFont = GetFont(btn->label->fontFamily,
+                                                   btn->label->fontSize);
+                    if (metricFont) {
+                        int descent = TTF_GetFontDescent(metricFont); // negative
+                        if (descent < 0) opticalShift = (float)(-descent) * 0.5f;
+                    }
+                }
+
+                // Snap to the integer pixel grid. Centring an odd-width
+                // glyph block in an even-width button lands the text on
+                // a half-pixel, and LINEAR sampling then softens every
+                // glyph. floor(... + 0.5) rounds to nearest int so the
+                // blit is pixel-perfect regardless of widths.
+                g_tempRect2.x = floorf(g_tempRect1.x + (g_tempRect1.w - txw) * 0.5f + 0.5f);
+                g_tempRect2.y = floorf(g_tempRect1.y + (g_tempRect1.h - txh) * 0.5f
+                                       - opticalShift + pressOffset + 0.5f);
                 g_tempRect2.w = txw;
                 g_tempRect2.h = txh;
                 if (el->rotation != 0.0f) {
@@ -2470,6 +2656,7 @@ static void RenderSingleWidget(UIWindow* window, UIWidget* el) {
         if (fd->prompt && *fd->prompt && fd->fontFamily) {
             TTF_Font* font = GetFont(fd->fontFamily, fd->fontSize);
             if (font) {
+                TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
                 UIColor tc = fd->textColor; tc.a *= op;
                 SDL_Color sc = {(Uint8)tc.r,(Uint8)tc.g,(Uint8)tc.b,
                                 (Uint8)SDL_clamp((int)(tc.a*255.0f),0,255)};
@@ -2704,6 +2891,9 @@ static void RenderSingleWidget(UIWindow* window, UIWidget* el) {
 
         TTF_Font* font = (tf->fontFamily && tf->fontSize > 0.0f)
             ? GetFont(tf->fontFamily, tf->fontSize) : NULL;
+        if (font) {
+            TTF_SetFontStyle(font, (TTF_FontStyleFlags)tf->fontStyle);
+        }
 
         // Lazily regenerate the text texture when the content changed.
         if (font && (!tf->__SDL_textTexture ||
@@ -2868,6 +3058,7 @@ static void RenderSingleWidget(UIWindow* window, UIWidget* el) {
         TTF_Font* font = (ta->fontFamily && ta->fontSize > 0.0f)
             ? GetFont(ta->fontFamily, ta->fontSize) : NULL;
         if (!font) return;
+        TTF_SetFontStyle(font, (TTF_FontStyleFlags)ta->fontStyle);
 
         const int showPlaceholder = (ta->textLen == 0 && ta->placeholder);
         const float lineH = ta->fontSize * ta->lineSpacing;
@@ -3361,6 +3552,7 @@ static void RenderSingleWidget(UIWindow* window, UIWidget* el) {
         TTF_Font* font = (tt->fontFamily && tt->fontSize > 0.0f)
             ? GetFont(tt->fontFamily, tt->fontSize) : NULL;
         if (!font) return;
+        TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
 
         const int textLen = (int)strlen(tt->text);
         if (!tt->__SDL_textTexture || tt->__cachedTextLen != textLen) {
@@ -3430,6 +3622,7 @@ static void RenderSingleWidget(UIWindow* window, UIWidget* el) {
 
         TTF_Font* font = (m->fontFamily && m->fontSize > 0.0f)
             ? GetFont(m->fontFamily, m->fontSize) : NULL;
+        if (font) TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
 
         for (int i = 0; i < m->itemCount; i++) {
             SDL_FRect itemR = {
@@ -3480,6 +3673,7 @@ static void RenderSingleWidget(UIWindow* window, UIWidget* el) {
 
         TTF_Font* font = (d->fontFamily && d->fontSize > 0.0f)
             ? GetFont(d->fontFamily, d->fontSize) : NULL;
+        if (font) TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
 
         const char* label = (d->selectedIndex >= 0 && d->selectedIndex < d->itemCount)
             ? d->labels[d->selectedIndex] : "(select)";

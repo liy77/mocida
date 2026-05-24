@@ -97,6 +97,14 @@ UIButton* UIButton_SetFontFamily(UIButton* btn, char* family);
 UIButton* UIButton_SetFontSize(UIButton* btn, float size);
 
 /**
+ * Sets the label's font style as a bitmask of FontStyle flags (Bold,
+ * Italic, Underline, Strikethrough). Delegates to the internal UIText
+ * label; invalidates the cached glyph texture so the change takes
+ * effect on the next render.
+ */
+UIButton* UIButton_SetFontStyle(UIButton* btn, int fontStyle);
+
+/**
  * Sets the border radius of the button's background. Rounded corners
  * use the AA circle texture (analytic coverage).
  */

@@ -71,3 +71,24 @@ SDL_Surface* UIAsset_LoadSurface(const char* path) {
              path, count);
     return NULL;
 }
+
+SDL_Surface* UIAsset_LoadSurfaceFromMemory(const void* data, size_t size) {
+    if (!data || size == 0) return NULL;
+    // SDL_IOFromConstMem wraps the buffer; IMG_Load_IO with closeio=true
+    // releases that wrapper once decoding finishes. The buffer itself
+    // belongs to the caller and is never touched.
+    SDL_IOStream* io = SDL_IOFromConstMem(data, size);
+    if (!io) {
+        UI_ERROR(UI_CAT_ASSET,
+                 "UIAsset_LoadSurfaceFromMemory: SDL_IOFromConstMem failed: %s",
+                 SDL_GetError());
+        return NULL;
+    }
+    SDL_Surface* s = IMG_Load_IO(io, true);
+    if (!s) {
+        UI_ERROR(UI_CAT_ASSET,
+                 "UIAsset_LoadSurfaceFromMemory: IMG_Load_IO failed: %s",
+                 SDL_GetError());
+    }
+    return s;
+}

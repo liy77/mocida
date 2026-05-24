@@ -262,6 +262,15 @@ UITextArea* UITextArea_SetFontSize(UITextArea* ta, float size) {
     return ta;
 }
 
+UITextArea* UITextArea_SetFontStyle(UITextArea* ta, int fontStyle) {
+    if (!ta) return ta;
+    if (ta->fontStyle != fontStyle) {
+        ta->fontStyle = fontStyle;
+        InvalidateLineCache(ta);
+    }
+    return ta;
+}
+
 UITextArea* UITextArea_OnChange(UITextArea* ta, UITextAreaChangedCallback cb, void* userdata) {
     if (!ta) return ta;
     ta->onChange = cb;
