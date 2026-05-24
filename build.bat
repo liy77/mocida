@@ -40,26 +40,33 @@ if not defined VCINSTALLDIR (
 
 :: ----------------------------------------------------------------------
 :: Parse args. Flags are independent and order-agnostic:
-::   --clean       drop build/ before configuring
-::   --shared      build mocida as a DLL instead of a static .lib
-::   --tests       also compile every tests/test_*.c into its own .exe
-::   --no-demo     skip building the demo exe
+::   --clean           drop build/ before configuring
+::   --shared          build mocida as a DLL instead of a static .lib
+::   --tests           also compile every tests/test_*.c into its own .exe
+::   --no-demo         skip building the demo exe
+::   --release         optimised build (CMAKE_BUILD_TYPE=Release)
+::   --debug           debug build (default)
+::   --relwithdebinfo  optimised + debug symbols (CMAKE_BUILD_TYPE=RelWithDebInfo)
 :: ----------------------------------------------------------------------
 set "DO_CLEAN=0"
 set "MOCIDA_SHARED=OFF"
 set "MOCIDA_TESTS=OFF"
 set "MOCIDA_DEMO=ON"
+set "BUILD_TYPE=Debug"
 
 :parse_args
 if "%~1"=="" goto :args_done
-if /I "%~1"=="--clean"   (set "DO_CLEAN=1"        & shift & goto :parse_args)
-if /I "%~1"=="--shared"  (set "MOCIDA_SHARED=ON"  & shift & goto :parse_args)
-if /I "%~1"=="--static"  (set "MOCIDA_SHARED=OFF" & shift & goto :parse_args)
-if /I "%~1"=="--tests"   (set "MOCIDA_TESTS=ON"   & shift & goto :parse_args)
-if /I "%~1"=="--no-tests"(set "MOCIDA_TESTS=OFF"  & shift & goto :parse_args)
-if /I "%~1"=="--no-demo" (set "MOCIDA_DEMO=OFF"   & shift & goto :parse_args)
-if /I "%~1"=="-h"        goto :usage
-if /I "%~1"=="--help"    goto :usage
+if /I "%~1"=="--clean"          (set "DO_CLEAN=1"                & shift & goto :parse_args)
+if /I "%~1"=="--shared"         (set "MOCIDA_SHARED=ON"          & shift & goto :parse_args)
+if /I "%~1"=="--static"         (set "MOCIDA_SHARED=OFF"         & shift & goto :parse_args)
+if /I "%~1"=="--tests"          (set "MOCIDA_TESTS=ON"           & shift & goto :parse_args)
+if /I "%~1"=="--no-tests"       (set "MOCIDA_TESTS=OFF"          & shift & goto :parse_args)
+if /I "%~1"=="--no-demo"        (set "MOCIDA_DEMO=OFF"           & shift & goto :parse_args)
+if /I "%~1"=="--release"        (set "BUILD_TYPE=Release"        & shift & goto :parse_args)
+if /I "%~1"=="--debug"          (set "BUILD_TYPE=Debug"          & shift & goto :parse_args)
+if /I "%~1"=="--relwithdebinfo" (set "BUILD_TYPE=RelWithDebInfo" & shift & goto :parse_args)
+if /I "%~1"=="-h"               goto :usage
+if /I "%~1"=="--help"           goto :usage
 echo Unknown argument: %~1
 goto :usage
 
@@ -173,6 +180,7 @@ set "CXX=!CLANGXX_EXE!"
 :: Configure
 :: ----------------------------------------------------------------------
 echo Configuring CMake with Clang...
+echo   CMAKE_BUILD_TYPE    = !BUILD_TYPE!
 echo   MOCIDA_BUILD_SHARED = !MOCIDA_SHARED!
 echo   MOCIDA_BUILD_TESTS  = !MOCIDA_TESTS!
 echo   MOCIDA_BUILD_DEMO   = !MOCIDA_DEMO!
@@ -184,7 +192,7 @@ if defined WV2_DIR (
 )
 cmake -G "!GENERATOR!" ^
     !TOOLCHAIN_ARG! ^
-    -DCMAKE_BUILD_TYPE=Debug ^
+    -DCMAKE_BUILD_TYPE=!BUILD_TYPE! ^
     "-DCMAKE_C_COMPILER=!CLANG_EXE!" ^
     "-DCMAKE_CXX_COMPILER=!CLANGXX_EXE!" ^
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ^
@@ -202,10 +210,11 @@ if %ERRORLEVEL% neq 0 (
 )
 
 :: ----------------------------------------------------------------------
-:: Build (parallel - uses every available core)
+:: Build (parallel - uses every available core). --config matters only
+:: on multi-config generators (e.g. Visual Studio); Ninja ignores it.
 :: ----------------------------------------------------------------------
-echo Building project in Debug mode...
-cmake --build . --parallel
+echo Building project in !BUILD_TYPE! mode...
+cmake --build . --parallel --config !BUILD_TYPE!
 
 if %ERRORLEVEL% neq 0 (
     echo Build failed!
@@ -219,12 +228,15 @@ exit /b 0
 
 :usage
 echo Usage:
-echo   build.bat                         static lib + demo (default)
+echo   build.bat                         static lib + demo, Debug (default)
+echo   build.bat --release               optimised build (CMAKE_BUILD_TYPE=Release)
+echo   build.bat --debug                 debug build (explicit; default)
+echo   build.bat --relwithdebinfo        optimised + debug symbols
 echo   build.bat --shared                build mocida as a DLL
 echo   build.bat --tests                 also compile tests/test_*.c
 echo   build.bat --no-demo               skip the demo exe
 echo   build.bat --clean                 wipe build/ before configuring
 echo.
-echo Flags compose: e.g. `build.bat --clean --shared --tests` does a
-echo from-scratch build of mocida.dll plus every test program.
+echo Flags compose: e.g. `build.bat --clean --release --shared` does a
+echo from-scratch optimised build of mocida.dll.
 exit /b 0
