@@ -306,17 +306,90 @@ static void OnFrameTick(UIEventData data) {
     if (g_demo_fps_signal) UISignal_SetInt(g_demo_fps_signal, (int)data.framerate.fps);
 }
 
+// --------------------------------------------------------------------
+// Interactive playground state — globals so the cleanup at the end of
+// show_results_window can tear everything down, mirroring how the FPS
+// demo above is wired.
+// --------------------------------------------------------------------
+static UISignal*  g_play_text_signal   = NULL;
+static UIBinding* g_play_text_bind     = NULL;
+
+static UISignal*  g_play_color_signal  = NULL;       /* int — palette index */
+static UISubscription* g_play_color_sub = NULL;
+
+static UISignal*  g_play_visible_signal = NULL;
+static UIBinding* g_play_visible_bind   = NULL;
+
+static UISignal*  g_play_opacity_signal = NULL;
+static UIBinding* g_play_opacity_bind   = NULL;
+
+/* Subscriber for the color signal — calls UIText_SetColor on the
+ * mirror label. Exercises the cache-invalidation fix in
+ * UIText_SetColor: without it the colour changes wouldn't show until
+ * a subsequent text edit forced a glyph rebuild. */
+static const UIColor g_play_palette[] = {
+    {  15,  23,  42, 1.0f },  /* slate-900 ink */
+    {  59, 130, 246, 1.0f },  /* blue   */
+    {  22, 163,  74, 1.0f },  /* green  */
+    { 217, 119,   6, 1.0f },  /* amber  */
+    { 220,  38,  38, 1.0f },  /* red    */
+    { 168,  85, 247, 1.0f },  /* purple */
+};
+#define PLAY_PALETTE_N ((int)(sizeof(g_play_palette)/sizeof(g_play_palette[0])))
+
+static void OnPlayColorChanged(UISignal* s, void* ud) {
+    UIText* target = (UIText*)ud;
+    int idx = UISignal_GetInt(s);
+    if (idx < 0) idx = 0;
+    idx %= PLAY_PALETTE_N;
+    UIText_SetColor(target, g_play_palette[idx]);
+}
+
+/* UITextField onChange forwards the new text into the string signal,
+ * which is in turn bound to the mirror UIText via UIBind_TextToSignal.
+ * Two hops, both reactive. */
+static void OnPlayTextFieldChange(UITextField* tf, const char* text, void* ud) {
+    (void)tf; (void)ud;
+    if (g_play_text_signal) UISignal_SetString(g_play_text_signal, text ? text : "");
+}
+
+static void OnPlayCycleColor(UIButton* btn, void* ud) {
+    (void)btn; (void)ud;
+    if (!g_play_color_signal) return;
+    int next = (UISignal_GetInt(g_play_color_signal) + 1) % PLAY_PALETTE_N;
+    UISignal_SetInt(g_play_color_signal, next);
+}
+
+static void OnPlayToggleVisible(UIButton* btn, void* ud) {
+    (void)btn; (void)ud;
+    if (!g_play_visible_signal) return;
+    UISignal_SetInt(g_play_visible_signal,
+                    UISignal_GetInt(g_play_visible_signal) ? 0 : 1);
+}
+
+static const float g_play_opacities[] = { 1.0f, 0.7f, 0.4f, 0.15f };
+#define PLAY_OPS_N ((int)(sizeof(g_play_opacities)/sizeof(g_play_opacities[0])))
+static int g_play_op_idx = 0;
+static void OnPlayCycleOpacity(UIButton* btn, void* ud) {
+    (void)btn; (void)ud;
+    if (!g_play_opacity_signal) return;
+    g_play_op_idx = (g_play_op_idx + 1) % PLAY_OPS_N;
+    UISignal_SetFloat(g_play_opacity_signal, g_play_opacities[g_play_op_idx]);
+}
+
 static int show_results_window(void) {
-    const int win_w = 780;
-    const int row_h = 20;
-    const int header_h = 130;
-    const int win_h = header_h + (g_count + 2) * row_h + 24;
+    const int win_w     = 780;
+    const int row_h     = 20;
+    const int header_h  = 130;
+    const int play_h    = 230;      /* interactive playground panel */
+    const int results_h = (g_count + 2) * row_h + 24;
+    const int win_h     = header_h + play_h + results_h;
 
     UIApp* app = UIApp_Create("Mocida - test_reactive results", win_w, win_h);
     if (!app) return 1;
     UISearchFonts();
 
-    UIChildren* c = UIChildren_Create(g_count + 16);
+    UIChildren* c = UIChildren_Create(g_count + 32);
 
     mklabel(c, "UISignal / UIBind unit tests", 22.0f, COLOR_INK, 24.0f, 20.0f);
 
@@ -335,9 +408,104 @@ static int show_results_window(void) {
     UIChildren_Add(c, fpsW);
 
     g_demo_fps_signal = UISignal_CreateInt(0);
-    g_demo_fps_bind   = UIBind_TextToFormat(fpsText, g_demo_fps_signal, "FPS bound via UISignal -> %d");
+    g_demo_fps_bind   = UIBind_TextToFormat(fpsText, g_demo_fps_signal,
+                                            "FPS bound via UISignal -> %d");
 
-    float y = (float)header_h;
+    // ----------------------------------------------------------------
+    // Interactive playground — type into the field, watch the mirror
+    // label update via UIBind_TextToSignal. Click the colour button to
+    // see UIText_SetColor invalidate the cached glyph texture (without
+    // the fix the colour wouldn't change until another edit forced a
+    // rebuild). The visibility and opacity buttons exercise
+    // UIBind_VisibleToSignal / UIBind_OpacityToSignal.
+    // ----------------------------------------------------------------
+    const float play_y = (float)header_h;
+    mklabel(c, "Interactive playground:", 13.0f, COLOR_MUTED, 24.0f, play_y);
+
+    /* Row 1: textfield + reactive mirror label */
+    mklabel(c, "Type:", 13.0f, COLOR_INK, 24.0f, play_y + 36.0f);
+    UITextField* tf = UITextField_Create("Hello, signals!", 14.0f);
+    UITextField_SetFontFamily(tf, UIGetFont("Arial"));
+    UITextField_SetPlaceholder(tf, "Type and watch the mirror update");
+    UIWidget* tfW = widgcs(tf, 320.0f, 32.0f);
+    UIWidget_SetPosition(tfW, 70.0f, play_y + 26.0f);
+    UIChildren_Add(c, tfW);
+
+    g_play_text_signal = UISignal_CreateString("Hello, signals!");
+    UITextField_OnChange(tf, OnPlayTextFieldChange, NULL);
+
+    mklabel(c, "Mirror:", 13.0f, COLOR_MUTED, 410.0f, play_y + 36.0f);
+    UIText* mirror = UIText_Create("placeholder", 16.0f);
+    UIText_SetFontFamily(mirror, UIGetFont("Arial"));
+    UIText_SetColor(mirror, COLOR_INK);
+    UIWidget* mirrorW = widgc(mirror);
+    UIWidget_SetPosition(mirrorW, 460.0f, play_y + 32.0f);
+    UIChildren_Add(c, mirrorW);
+
+    g_play_text_bind = UIBind_TextToSignal(mirror, g_play_text_signal);
+
+    /* Row 2: 3 buttons that drive 3 signals → 3 reactive sinks */
+    const float btn_y = play_y + 80.0f;
+    const float btn_h = 36.0f;
+
+    UIButton* colorBtn = UIButton_Create("Cycle colour", 14.0f);
+    UIButton_SetFontFamily(colorBtn, UIGetFont("Arial"));
+    UIButton_SetRadius   (colorBtn, 6.0f);
+    UIButton_SetColors   (colorBtn, (UIColor){59,130,246,1.0f}, UI_COLOR_WHITE);
+    UIButton_OnClick     (colorBtn, OnPlayCycleColor, NULL);
+    UIWidget* colorBtnW = widgcs(colorBtn, 150.0f, btn_h);
+    UIWidget_SetPosition(colorBtnW, 24.0f, btn_y);
+    UIChildren_Add(c, colorBtnW);
+
+    UIButton* visBtn = UIButton_Create("Toggle visible", 14.0f);
+    UIButton_SetFontFamily(visBtn, UIGetFont("Arial"));
+    UIButton_SetRadius   (visBtn, 6.0f);
+    UIButton_SetColors   (visBtn, (UIColor){22,163,74,1.0f}, UI_COLOR_WHITE);
+    UIButton_OnClick     (visBtn, OnPlayToggleVisible, NULL);
+    UIWidget* visBtnW = widgcs(visBtn, 160.0f, btn_h);
+    UIWidget_SetPosition(visBtnW, 184.0f, btn_y);
+    UIChildren_Add(c, visBtnW);
+
+    UIButton* opBtn = UIButton_Create("Cycle opacity", 14.0f);
+    UIButton_SetFontFamily(opBtn, UIGetFont("Arial"));
+    UIButton_SetRadius   (opBtn, 6.0f);
+    UIButton_SetColors   (opBtn, (UIColor){168,85,247,1.0f}, UI_COLOR_WHITE);
+    UIButton_OnClick     (opBtn, OnPlayCycleOpacity, NULL);
+    UIWidget* opBtnW = widgcs(opBtn, 150.0f, btn_h);
+    UIWidget_SetPosition(opBtnW, 354.0f, btn_y);
+    UIChildren_Add(c, opBtnW);
+
+    /* Row 3: the "target" widget the buttons drive via signals.
+     * Its visibility and opacity are reactive; its colour is updated
+     * by the color-signal subscriber. */
+    UIRectangle* target = UIRectangle_Create();
+    UIRectangle_SetColor (target, (UIColor){ 226, 232, 240, 1.0f });
+    UIRectangle_SetRadius(target, 10.0f);
+    UIWidget* targetW = widgcs(target, win_w - 48.0f, 56.0f);
+    UIWidget_SetPosition(targetW, 24.0f, btn_y + 50.0f);
+    UIChildren_Add(c, targetW);
+
+    UIText* targetLabel = UIText_Create("react target", 16.0f);
+    UIText_SetFontFamily(targetLabel, UIGetFont("Arial"));
+    UIText_SetColor     (targetLabel, COLOR_INK);
+    UIWidget* targetLabelW = widgc(targetLabel);
+    UIWidget_SetPosition(targetLabelW, 40.0f, btn_y + 67.0f);
+    UIChildren_Add(c, targetLabelW);
+
+    /* Wire the color signal subscriber AFTER the target text exists so
+     * the userdata pointer is valid. Initial value = 0 → ink slate. */
+    g_play_color_signal = UISignal_CreateInt(0);
+    g_play_color_sub    = UISignal_Subscribe(g_play_color_signal,
+                                             OnPlayColorChanged, targetLabel);
+
+    g_play_visible_signal = UISignal_CreateInt(1);
+    g_play_visible_bind   = UIBind_VisibleToSignal(targetW, g_play_visible_signal);
+
+    g_play_opacity_signal = UISignal_CreateFloat(1.0f);
+    g_play_opacity_bind   = UIBind_OpacityToSignal(targetW, g_play_opacity_signal);
+
+    /* ----------- Test result listing below the playground ---------- */
+    float y = (float)(header_h + play_h);
     for (int i = 0; i < g_count; i++) {
         const TestRow* r = &g_results[i];
         mklabel(c, r->pass ? "PASS" : "FAIL", 13.0f,
@@ -355,6 +523,14 @@ static int show_results_window(void) {
 
     UIBind_Destroy(g_demo_fps_bind);
     UISignal_Destroy(g_demo_fps_signal);
+    UIBind_Destroy(g_play_text_bind);
+    UISignal_Destroy(g_play_text_signal);
+    UISignal_Unsubscribe(g_play_color_sub);
+    UISignal_Destroy(g_play_color_signal);
+    UIBind_Destroy(g_play_visible_bind);
+    UISignal_Destroy(g_play_visible_signal);
+    UIBind_Destroy(g_play_opacity_bind);
+    UISignal_Destroy(g_play_opacity_signal);
     UIApp_Destroy(app);
     return g_fail == 0 ? 0 : 1;
 }

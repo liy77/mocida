@@ -72,10 +72,23 @@ UIText* UIText_SetFontStyle(UIText* text, int fontStyle) {
 
 UIText* UIText_SetColor(UIText* text, UIColor color) {
     if (text == NULL) {
-        return NULL; 
+        return NULL;
     }
 
+    // Glyphs are rasterised with the colour baked into the cached
+    // texture (TTF_RenderText_Blended is called with the foreground
+    // SDL_Color, not a tint mod), so a colour change has to drop the
+    // cached texture — otherwise the renderer keeps blitting the old
+    // colour until something else (text edit, font swap, etc.) forces
+    // a rebuild.
+    const int sameColor = text->color.r == color.r &&
+                          text->color.g == color.g &&
+                          text->color.b == color.b &&
+                          text->color.a == color.a;
     text->color = color;
+    if (!sameColor) {
+        UIText_DestroyTexture(text);
+    }
     return text;
 }
 
