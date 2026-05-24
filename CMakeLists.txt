@@ -6,9 +6,20 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Release optimizations (MSVC / Clang / MinGW).
-set(CMAKE_C_FLAGS_RELEASE "/O2 /GL /Gw /Gy /GF /DNDEBUG")
-set(CMAKE_EXE_LINKER_FLAGS_RELEASE "/LTCG /OPT:REF /OPT:ICF")
+# Release optimisations. We APPEND to CMake's defaults rather than
+# overwrite them — overwriting strips out the runtime-library flags
+# (/MD, --dependent-lib=msvcrt, etc.) that CMake injects per
+# compiler, leading to "undefined symbol: memcpy / _DllMainCRTStartup"
+# at link time. The optimisations we add are toolchain-specific:
+#   - MSVC / clang-cl: /GL (LTCG), /Gw /Gy /GF (data/section dedup),
+#     /LTCG /OPT:REF /OPT:ICF on the linker.
+#   - Plain clang (GCC-CLI mode): the default -O3 -DNDEBUG is plenty;
+#     don't append slash-flags clang would reject.
+if(MSVC)
+    string(APPEND CMAKE_C_FLAGS_RELEASE          " /GL /Gw /Gy /GF")
+    string(APPEND CMAKE_CXX_FLAGS_RELEASE        " /GL /Gw /Gy /GF")
+    string(APPEND CMAKE_EXE_LINKER_FLAGS_RELEASE " /LTCG /OPT:REF /OPT:ICF")
+endif()
 
 # Default to a Debug build if the user didn't pick one — keeps the
 # UI_TRACE/UI_DEBUG macros (gated behind NDEBUG in debug.h) live.
@@ -125,6 +136,15 @@ option(MOCIDA_BUILD_DEMO   "Build the main demo executable (src/main.c)"        
 # ----------------------------------------------------------------------
 file(GLOB_RECURSE MOCIDA_SOURCES   "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/*.c")
 file(GLOB_RECURSE MOCIDA_SOURCES_CXX "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/*.cpp")
+
+# winmain.c is the executable-side entry-point shim that delegates
+# WinMain → main. It has no place inside the library itself (which is
+# a DLL when MOCIDA_BUILD_SHARED=ON, and DLLs don't have an exe entry
+# point — including it makes the linker complain about an undefined
+# `main` reference from WinMain). Keep it in a separate variable that
+# the executable helpers add into their own source list.
+set(MOCIDA_WINMAIN_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/winmain.c")
+list(FILTER MOCIDA_SOURCES EXCLUDE REGEX "/winmain\\.c$")
 if(MOCIDA_BUILD_SHARED)
     add_library(mocida SHARED ${MOCIDA_SOURCES} ${MOCIDA_SOURCES_CXX})
     set_target_properties(mocida PROPERTIES
@@ -303,10 +323,20 @@ endif()
 # Windows, copies the SDL DLLs next to the output binary so it can run.
 # ----------------------------------------------------------------------
 function(mocida_add_executable target_name source_file)
-    add_executable(${target_name} ${source_file})
+    # WinMain shim is compiled into every Mocida exe so the GUI
+    # subsystem (WIN32_EXECUTABLE TRUE) routes WinMain → user `main`.
+    add_executable(${target_name} ${source_file} ${MOCIDA_WINMAIN_SRC})
     target_link_libraries(${target_name} PRIVATE mocida)
 
     if(WIN32)
+        # Link as the Windows (GUI) subsystem so no console window
+        # pops up automatically. In Debug builds the Mocida runtime
+        # calls AllocConsole() from UIApp_Create when logs are useful;
+        # the MOCIDA_NO_CONSOLE env var (or UIApp_HideConsole()) opts
+        # out. In Release no console is ever attached.
+        set_target_properties(${target_name} PROPERTIES
+            WIN32_EXECUTABLE TRUE)
+
         # Only copy SDL3*.dll alongside the exe when those targets were
         # actually built as shared libraries. In the default static
         # build (MOCIDA_BUILD_SHARED=OFF) they are STATIC archives
@@ -389,37 +419,240 @@ if(MOCIDA_BUILD_TESTS)
 endif()
 
 # ----------------------------------------------------------------------
-# Optional GUI installer (installer/installer.c). The installer itself
-# is a Mocida app — it ships the headers + DLLs from this build dir to
-# a user-chosen target folder and publishes MOCIDA_INCLUDE_DIR /
-# MOCIDA_LIB_DIR / PATH via the Windows registry.
+# Optional GUI installer (installer/installer.c). The installer is a
+# Mocida app that downloads the SDK (mocida.dll + headers + SDL DLLs)
+# from a GitHub release at install time and publishes MOCIDA_INCLUDE_DIR
+# / MOCIDA_LIB_DIR / PATH via the Windows registry.
 #
-# Requires MOCIDA_BUILD_SHARED=ON because the payload it distributes is
-# mocida.dll plus the import .lib.
+# The installer is built against a private STATIC copy of mocida so the
+# resulting .exe does NOT depend on mocida.dll at runtime — it can't,
+# because what it ships *is* mocida.dll. It still needs SDL3*.dll +
+# WebView2Loader.dll alongside it (these come from vcpkg / vendored
+# SDL subdirs and are shared libraries by design).
 # ----------------------------------------------------------------------
 option(MOCIDA_BUILD_INSTALLER "Build the GUI installer (installer/installer.c)" OFF)
 if(MOCIDA_BUILD_INSTALLER)
-    if(NOT MOCIDA_BUILD_SHARED)
-        message(FATAL_ERROR
-            "MOCIDA_BUILD_INSTALLER requires MOCIDA_BUILD_SHARED=ON — the installer "
-            "ships mocida.dll, so it has to be built as a DLL.")
-    endif()
-    mocida_add_executable(mocida_installer installer/installer.c)
+    # Parallel static lib reusing the same sources as the main `mocida`
+    # target. Compiles the TU set twice when MOCIDA_BUILD_SHARED is also
+    # ON, which is fine — the installer is built rarely.
+    #
+    # libcurl is intentionally NOT linked here: the installer talks to
+    # GitHub via WinINet (a Windows system DLL that's always present),
+    # so we don't drag libcurl.dll + zlib.dll + their shared deps next
+    # to the installer.exe. Mocida's other libcurl users (if any) still
+    # see CURL in the regular mocida target.
+    add_library(mocida_static_installer STATIC
+        ${MOCIDA_SOURCES} ${MOCIDA_SOURCES_CXX})
+    target_include_directories(mocida_static_installer PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/headers)
+    target_link_libraries(mocida_static_installer PUBLIC
+        ${_M_SDL3}
+        ${_M_SDL3_IMG}
+        ${_M_SDL3_TTF})
     if(WIN32)
-        # shlwapi: StrStrIA (case-insensitive substring for PATH probing).
-        # advapi32: registry APIs (HKLM/HKCU\\Environment).
-        # user32:   SendMessageTimeoutA (WM_SETTINGCHANGE broadcast).
-        target_link_libraries(mocida_installer PRIVATE shlwapi advapi32 user32)
+        target_link_libraries(mocida_static_installer PUBLIC
+            mfplat mfreadwrite mfuuid ole32 propsys ws2_32 dbghelp
+            dcomp d3d11 d2d1 dwrite dxgi
+            version shlwapi)
+
+        # Pull in the static WebView2 loader when build.bat staged the
+        # NuGet (see MOCIDA_WEBVIEW2_NUGET_DIR up top). That replaces
+        # the runtime WebView2Loader.dll dependency with a baked-in
+        # static lib — no DLL shipped next to the installer.
+        if(DEFINED MOCIDA_WEBVIEW2_NUGET_DIR)
+            set(_wv2_static_lib_inst
+                "${MOCIDA_WEBVIEW2_NUGET_DIR}/build/native/x64/WebView2LoaderStatic.lib")
+            if(EXISTS "${_wv2_static_lib_inst}")
+                target_link_libraries(mocida_static_installer PUBLIC
+                    "${_wv2_static_lib_inst}")
+                get_target_property(_wv2_inc_inst
+                    unofficial::webview2::webview2 INTERFACE_INCLUDE_DIRECTORIES)
+                if(_wv2_inc_inst)
+                    target_include_directories(mocida_static_installer PUBLIC
+                        ${_wv2_inc_inst})
+                endif()
+                message(STATUS "Installer: bundling WebView2LoaderStatic.lib")
+            else()
+                # Fall back to the dynamic loader. The installer will
+                # then ship with WebView2Loader.dll alongside it.
+                target_link_libraries(mocida_static_installer PUBLIC
+                    unofficial::webview2::webview2)
+                message(WARNING
+                    "Installer: WebView2LoaderStatic.lib missing — installer will need WebView2Loader.dll next to the exe.")
+            endif()
+        else()
+            target_link_libraries(mocida_static_installer PUBLIC
+                unofficial::webview2::webview2)
+        endif()
+    endif()
+    target_compile_definitions(mocida_static_installer PUBLIC
+        _CRT_SECURE_NO_WARNINGS
+        _CRT_NONSTDC_NO_WARNINGS)
+    target_compile_definitions(mocida_static_installer PUBLIC
+        $<$<CONFIG:Debug>:MOCIDA_DEBUG=1>
+        $<$<CONFIG:RelWithDebInfo>:MOCIDA_DEBUG=1>)
+    if(MOCIDA_MIMALLOC_AVAILABLE)
+        target_link_libraries(mocida_static_installer PUBLIC mimalloc-static)
+        target_compile_definitions(mocida_static_installer PUBLIC
+            MOCIDA_USE_MIMALLOC=1)
     endif()
 
-    # Stage the public headers next to the installer.exe so they form
-    # part of the payload it copies at install time.
-    add_custom_command(TARGET mocida_installer POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/headers
-            $<TARGET_FILE_DIR:mocida_installer>/include
-        COMMENT "Staging Mocida headers next to the installer"
-    )
+    # ------------------------------------------------------------------
+    # Embed assets/logo.svg directly into the installer binary so the
+    # installer ships as a single self-contained .exe with no nearby
+    # assets/ folder. Generated at configure time; re-cmake when the
+    # SVG changes (declared via CMAKE_CONFIGURE_DEPENDS below).
+    # ------------------------------------------------------------------
+    set(_inst_assets_dir "${CMAKE_CURRENT_BINARY_DIR}/installer_generated")
+    set(_inst_assets_h   "${_inst_assets_dir}/installer_assets.h")
+    set(_inst_logo_src   "${CMAKE_CURRENT_SOURCE_DIR}/assets/logo.svg")
+    file(MAKE_DIRECTORY "${_inst_assets_dir}")
+    if(EXISTS "${_inst_logo_src}")
+        file(READ "${_inst_logo_src}" _logo_hex HEX)
+        string(LENGTH "${_logo_hex}" _logo_hex_len)
+        math(EXPR _logo_bytes_count "${_logo_hex_len} / 2")
+        # Convert "aabbcc..." -> "0xaa,0xbb,0xcc,..." and chunk into
+        # 16-byte rows for a readable header.
+        string(REGEX REPLACE "(..)" "0x\\1," _logo_bytes "${_logo_hex}")
+        string(REGEX REPLACE "((0x..,){16})" "\\1\n    " _logo_bytes "${_logo_bytes}")
+        file(WRITE "${_inst_assets_h}"
+"// AUTO-GENERATED by CMake from assets/logo.svg — do not edit.
+#ifndef INSTALLER_ASSETS_H
+#define INSTALLER_ASSETS_H
+
+#include <stddef.h>
+
+static const unsigned char g_logo_svg[] = {
+    ${_logo_bytes}
+};
+static const size_t g_logo_svg_len = ${_logo_bytes_count};
+
+#endif
+")
+        # Tell CMake to re-configure if the SVG is touched so the byte
+        # array stays in sync with the source asset.
+        set_property(DIRECTORY APPEND PROPERTY
+            CMAKE_CONFIGURE_DEPENDS "${_inst_logo_src}")
+    else()
+        message(WARNING "Installer: assets/logo.svg missing — embedding empty array.")
+        file(WRITE "${_inst_assets_h}"
+"// Generated stub: assets/logo.svg was missing at configure time.
+#ifndef INSTALLER_ASSETS_H
+#define INSTALLER_ASSETS_H
+#include <stddef.h>
+static const unsigned char g_logo_svg[1] = { 0 };
+static const size_t g_logo_svg_len = 0;
+#endif
+")
+    endif()
+
+    # ------------------------------------------------------------------
+    # Generate logo.ico from assets/logo.svg, embed it as a Windows
+    # resource so Explorer / the taskbar paint the icon on the .exe
+    # itself (visible BEFORE the program runs and SDL paints a window).
+    #
+    # Build pipeline:
+    #   svg2ico (tools/svg2ico.c)  →  logo.ico
+    #   logo.ico                   →  installer.rc  (1 ICON "...")
+    #   installer.rc               →  linked into mocida_installer.exe
+    # ------------------------------------------------------------------
+    set(_inst_ico "${_inst_assets_dir}/logo.ico")
+    set(_inst_rc  "${_inst_assets_dir}/installer.rc")
+
+    if(WIN32 AND EXISTS "${_inst_logo_src}")
+        add_executable(svg2ico tools/svg2ico.c)
+        target_link_libraries(svg2ico PRIVATE
+            ${_M_SDL3} ${_M_SDL3_IMG})
+
+        # In MOCIDA_BUILD_SHARED=ON configurations SDL3 / SDL3_image
+        # are DLLs — copy them next to svg2ico.exe so the custom
+        # command can actually launch it (without DLLs alongside it
+        # crashes with STATUS_DLL_NOT_FOUND / 0xC0000135).
+        foreach(_dep SDL3 SDL3_ttf SDL3_image)
+            if(TARGET ${_dep}::${_dep})
+                get_target_property(_t ${_dep}::${_dep} TYPE)
+                if(_t STREQUAL "SHARED_LIBRARY")
+                    add_custom_command(TARGET svg2ico POST_BUILD
+                        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                            $<TARGET_FILE:${_dep}::${_dep}>
+                            $<TARGET_FILE_DIR:svg2ico>)
+                endif()
+            endif()
+        endforeach()
+
+        add_custom_command(
+            OUTPUT "${_inst_ico}"
+            COMMAND $<TARGET_FILE:svg2ico>
+                    "${_inst_logo_src}"
+                    "${_inst_ico}"
+            DEPENDS svg2ico "${_inst_logo_src}"
+            COMMENT "Rendering logo.svg → logo.ico (taskbar / explorer icon)"
+            VERBATIM
+        )
+
+        # The .rc references logo.ico by absolute path. CMake's resource
+        # compiler step doesn't auto-track that, so OBJECT_DEPENDS is
+        # set below so an .ico rebuild forces an .rc recompile.
+        file(WRITE "${_inst_rc}"
+"// AUTO-GENERATED by CMake — do not edit.\n\
+// Resource ID 1 makes this the default application icon shown by\n\
+// Explorer / taskbar / Alt+Tab on the .exe itself.\n\
+1 ICON \"${_inst_ico}\"\n")
+        set_source_files_properties("${_inst_rc}" PROPERTIES
+            OBJECT_DEPENDS "${_inst_ico}")
+
+        set(_installer_resources "${_inst_rc}")
+    else()
+        set(_installer_resources "")
+    endif()
+
+    add_executable(mocida_installer
+        installer/installer.c
+        ${_installer_resources}
+        ${MOCIDA_WINMAIN_SRC})
+    target_link_libraries(mocida_installer PRIVATE mocida_static_installer)
+    target_include_directories(mocida_installer PRIVATE "${_inst_assets_dir}")
+    if(WIN32)
+        # GUI subsystem — same as mocida_add_executable. Auto-console
+        # in Debug, none in Release.
+        set_target_properties(mocida_installer PROPERTIES
+            WIN32_EXECUTABLE TRUE)
+    endif()
+    if(WIN32)
+        # shlwapi:  StrStrIA (case-insensitive substring for PATH probing).
+        # advapi32: registry APIs (HKLM/HKCU\\Environment).
+        # user32:   SendMessageTimeoutA (WM_SETTINGCHANGE broadcast).
+        # wininet:  the HTTP client used to fetch the SDK zip from
+        #           GitHub. Statically linked (no DLL alongside the exe).
+        target_link_libraries(mocida_installer PRIVATE
+            shlwapi advapi32 user32 wininet)
+
+        # Belt-and-suspenders: only copy SDL DLLs if those targets ended
+        # up SHARED (they shouldn't in this configuration — SDL is
+        # picked as -static via _M_SDL3 above — but guard anyway). When
+        # SDL is static, this loop is a no-op and the installer is a
+        # single .exe.
+        foreach(dep SDL3 SDL3_ttf SDL3_image)
+            if(TARGET ${dep}::${dep})
+                get_target_property(_deptype ${dep}::${dep} TYPE)
+                if(_deptype STREQUAL "SHARED_LIBRARY")
+                    add_custom_command(TARGET mocida_installer POST_BUILD
+                        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                            $<TARGET_FILE:${dep}::${dep}>
+                            $<TARGET_FILE_DIR:mocida_installer>)
+                endif()
+            endif()
+        endforeach()
+        # Only ship WebView2Loader.dll when the static loader wasn't
+        # available (fallback path warned about above).
+        if(NOT EXISTS "${MOCIDA_WEBVIEW2_NUGET_DIR}/build/native/x64/WebView2LoaderStatic.lib" AND
+           EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-windows/bin/WebView2Loader.dll")
+            add_custom_command(TARGET mocida_installer POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-windows/bin/WebView2Loader.dll"
+                    $<TARGET_FILE_DIR:mocida_installer>)
+        endif()
+    endif()
 endif()
 
 # ----------------------------------------------------------------------
