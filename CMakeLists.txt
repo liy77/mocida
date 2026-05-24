@@ -184,8 +184,30 @@ target_link_libraries(mocida PUBLIC
 )
 
 # Windows Media Foundation (UIVideo backend) + WebView2 (UIWebView).
-# All MF libs ship with the Windows SDK. WebView2 is the vcpkg target.
-# ws2_32 is the WinSock2 import lib used by debug.c's TCP sink.
+# All MF libs ship with the Windows SDK. WebView2 has two delivery
+# channels we know how to consume:
+#
+#   - vcpkg's `unofficial::webview2::webview2` target -> dynamic loader
+#     (WebView2Loader.dll alongside the exe). Used when MOCIDA_BUILD_SHARED=ON
+#     or the static-loader cache isn't populated.
+#   - Microsoft's NuGet package, fetched once by build.bat into
+#     `.webview2/`. Provides WebView2LoaderStatic.lib so a static mocida
+#     can bake the loader into the final exe (no DLL alongside).
+#
+# MOCIDA_WEBVIEW2_NUGET_DIR is passed by build.bat after the one-time
+# download succeeds. We auto-select the static loader for static builds
+# whenever the static lib is on disk; everything else falls back to the
+# dynamic loader.
+set(MOCIDA_WEBVIEW2_STATIC OFF CACHE INTERNAL "")
+set(_MOCIDA_WEBVIEW2_USE_STATIC FALSE)
+if(WIN32 AND NOT MOCIDA_BUILD_SHARED AND DEFINED MOCIDA_WEBVIEW2_NUGET_DIR)
+    set(_wv2_static_lib "${MOCIDA_WEBVIEW2_NUGET_DIR}/build/native/x64/WebView2LoaderStatic.lib")
+    if(EXISTS "${_wv2_static_lib}")
+        set(_MOCIDA_WEBVIEW2_USE_STATIC TRUE)
+        set(MOCIDA_WEBVIEW2_STATIC ON CACHE INTERNAL "")
+    endif()
+endif()
+
 if(WIN32)
     target_link_libraries(mocida PUBLIC
         mfplat
@@ -200,8 +222,32 @@ if(WIN32)
         d2d1            # D2D rounded rect / drawing
         dwrite          # text in overlays
         dxgi            # surface allocation
-        unofficial::webview2::webview2
+        version         # WebView2LoaderStatic.lib calls GetFileVersionInfo*
+        shlwapi         # path helpers WebView2LoaderStatic.lib needs
     )
+
+    # WebView2 headers ALWAYS come from vcpkg (older API, what the
+    # webview_dcomp.cpp was written against). The newer NuGet headers
+    # ship breaking changes (kInternalChannel, CoreWebView2EnvironmentOptionsBaseClass,
+    # ...) that don't compile our existing source. The loader ABI is
+    # stable across versions, so linking the NuGet's static loader
+    # binary against vcpkg's headers works.
+    get_target_property(_wv2_vcpkg_includes unofficial::webview2::webview2 INTERFACE_INCLUDE_DIRECTORIES)
+    if(_wv2_vcpkg_includes)
+        target_include_directories(mocida PUBLIC ${_wv2_vcpkg_includes})
+    endif()
+
+    if(_MOCIDA_WEBVIEW2_USE_STATIC)
+        # Replace vcpkg's WebView2Loader.dll.lib (import lib) with the
+        # NuGet's WebView2LoaderStatic.lib — same exported symbols
+        # (CreateCoreWebView2Environment*, GetAvailableCoreWebView2BrowserVersionString,
+        # ...), no DLL needed at runtime.
+        target_link_libraries(mocida PUBLIC "${_wv2_static_lib}")
+        message(STATUS "Mocida: bundling WebView2LoaderStatic.lib (${_wv2_static_lib})")
+    else()
+        target_link_libraries(mocida PUBLIC unofficial::webview2::webview2)
+        message(STATUS "Mocida: linking dynamic WebView2Loader (vcpkg)")
+    endif()
 endif()
 
 # ----------------------------------------------------------------------
@@ -279,12 +325,13 @@ function(mocida_add_executable target_name source_file)
                 endif()
             endif()
         endforeach()
-        # WebView2Loader.dll + libcurl.dll come from vcpkg's
-        # x64-windows triplet (DLLs). They have to be copied next to
-        # the exe regardless of how mocida is built; switching them
-        # to fully-static would require swapping the vcpkg triplet to
-        # x64-windows-static and rebuilding the world.
-        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-windows/bin/WebView2Loader.dll")
+        # WebView2Loader.dll comes from vcpkg's x64-windows triplet
+        # and only needs to ship alongside the exe when mocida is
+        # linked against the dynamic loader. The static-loader path
+        # (MOCIDA_WEBVIEW2_STATIC=ON, see the WebView2 selector above)
+        # bakes the loader into the binary so the copy is skipped.
+        if(NOT MOCIDA_WEBVIEW2_STATIC AND
+           EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-windows/bin/WebView2Loader.dll")
             add_custom_command(TARGET ${target_name} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-windows/bin/WebView2Loader.dll"

@@ -18,6 +18,10 @@ build-*/
 cmake-build-*/
 out/
 
+# WebView2 NuGet cache fetched on first build (build.bat downloads the
+# Microsoft.Web.WebView2 package once to grab WebView2LoaderStatic.lib).
+/.webview2/
+
 # Stray CMake outputs that occasionally land outside build/
 CMakeCache.txt
 CMakeFiles/

@@ -113,6 +113,38 @@ if not errorlevel 1 (
 )
 
 :: ----------------------------------------------------------------------
+:: WebView2 static loader bootstrap.
+::
+:: The vcpkg port only ships WebView2Loader.dll. To bundle WebView2
+:: into the static mocida exe (no DLL alongside) we need
+:: WebView2LoaderStatic.lib, which Microsoft distributes as part of
+:: the Microsoft.Web.WebView2 NuGet package. We fetch it once into a
+:: project-local .webview2/ cache and reuse it forever after — no
+:: nuget.exe / vcpkg-static-triplet required.
+::
+:: Skip the download when the static lib is already extracted. The
+:: cache lives outside build/, so `--clean` doesn't trigger a re-fetch.
+:: ----------------------------------------------------------------------
+set "WV2_VERSION=1.0.2792.45"
+set "WV2_DIR=!MOCIDA_ROOT!.webview2"
+set "WV2_STATIC_LIB=!WV2_DIR!\build\native\x64\WebView2LoaderStatic.lib"
+if not exist "!WV2_STATIC_LIB!" (
+    echo Fetching Microsoft.Web.WebView2 v!WV2_VERSION! ^(one-time^)...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+        "$ErrorActionPreference='Stop';" ^
+        "$url='https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/!WV2_VERSION!';" ^
+        "$zip = Join-Path $env:TEMP 'mocida-webview2.zip';" ^
+        "New-Item -ItemType Directory -Force '!WV2_DIR!' | Out-Null;" ^
+        "Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing;" ^
+        "Expand-Archive -Path $zip -DestinationPath '!WV2_DIR!' -Force;" ^
+        "Remove-Item $zip -ErrorAction SilentlyContinue"
+    if not exist "!WV2_STATIC_LIB!" (
+        echo WARNING: WebView2 NuGet fetch failed - static builds will continue to ship WebView2Loader.dll.
+        set "WV2_DIR="
+    )
+)
+
+:: ----------------------------------------------------------------------
 :: Resolve clang to an absolute path. CMake's try_compile spawns nested
 :: configures that re-run enable_language(C); on this machine the bare
 :: -DCMAKE_C_COMPILER=clang sporadically loses its way (the sub-build
@@ -144,6 +176,12 @@ echo Configuring CMake with Clang...
 echo   MOCIDA_BUILD_SHARED = !MOCIDA_SHARED!
 echo   MOCIDA_BUILD_TESTS  = !MOCIDA_TESTS!
 echo   MOCIDA_BUILD_DEMO   = !MOCIDA_DEMO!
+set "WV2_ARG="
+if defined WV2_DIR (
+    if exist "!WV2_STATIC_LIB!" (
+        set "WV2_ARG=-DMOCIDA_WEBVIEW2_NUGET_DIR=!WV2_DIR!"
+    )
+)
 cmake -G "!GENERATOR!" ^
     !TOOLCHAIN_ARG! ^
     -DCMAKE_BUILD_TYPE=Debug ^
@@ -153,6 +191,7 @@ cmake -G "!GENERATOR!" ^
     -DMOCIDA_BUILD_SHARED=!MOCIDA_SHARED! ^
     -DMOCIDA_BUILD_TESTS=!MOCIDA_TESTS! ^
     -DMOCIDA_BUILD_DEMO=!MOCIDA_DEMO! ^
+    !WV2_ARG! ^
     -Wno-dev --log-level=NOTICE ^
     ..
 
