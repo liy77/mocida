@@ -18,23 +18,36 @@ endif()
 
 # ----------------------------------------------------------------------
 # Vendored dependencies. The flags below MUST be set before
-# add_subdirectory so that SDL_image / SDL_ttf use their bundled libs
+# add_subdirectory so SDL_image / SDL_ttf use their bundled libs
 # (libpng, freetype, etc.) instead of looking for them in the system.
 #
-# Note on static linking: ideally a static `mocida` build would also
-# bundle SDL3 / SDL_image / SDL_ttf into the final exe so users only
-# distribute one file. In practice the SDL3 ecosystem expects the
-# `SDL3::SDL3` shared alias to be present whenever SDL_image or
-# SDL_ttf are added as in-tree subdirs (their find_package(SDL3)
-# resolves through it), so flipping SDL_STATIC=ON breaks the SDL_image
-# / SDL_ttf configure step with "Could not find a package
-# configuration file provided by SDL3".
+# When mocida is a static archive we also build SDL3 / SDL_image /
+# SDL_ttf as STATIC libs so the SDL object code is baked into the
+# final exe and there is no SDL3*.dll alongside it. Shared mocida
+# keeps the conventional DLL flavour.
 #
-# Until we wire a custom SDL3_DIR / SDL3_INCLUDE_DIRS / SDL3_LIBRARIES
-# bridge, SDL3* always ship as DLLs alongside the exe. mocida_add_executable
-# is already future-proofed: it inspects the SDL target type and only
-# copies a DLL when one was actually produced.
+# The dance with the SDL3::SDL3 alias below is required because
+# SDL_image / SDL_ttf consume the SDL3 in-tree target by name —
+# without the alias, they fall through to find_package(SDL3) which
+# (correctly) reports SDL3 is not installed system-wide.
 # ----------------------------------------------------------------------
+if(NOT DEFINED MOCIDA_BUILD_SHARED)
+    set(MOCIDA_BUILD_SHARED OFF)
+endif()
+if(MOCIDA_BUILD_SHARED)
+    set(_M_SDL_SHARED ON)
+    set(_M_SDL_STATIC OFF)
+else()
+    set(_M_SDL_SHARED OFF)
+    set(_M_SDL_STATIC ON)
+endif()
+
+set(SDL_SHARED ${_M_SDL_SHARED} CACHE BOOL "" FORCE)
+set(SDL_STATIC ${_M_SDL_STATIC} CACHE BOOL "" FORCE)
+# BUILD_SHARED_LIBS is the toggle SDL_image / SDL_ttf inspect when
+# deciding whether to register their `*-shared` or `*-static` targets.
+set(BUILD_SHARED_LIBS ${_M_SDL_SHARED} CACHE BOOL "" FORCE)
+
 set(SDLTTF_VENDORED ON CACHE BOOL "" FORCE)
 set(SDLTTF_SAMPLES OFF CACHE BOOL "" FORCE)
 set(SDLIMAGE_VENDORED ON CACHE BOOL "" FORCE)
@@ -42,6 +55,15 @@ set(SDLIMAGE_AVIF OFF CACHE BOOL "" FORCE)
 set(SDLIMAGE_SAMPLES OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(SDL)
+
+# When SDL was built static-only, expose SDL3::SDL3 as an alias for
+# SDL3-static so SDL_image / SDL_ttf's lookup of the SDL3 target
+# inside the same tree succeeds (otherwise they fall through to
+# find_package(SDL3) which can't see in-tree targets).
+if(NOT TARGET SDL3::SDL3 AND TARGET SDL3-static)
+    add_library(SDL3::SDL3 ALIAS SDL3-static)
+endif()
+
 add_subdirectory(SDL_image)
 add_subdirectory(SDL_ttf)
 
@@ -123,27 +145,41 @@ target_include_directories(mocida PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/headers
 )
 
-# Note on the DLL situation: SDL3, SDL3_image and SDL3_ttf are always
-# built as shared libs from this tree, even in the MOCIDA_BUILD_SHARED=OFF
-# (static-mocida) path. The SDL3_image / SDL3_ttf CMakeLists insist on
-# the SDL3 shared alias being available for their find_package(SDL3),
-# and they export INTERFACE_SDL3_SHARED=ON through their public link
-# interface — linking mocida against SDL3-static while SDL3_image still
-# wants SDL3-shared makes CMake's generate step refuse the combination
-# with "INTERFACE_SDL3_SHARED ... does not agree".
-#
-# In practice this means: a static mocida.lib still ships next to
-# SDL3.dll / SDL3_image.dll / SDL3_ttf.dll / WebView2Loader.dll. Only
-# mocida's own code is baked into the consumer .exe. Bundling SDL into
-# the exe too is a future item that would require either:
-#   - switching the vcpkg triplet to x64-windows-static and rebuilding
-#     SDL_image / SDL_ttf with their static loaders, or
-#   - patching SDL_image / SDL_ttf to expose SDL3_image-static /
-#     SDL3_ttf-static targets compatible with SDL3-static.
+# Pick the SDL target flavour that matches mocida's build mode:
+#   shared mocida → link the SDL3::SDL3 / SDL3_image / SDL3_ttf shared
+#                   aliases (DLLs ship alongside the exe).
+#   static mocida → link the *-static targets so SDL object code is
+#                   baked into the final exe and there's no SDL3.dll.
+# Helpers fall back gracefully if a flavour isn't registered (e.g. an
+# SDL_image build that only produces the shared target).
+function(_mocida_pick_sdl_target out_var shared_name static_name)
+    if(MOCIDA_BUILD_SHARED)
+        if(TARGET ${shared_name})
+            set(${out_var} ${shared_name} PARENT_SCOPE)
+        else()
+            set(${out_var} ${static_name} PARENT_SCOPE)
+        endif()
+    else()
+        if(TARGET ${static_name})
+            set(${out_var} ${static_name} PARENT_SCOPE)
+        else()
+            set(${out_var} ${shared_name} PARENT_SCOPE)
+        endif()
+    endif()
+endfunction()
+
+_mocida_pick_sdl_target(_M_SDL3      SDL3::SDL3            SDL3::SDL3-static)
+_mocida_pick_sdl_target(_M_SDL3_IMG  SDL3_image::SDL3_image SDL3_image::SDL3_image-static)
+_mocida_pick_sdl_target(_M_SDL3_TTF  SDL3_ttf::SDL3_ttf    SDL3_ttf::SDL3_ttf-static)
+
+message(STATUS "Mocida: linking SDL3      via ${_M_SDL3}")
+message(STATUS "Mocida: linking SDL3_image via ${_M_SDL3_IMG}")
+message(STATUS "Mocida: linking SDL3_ttf  via ${_M_SDL3_TTF}")
+
 target_link_libraries(mocida PUBLIC
-    SDL3::SDL3
-    SDL3_image::SDL3_image
-    SDL3_ttf::SDL3_ttf
+    ${_M_SDL3}
+    ${_M_SDL3_IMG}
+    ${_M_SDL3_TTF}
     CURL::libcurl
 )
 

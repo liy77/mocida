@@ -113,17 +113,42 @@ if not errorlevel 1 (
 )
 
 :: ----------------------------------------------------------------------
+:: Resolve clang to an absolute path. CMake's try_compile spawns nested
+:: configures that re-run enable_language(C); on this machine the bare
+:: -DCMAKE_C_COMPILER=clang sporadically loses its way (the sub-build
+:: sees CMAKE_C_COMPILER unset, then SDL's check_c_source_compiles
+:: aborts with "CMAKE_C_COMPILER not set, after EnableLanguage"). Pass
+:: the absolute path explicitly AND export CC/CXX so the child cmakes
+:: find the same compiler unambiguously.
+:: ----------------------------------------------------------------------
+set "CLANG_EXE="
+for /f "delims=" %%i in ('where clang.exe 2^>nul') do (
+    if not defined CLANG_EXE set "CLANG_EXE=%%i"
+)
+set "CLANGXX_EXE="
+for /f "delims=" %%i in ('where clang++.exe 2^>nul') do (
+    if not defined CLANGXX_EXE set "CLANGXX_EXE=%%i"
+)
+if not defined CLANG_EXE (
+    cd ..
+    echo ERROR: clang.exe not found. Install LLVM or run setup.bat.
+    exit /b 1
+)
+set "CC=!CLANG_EXE!"
+set "CXX=!CLANGXX_EXE!"
+
+:: ----------------------------------------------------------------------
 :: Configure
 :: ----------------------------------------------------------------------
 echo Configuring CMake with Clang...
-echo   MOCIDA_BUILD_SHARED = %MOCIDA_SHARED%
-echo   MOCIDA_BUILD_TESTS  = %MOCIDA_TESTS%
-echo   MOCIDA_BUILD_DEMO   = %MOCIDA_DEMO%
+echo   MOCIDA_BUILD_SHARED = !MOCIDA_SHARED!
+echo   MOCIDA_BUILD_TESTS  = !MOCIDA_TESTS!
+echo   MOCIDA_BUILD_DEMO   = !MOCIDA_DEMO!
 cmake -G "!GENERATOR!" ^
     !TOOLCHAIN_ARG! ^
     -DCMAKE_BUILD_TYPE=Debug ^
-    -DCMAKE_C_COMPILER=clang ^
-    -DCMAKE_CXX_COMPILER=clang++ ^
+    "-DCMAKE_C_COMPILER=!CLANG_EXE!" ^
+    "-DCMAKE_CXX_COMPILER=!CLANGXX_EXE!" ^
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ^
     -DMOCIDA_BUILD_SHARED=!MOCIDA_SHARED! ^
     -DMOCIDA_BUILD_TESTS=!MOCIDA_TESTS! ^
