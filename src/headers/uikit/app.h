@@ -235,6 +235,17 @@ void UIApp_SetWindowSize(UIApp* app, int width, int height);
 void UIApp_SetWindowPosition(UIApp* app, int x, int y);
 
 /**
+ * Toggles whether the user can resize the application window. The
+ * window is resizable by default. Pass 0 to lock it to the size given
+ * at UIApp_Create (or the last UIApp_SetWindowSize call); pass 1 to
+ * re-enable the resize grip and the OS maximize button.
+ *
+ * Forwards to SDL_SetWindowResizable. No-op if the window has not
+ * been created yet.
+ */
+void UIApp_SetResizable(UIApp* app, int resizable);
+
+/**
  * Sets the scale mode of the application window.
  * @param app Pointer to the UIApp object.
  * @param displayMode Display mode to be set.

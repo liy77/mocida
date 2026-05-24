@@ -490,6 +490,11 @@ void UIApp_SetWindowPosition(UIApp* app, int x, int y) {
     SDL_SetWindowPosition(app->window->sdlWindow, x, y);
 }
 
+void UIApp_SetResizable(UIApp* app, int resizable) {
+    if (!app || !app->window || !app->window->sdlWindow) return;
+    SDL_SetWindowResizable(app->window->sdlWindow, resizable ? true : false);
+}
+
 void UIApp_SetEventCallback(UIApp* app, UI_EVENT event, UIEventCallback callback) {
     if (!app || !app->window || !callback) return;
     UIWindow_SetEventCallback(app->window, event, callback);
