@@ -9,6 +9,30 @@
  * The synchronous bootstrap in header.html applies the persisted choice
  * before paint to avoid a theme flash. This script wires the button.
  */
+/* Ensure the sidebar starts open. Doxygen persists the last drag width
+ * in two cookies (doxygen_width / doxygen_pagenav_width). If either is
+ * 0 or below a usable threshold (user collapsed it once, or it never
+ * received a value), promote it to a sane default BEFORE navtree.js
+ * reads them. Runs as early as possible to avoid a width-0 flash. */
+(function () {
+    var DEFAULT_WIDTH = 290;
+    var MIN_WIDTH = 200;
+    function bumpCookie(name) {
+        var v = parseInt(document.cookie.split(';').map(function (s) {
+            return s.trim();
+        }).filter(function (s) {
+            return s.indexOf(name + '=') === 0;
+        }).map(function (s) {
+            return s.substring(name.length + 1);
+        })[0] || '0', 10);
+        if (!v || v < MIN_WIDTH) {
+            document.cookie = name + '=' + DEFAULT_WIDTH + ';path=/;max-age=31536000;SameSite=Lax';
+        }
+    }
+    bumpCookie('doxygen_width');
+    bumpCookie('doxygen_pagenav_width');
+})();
+
 (function () {
     var STORAGE_KEY = 'mocida-theme';
 

@@ -238,7 +238,7 @@ ul.sm, ul.sm-dox,
 #main-nav-mobile {
     border-bottom: 1px solid var(--m-border) !important;
     box-shadow: none !important;
-    padding: 6px 16px !important;
+    padding: 2px 16px !important;
 }
 
 /* HTML_DYNAMIC_MENUS=NO makes Doxygen emit a tab row per nesting level
@@ -379,20 +379,15 @@ ul.sm, ul.sm-dox,
 /* Older .tabs/.tablist (some Doxygen modes still emit them) */
 ul.tablist {
     display: flex !important;
+    align-items: center;
     gap: 4px;
-    padding: 8px 12px !important;
+    padding: 4px 12px !important;
     list-style: none;
+    margin: 0 !important;
 }
 
 .tabs, .tabs2, .tabs3, .tablist {
     border-bottom: 1px solid var(--m-border) !important;
-}
-
-ul.tablist {
-    display: flex !important;
-    gap: 4px;
-    padding: 8px 12px !important;
-    list-style: none;
 }
 
 .tablist li,
@@ -403,6 +398,17 @@ ul.tablist li {
     box-shadow: none !important;
     margin: 0 !important;
     display: inline-flex;
+    align-items: center;
+}
+
+/* The MSearchBox is wrapped in a <li> inside the tab list. Doxygen
+ * marks it with style="float:right" inline — which doesn't play with
+ * flex. Use margin-left:auto to push the search box and everything
+ * after it to the far right, and align it vertically with the tabs. */
+.tablist li:has(#MSearchBox),
+ul.tablist li:has(#MSearchBox) {
+    margin-left: auto !important;
+    float: none !important;
 }
 
 .tablist li a,
@@ -413,7 +419,7 @@ ul.tablist li a {
     background-image: none !important;
     border: 1px solid transparent !important;
     border-radius: var(--m-radius-sm) !important;
-    padding: 6px 12px !important;
+    padding: 5px 12px !important;
     font-size: 13px !important;
     font-weight: 500 !important;
     text-decoration: none !important;
