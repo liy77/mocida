@@ -241,6 +241,14 @@ ul.sm, ul.sm-dox,
     padding: 6px 16px !important;
 }
 
+/* HTML_DYNAMIC_MENUS=NO makes Doxygen emit a tab row per nesting level
+ * (#navrow1 = top tabs, #navrow2 = sub-tabs like "Class List | Class
+ * Index", #navrow3 = even deeper). The sub-rows duplicate the in-page
+ * indices and the sidebar, so hide everything below the primary row. */
+#navrow2, #navrow3, #navrow4 {
+    display: none !important;
+}
+
 #main-menu {
     list-style: none;
     padding: 0 !important;
