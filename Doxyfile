@@ -41,7 +41,7 @@ GENERATE_TREEVIEW      = YES
 DISABLE_INDEX          = NO
 FULL_SIDEBAR           = NO
 HTML_DYNAMIC_SECTIONS  = YES
-HTML_DYNAMIC_MENUS     = YES
+HTML_DYNAMIC_MENUS     = NO
 HTML_TIMESTAMP         = NO
 # Force LIGHT — our custom CSS handles dark mode via @prefers-color-scheme.
 HTML_COLORSTYLE        = LIGHT
