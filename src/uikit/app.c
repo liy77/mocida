@@ -26,6 +26,7 @@
 #include <uikit/anim.h>
 #include <uikit/asset.h>
 #include <uikit/crash.h>
+#include <uikit/font.h>
 
 // Converts window coordinates (coming from SDL_Event) into the
 // renderer's logical space. Important because UIApp_HandleEvent sets
@@ -583,6 +584,20 @@ void UIApp_SetResizable(UIApp* app, int resizable) {
     SDL_SetWindowResizable(app->window->sdlWindow, resizable ? true : false);
 }
 
+void UIApp_SetMinSize(UIApp* app, int width, int height) {
+    if (!app || !app->window || !app->window->sdlWindow) return;
+    if (width < 1)  width  = 1;
+    if (height < 1) height = 1;
+    SDL_SetWindowMinimumSize(app->window->sdlWindow, width, height);
+}
+
+void UIApp_SetMaxSize(UIApp* app, int width, int height) {
+    if (!app || !app->window || !app->window->sdlWindow) return;
+    if (width < 1)  width  = 1;
+    if (height < 1) height = 1;
+    SDL_SetWindowMaximumSize(app->window->sdlWindow, width, height);
+}
+
 void UIApp_SetEventCallback(UIApp* app, UI_EVENT event, UIEventCallback callback) {
     if (!app || !app->window || !callback) return;
     UIWindow_SetEventCallback(app->window, event, callback);
@@ -623,16 +638,35 @@ void UIApp_SetAppId(UIApp* app, const char* aumid) {
 void UIApp_SetWindowDisplayMode(UIApp* app, UIWindowDisplayMode displayMode) {
     if (!app || !app->window || !app->window->sdlWindow) return;
 
+    SDL_Window* w = app->window->sdlWindow;
     switch (displayMode) {
         case WINDOW_WINDOWED:
-            SDL_SetWindowBordered(app->window->sdlWindow, 1);
-            SDL_SetWindowFullscreen(app->window->sdlWindow, 0);
+            SDL_SetWindowBordered(w, 1);
+            SDL_SetWindowFullscreen(w, 0);
             break;
         case WINDOW_FULLSCREEN:
-            SDL_SetWindowFullscreen(app->window->sdlWindow, 1);
+            // SDL3 has two flavours of fullscreen:
+            //   - Exclusive (a specific SDL_DisplayMode is set first):
+            //     OS switches the actual display resolution. Heavy
+            //     transition + on Linux/WSLg engages the compositor's
+            //     vsync path even when SDL_SetRenderVSync(0) was set,
+            //     because the compositor takes over the swap chain.
+            //   - "Desktop" (fullscreen mode == NULL): borderless
+            //     windowed at the desktop resolution. Identical visual,
+            //     no modeset, and on Linux the compositor leaves us in
+            //     the same fast present path as windowed mode.
+            //
+            // On Windows D3D11/12 the two paths perform similarly so we
+            // ifdef the explicit NULL-mode call to Linux/macOS only.
+            // Setting it on Windows would still work (NULL is the
+            // documented default), but the explicit call is just noise.
+#if defined(__linux__) || defined(__APPLE__)
+            SDL_SetWindowFullscreenMode(w, NULL);
+#endif
+            SDL_SetWindowFullscreen(w, 1);
             break;
         case WINDOW_BORDERLESS:
-            SDL_SetWindowBordered(app->window->sdlWindow, 0);
+            SDL_SetWindowBordered(w, 0);
             break;
     }
     app->window->displayMode = displayMode;
@@ -659,6 +693,7 @@ void UIApp_SetRenderDriver(UIApp* app, UIRenderDriver renderDriver) {
             SDL_SetHint(SDL_HINT_RENDER_DRIVER, "vulkan");
             driverName = "vulkan";
             break;
+        #ifdef _WIN32
         case UI_RENDER_3D9:
             // Used for Direct3D 9 - For legacy systems
             SDL_SetHint(SDL_HINT_RENDER_DRIVER, "direct3d");
@@ -672,6 +707,7 @@ void UIApp_SetRenderDriver(UIApp* app, UIRenderDriver renderDriver) {
             SDL_SetHint(SDL_HINT_RENDER_DRIVER, "direct3d12");
             driverName = "direct3d12";
             break;
+        #endif
         case UI_RENDER_GPU:
             SDL_SetHint(SDL_HINT_RENDER_DRIVER, "gpu");
             driverName = "gpu";
@@ -747,6 +783,13 @@ void UIApp_Destroy(UIApp* app) {
         app->mainWidget = NULL;
     }
     
+    // Tear down the system-font registry built by UISearchFonts.
+    // Was previously orphaned (the function existed but no caller
+    // invoked it) — under LSan/ASan that showed up as ~hundreds of
+    // unfreed allocations at shutdown (one entry per installed font,
+    // plus its family_name + file_path strings).
+    UIFonts_Destroy();
+
     UICursor_Shutdown();
     SDL_Quit();
     UI_TRACK_FREE(UI_CAT_CORE);

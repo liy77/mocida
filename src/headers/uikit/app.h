@@ -246,6 +246,19 @@ void UIApp_SetWindowPosition(UIApp* app, int x, int y);
 void UIApp_SetResizable(UIApp* app, int resizable);
 
 /**
+ * Constrains how small the user can resize the window. Useful for apps
+ * whose layout assumes a minimum viewport (e.g. fixed-size widgets
+ * arranged in a 3-row anchor matrix that overlap when squeezed).
+ * Pass any dimension < 1 and it is clamped back to 1.
+ *
+ * Forwards to SDL_SetWindowMinimumSize.
+ */
+void UIApp_SetMinSize(UIApp* app, int width, int height);
+
+/** Mirror of UIApp_SetMinSize for the upper bound. */
+void UIApp_SetMaxSize(UIApp* app, int width, int height);
+
+/**
  * Sets the scale mode of the application window.
  * @param app Pointer to the UIApp object.
  * @param displayMode Display mode to be set.

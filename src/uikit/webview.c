@@ -2076,7 +2076,662 @@ void UIWebView_DispatchMouseWheel(UIChildren* children, float x, float y,
     }
 }
 
-#else // !_WIN32
+#elif defined(__linux__) && defined(MOCIDA_HAS_WEBKITGTK)
+
+// =====================================================================
+// Linux backend — WebKitGTK 2 (GTK3, webkit2gtk-4.x).
+//
+// Architecture:
+//
+//   WebKitWebView (off-screen GtkOffscreenWindow)
+//        |
+//        +-- load_uri / reload / back/forward     (navigation)
+//        +-- user_content_manager (init scripts)
+//        +-- run_javascript                       (scripting)
+//        +-- website_data_manager_clear (cookies)
+//
+//   Snapshot pipeline (per render):
+//     gtk_widget_get_window + cairo_image_surface  (BGRA32)
+//        => SDL_Texture (STREAMING)               // shown by window.c
+//
+//   GLib event loop:
+//     pumped from UIWebView_RendererTick_Linux every frame via
+//     g_main_context_iteration(NULL, FALSE) — non-blocking, drains
+//     whatever signals fired since the last tick.
+//
+// What this MVP delivers:
+//   * Create / Destroy / Navigate / Reload / GoBack / GoForward
+//   * GetUrl
+//   * AddInitScript / ExecuteScript (queue before ready, flush after)
+//   * ClearCookies (queue before ready)
+//   * Load-state + URL-change callbacks
+//   * Rendered page shown as an SDL texture inside the widget bounds
+//
+// What is NOT yet implemented (returns no-op / stub):
+//   * Mouse / keyboard / wheel input forwarding (the view is display-
+//     only). Implementing this requires GdkEvent synthesis with
+//     widget-local coords + handling focus traversal — planned but
+//     not in the MVP. Use Windows for interactive workflows for now.
+//   * UIWebView_AddD2DOverlay / SetD2DOverlayText / SetCompositionMode
+//     (Win32-specific composition path; no Linux equivalent).
+//   * UIWebView_SetIsolated / OnProcessFailed (multi-process model is
+//     a WebView2 concept; WebKitGTK has its own).
+//   * UIWebView_SetRadius / SetBorder (could be done via SDL-side
+//     composition on top of the snapshot, but not wired up).
+//   * UIWebView_OnRequest (request interception via WebKitGTK's
+//     SubpathSubpath/WebFilter API — phase 2).
+// =====================================================================
+
+#include <webkit2/webkit2.h>
+#include <gtk/gtk.h>
+#include <SDL3/SDL.h>
+#include <uikit/debug.h>
+
+// A queued init script or pending JS to run once the view is ready.
+typedef struct WVPendingScript {
+    char* js;
+    int   isInit;      // 1 = AddInitScript (forever), 0 = ExecuteScript (once)
+    struct WVPendingScript* next;
+} WVPendingScript;
+
+struct UIWebView {
+    const char* __widget_type;
+
+    // ---- WebKit / GTK ----
+    GtkWidget*       offscreenWindow;   // GtkOffscreenWindow holding the view
+    WebKitWebView*   view;              // the actual webview widget
+    WebKitUserContentManager* ucm;      // for init scripts
+    int              ready;             // 1 once the first load-changed fires
+    int              loading;           // 1 between load-started and load-finished
+
+    // ---- Pending state (queued before view is ready) ----
+    char*            pendingUrl;        // navigate target queued before init
+    WVPendingScript* pendingScripts;    // singly-linked list, FIFO drained on ready
+    int              pendingClearCookies;
+
+    // ---- SDL render side ----
+    SDL_Texture*     texture;           // BGRA32 streaming, recreated on size change
+    int              texW, texH;        // current texture size
+    Uint32           lastSnapshotTick;  // SDL_GetTicks at last upload, used for throttle
+
+    // ---- Async snapshot pipeline ----
+    cairo_surface_t* latestSnapshot;    // owned; replaced when a fresh one arrives
+    int              snapshotPending;   // 1 between request and callback fire
+    int              requestedW, requestedH; // last size we asked the view to render at
+
+    // ---- Public callbacks ----
+    UIWebViewReadyCallback        onReady;
+    void*                         onReadyUserdata;
+    UIWebViewUrlChangeCallback    onUrlChange;
+    void*                         onUrlChangeUserdata;
+    UIWebViewLoadingCallback      onLoading;
+    void*                         onLoadingUserdata;
+
+    // ---- Visuals (consumed by the SDL render path) ----
+    float            cornerRadius;
+    float            borderWidth;
+    UIColor          borderColor;
+    int              hasBorder;
+};
+
+// One-shot GTK init. Same shape as the GStreamer init in video.c — must
+// run on the main thread before any WebKit/GTK call. We pass a real
+// argv[0] because some GTK option groups dereference argv on init.
+static int g_gtkInited = 0;
+
+static void EnsureGtkInit(void) {
+    if (g_gtkInited) return;
+
+    // Force WebKit's renderer + cairo + Mesa onto the CPU path. The
+    // default DMA-BUF / EGL accelerated path expects a real DRM device
+    // + working EGL; under WSLg neither is available (the compositor
+    // exposes a software Mesa "dzn" Vulkan ICD and no DRM node). The
+    // GL path then fails with "libEGL warning: failed to get driver
+    // name for fd -1" and either crashes or returns empty snapshots.
+    //
+    // Six escape hatches (documented in WebKitGTK NEWS files), each
+    // covering a layer that could re-enable GL:
+    //   WEBKIT_DISABLE_COMPOSITING_MODE  - kills the AC compositor
+    //   WEBKIT_DISABLE_DMABUF_RENDERER   - skips the DMA-BUF GPU path
+    //   WEBKIT_FORCE_SANDBOX             - 0 = single-process, lets
+    //                                       us skip the GPU helper
+    //   WEBKIT_FORCE_COMPOSITING_MODE    - 0 = honour DISABLE above
+    //   LIBGL_ALWAYS_SOFTWARE            - forces Mesa swrast
+    //   GDK_GL                           - disable=hard-no for GTK
+    //
+    // setenv with overwrite=0 means a user-provided value wins.
+    setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1", 0);
+    setenv("WEBKIT_DISABLE_DMABUF_RENDERER",  "1", 0);
+    // 2.42+ renamed WEBKIT_FORCE_SANDBOX (which only enables) to the
+    // explicit DANGEROUS-suffixed name. Set both for compatibility.
+    setenv("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", "1", 0);
+    setenv("WEBKIT_FORCE_COMPOSITING_MODE",   "0", 0);
+    setenv("LIBGL_ALWAYS_SOFTWARE",           "1", 0);
+    setenv("GDK_GL",                          "disable", 0);
+
+    int    fake_argc   = 1;
+    char   progName[]  = "mocida";
+    char*  fake_argv[] = { progName, NULL };
+    char** argv_p      = fake_argv;
+    if (!gtk_init_check(&fake_argc, &argv_p)) {
+        UI_ERROR(UI_CAT_RENDER, "GTK init failed — UIWebView will not render");
+        return;
+    }
+    g_gtkInited = 1;
+}
+
+// Public early-init hook, mirrors UIVideo_PreInit. Mocida apps that want
+// to be defensive call this at the top of main() before SDL_Init. Same
+// rationale as gst_init: getting in before SDL avoids GLib state being
+// touched by the wrong thread order under WSLg.
+void UIWebView_PreInit_Linux(void) { EnsureGtkInit(); }
+
+// Forward decl: drain pending scripts / nav / cookie ops once the view
+// reports it can accept them. Called from the load-changed signal on
+// first WEBKIT_LOAD_COMMITTED.
+static void FlushPending(UIWebView* wv);
+
+// load-changed signal: fires for every state transition (STARTED,
+// REDIRECTED, COMMITTED, FINISHED). We use it to:
+//   - mark `loading` for UIWebView_OnLoadingChange consumers
+//   - mark `ready` and flush pending ops on the first COMMITTED
+static void OnLoadChanged(WebKitWebView* view, WebKitLoadEvent ev, gpointer ud) {
+    (void)view;
+    UIWebView* wv = (UIWebView*)ud;
+    if (!wv) return;
+    if (ev == WEBKIT_LOAD_STARTED || ev == WEBKIT_LOAD_REDIRECTED) {
+        if (!wv->loading) {
+            wv->loading = 1;
+            if (wv->onLoading) wv->onLoading(wv, 1, wv->onLoadingUserdata);
+        }
+    } else if (ev == WEBKIT_LOAD_FINISHED) {
+        if (wv->loading) {
+            wv->loading = 0;
+            if (wv->onLoading) wv->onLoading(wv, 0, wv->onLoadingUserdata);
+        }
+        if (!wv->ready) {
+            wv->ready = 1;
+            FlushPending(wv);
+            if (wv->onReady) wv->onReady(wv, wv->onReadyUserdata);
+        }
+    } else if (ev == WEBKIT_LOAD_COMMITTED && !wv->ready) {
+        // Some sites never fire FINISHED for streaming pages; treat
+        // COMMITTED as "ready enough" so a queued ExecuteScript can run.
+        wv->ready = 1;
+        FlushPending(wv);
+        if (wv->onReady) wv->onReady(wv, wv->onReadyUserdata);
+    }
+}
+
+// notify::uri signal: forward to UIWebViewUrlChangeCallback. Fires on
+// every URL transition, including in-page hash changes and history
+// nav. The URI is owned by WebKit; we hand it to the callback as a
+// borrowed string, matching the Win32 contract.
+static void OnUriChanged(GObject* obj, GParamSpec* spec, gpointer ud) {
+    (void)spec;
+    UIWebView* wv = (UIWebView*)ud;
+    if (!wv) return;
+    const gchar* uri = webkit_web_view_get_uri(WEBKIT_WEB_VIEW(obj));
+    if (uri && wv->onUrlChange) wv->onUrlChange(wv, uri, wv->onUrlChangeUserdata);
+}
+
+static void RunJsCallback(GObject* src, GAsyncResult* res, gpointer ud) {
+    (void)ud;
+    WebKitWebView* view = WEBKIT_WEB_VIEW(src);
+    GError* err = NULL;
+    // WebKitGTK 2.40+ deprecated webkit_web_view_run_javascript in
+    // favour of evaluate_javascript, which returns a JSCValue instead
+    // of a WebKitJavascriptResult. We don't read the result so just
+    // drop whichever shape this build of WebKit produces.
+#if WEBKIT_CHECK_VERSION(2, 40, 0)
+    JSCValue* r = webkit_web_view_evaluate_javascript_finish(view, res, &err);
+    if (r) g_object_unref(r);
+#else
+    WebKitJavascriptResult* r =
+        webkit_web_view_run_javascript_finish(view, res, &err);
+    if (r) webkit_javascript_result_unref(r);
+#endif
+    if (err) {
+        UI_WARN(UI_CAT_RENDER, "UIWebView JS error: %s", err->message);
+        g_error_free(err);
+    }
+}
+
+// Cross-version JS execution helper. Selects evaluate_javascript on
+// WebKitGTK 2.40+ (current API) and falls back to run_javascript on
+// older releases. Same callback shape, same fire-and-forget semantics.
+static void RunJavaScript(WebKitWebView* view, const char* script) {
+    if (!view || !script) return;
+#if WEBKIT_CHECK_VERSION(2, 40, 0)
+    webkit_web_view_evaluate_javascript(view, script, -1,
+                                        NULL, NULL,
+                                        NULL,
+                                        RunJsCallback, NULL);
+#else
+    webkit_web_view_run_javascript(view, script, NULL,
+                                   RunJsCallback, NULL);
+#endif
+}
+
+static void FlushPending(UIWebView* wv) {
+    if (!wv || !wv->view) return;
+    if (wv->pendingClearCookies) {
+        WebKitWebsiteDataManager* dm =
+            webkit_web_context_get_website_data_manager(
+                webkit_web_view_get_context(wv->view));
+        if (dm) {
+            webkit_website_data_manager_clear(
+                dm, WEBKIT_WEBSITE_DATA_COOKIES, 0, NULL, NULL, NULL);
+        }
+        wv->pendingClearCookies = 0;
+    }
+    WVPendingScript* s = wv->pendingScripts;
+    wv->pendingScripts = NULL;
+    while (s) {
+        WVPendingScript* next = s->next;
+        if (s->isInit) {
+            WebKitUserScript* us = webkit_user_script_new(
+                s->js,
+                WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
+                WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
+                NULL, NULL);
+            webkit_user_content_manager_add_script(wv->ucm, us);
+            webkit_user_script_unref(us);
+        } else {
+            RunJavaScript(wv->view, s->js);
+        }
+        free(s->js);
+        free(s);
+        s = next;
+    }
+}
+
+static void QueueScript(UIWebView* wv, const char* js, int isInit) {
+    if (!wv || !js) return;
+    WVPendingScript* s = (WVPendingScript*)calloc(1, sizeof(*s));
+    if (!s) return;
+    s->js = _strdup(js);
+    s->isInit = isInit;
+    // Append at end so they fire in the order the user added them.
+    if (!wv->pendingScripts) {
+        wv->pendingScripts = s;
+    } else {
+        WVPendingScript* tail = wv->pendingScripts;
+        while (tail->next) tail = tail->next;
+        tail->next = s;
+    }
+}
+
+UIWebView* UIWebView_Create(const char* initialUrl) {
+    EnsureGtkInit();
+    if (!g_gtkInited) return NULL;
+
+    UIWebView* wv = (UIWebView*)calloc(1, sizeof(*wv));
+    if (!wv) return NULL;
+    wv->__widget_type = UI_WIDGET_WEBVIEW;
+    wv->cornerRadius = 0.0f;
+    wv->borderWidth = 0.0f;
+    wv->borderColor = (UIColor){ 0, 0, 0, 0.0f };
+
+    wv->offscreenWindow = gtk_offscreen_window_new();
+    wv->ucm = webkit_user_content_manager_new();
+    wv->view = WEBKIT_WEB_VIEW(
+        webkit_web_view_new_with_user_content_manager(wv->ucm));
+
+    // Even with the WEBKIT_DISABLE_* env vars set in EnsureGtkInit,
+    // pin the hardware-acceleration policy to NEVER here so any
+    // settings-level override (user-passed WebKit settings, system
+    // GSettings on the host distro) can't flip us back into the GL
+    // path that crashes under WSLg.
+    {
+        WebKitSettings* set = webkit_web_view_get_settings(wv->view);
+        webkit_settings_set_hardware_acceleration_policy(
+            set, WEBKIT_HARDWARE_ACCELERATION_POLICY_NEVER);
+    }
+
+    // The offscreen window manages widget realization without showing
+    // an X11 / Wayland surface — perfect for capturing pixels into an
+    // SDL_Texture without flashing a second window.
+    gtk_container_add(GTK_CONTAINER(wv->offscreenWindow),
+                      GTK_WIDGET(wv->view));
+    // Start at a reasonable default size; UIWebView_RendererTick_Linux
+    // will resize on demand to match the widget bounds.
+    gtk_window_set_default_size(GTK_WINDOW(wv->offscreenWindow), 640, 480);
+    gtk_widget_show_all(wv->offscreenWindow);
+
+    g_signal_connect(wv->view, "load-changed",
+                     G_CALLBACK(OnLoadChanged), wv);
+    g_signal_connect(wv->view, "notify::uri",
+                     G_CALLBACK(OnUriChanged), wv);
+
+    if (initialUrl && *initialUrl) {
+        webkit_web_view_load_uri(wv->view, initialUrl);
+    } else {
+        // Blank page; ready signal will still fire.
+        webkit_web_view_load_html(wv->view,
+            "<!doctype html><html><body></body></html>", NULL);
+    }
+    return wv;
+}
+
+UIWebView* UIWebView_Navigate(UIWebView* wv, const char* url) {
+    if (!wv) return NULL;
+    if (!wv->view) {
+        free(wv->pendingUrl);
+        wv->pendingUrl = url ? _strdup(url) : NULL;
+        return wv;
+    }
+    if (url && *url) webkit_web_view_load_uri(wv->view, url);
+    return wv;
+}
+
+const char* UIWebView_GetUrl(UIWebView* wv) {
+    if (!wv || !wv->view) return wv ? wv->pendingUrl : NULL;
+    return webkit_web_view_get_uri(wv->view);
+}
+
+UIWebView* UIWebView_Reload(UIWebView* wv) {
+    if (wv && wv->view) webkit_web_view_reload(wv->view);
+    return wv;
+}
+UIWebView* UIWebView_GoBack(UIWebView* wv) {
+    if (wv && wv->view && webkit_web_view_can_go_back(wv->view))
+        webkit_web_view_go_back(wv->view);
+    return wv;
+}
+UIWebView* UIWebView_GoForward(UIWebView* wv) {
+    if (wv && wv->view && webkit_web_view_can_go_forward(wv->view))
+        webkit_web_view_go_forward(wv->view);
+    return wv;
+}
+
+UIWebView* UIWebView_OnReady(UIWebView* wv, UIWebViewReadyCallback cb, void* ud) {
+    if (wv) { wv->onReady = cb; wv->onReadyUserdata = ud; }
+    return wv;
+}
+UIWebView* UIWebView_OnUrlChange(UIWebView* wv, UIWebViewUrlChangeCallback cb, void* ud) {
+    if (wv) { wv->onUrlChange = cb; wv->onUrlChangeUserdata = ud; }
+    return wv;
+}
+UIWebView* UIWebView_OnLoadingChange(UIWebView* wv, UIWebViewLoadingCallback cb, void* ud) {
+    if (wv) { wv->onLoading = cb; wv->onLoadingUserdata = ud; }
+    return wv;
+}
+
+UIWebView* UIWebView_AddInitScript(UIWebView* wv, const char* js) {
+    if (!wv || !js) return wv;
+    if (wv->ucm && wv->ready) {
+        WebKitUserScript* us = webkit_user_script_new(
+            js, WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
+            WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START, NULL, NULL);
+        webkit_user_content_manager_add_script(wv->ucm, us);
+        webkit_user_script_unref(us);
+    } else {
+        QueueScript(wv, js, 1);
+    }
+    return wv;
+}
+UIWebView* UIWebView_ExecuteScript(UIWebView* wv, const char* js) {
+    if (!wv || !js) return wv;
+    if (wv->view && wv->ready) {
+        RunJavaScript(wv->view, js);
+    } else {
+        QueueScript(wv, js, 0);
+    }
+    return wv;
+}
+UIWebView* UIWebView_ClearCookies(UIWebView* wv) {
+    if (!wv) return wv;
+    if (wv->view && wv->ready) {
+        WebKitWebsiteDataManager* dm =
+            webkit_web_context_get_website_data_manager(
+                webkit_web_view_get_context(wv->view));
+        if (dm) webkit_website_data_manager_clear(
+            dm, WEBKIT_WEBSITE_DATA_COOKIES, 0, NULL, NULL, NULL);
+    } else {
+        wv->pendingClearCookies = 1;
+    }
+    return wv;
+}
+
+// Visual setters: consumed by the SDL render path via UIWebView_GetVisuals.
+UIWebView* UIWebView_SetRadius(UIWebView* wv, float r) {
+    if (wv) wv->cornerRadius = (r < 0.0f) ? 0.0f : r;
+    return wv;
+}
+UIWebView* UIWebView_SetBorder(UIWebView* wv, UIColor c, float w) {
+    if (!wv) return wv;
+    wv->borderColor = c;
+    wv->borderWidth = (w < 0.0f) ? 0.0f : w;
+    wv->hasBorder   = (wv->borderWidth > 0.0f);
+    return wv;
+}
+
+void UIWebView_GetVisuals(const UIWebView* wv, float* radius, float* borderWidth,
+                          UIColor* borderColor, int* hasBorder) {
+    if (!wv) return;
+    if (radius)      *radius      = wv->cornerRadius;
+    if (borderWidth) *borderWidth = wv->borderWidth;
+    if (borderColor) *borderColor = wv->borderColor;
+    if (hasBorder)   *hasBorder   = wv->hasBorder;
+}
+
+// Async snapshot callback. Fires on the GTK main thread when the
+// snapshot we requested below completes. We just stash the surface
+// for the next render tick to upload; the actual SDL_UpdateTexture
+// happens on the SDL thread (which IS the GTK thread here — we drive
+// the main loop manually from RendererTick).
+static void OnSnapshotReady(GObject* src, GAsyncResult* res, gpointer ud) {
+    UIWebView* wv = (UIWebView*)ud;
+    if (!wv) return;
+    wv->snapshotPending = 0;
+    GError* err = NULL;
+    cairo_surface_t* surf = webkit_web_view_get_snapshot_finish(
+        WEBKIT_WEB_VIEW(src), res, &err);
+    if (err) {
+        // Log domain+code+message — generic "There was an error creating
+        // the snapshot" hides the real cause; the GError's domain points
+        // at which subsystem (GdkGL, WPE, cairo) actually choked.
+        static int loggedOnce = 0;
+        if (!loggedOnce) {
+            UI_WARN(UI_CAT_RENDER,
+                    "UIWebView snapshot error (first occurrence): "
+                    "domain=%s code=%d msg=%s",
+                    g_quark_to_string(err->domain), err->code, err->message);
+            loggedOnce = 1;
+        }
+        g_error_free(err);
+    }
+    if (!surf) return;
+    if (wv->latestSnapshot) cairo_surface_destroy(wv->latestSnapshot);
+    wv->latestSnapshot = surf;
+    // Log first success so we can see in the field whether the
+    // snapshot pipeline ever completes a round-trip.
+    static int loggedFirstSuccess = 0;
+    if (!loggedFirstSuccess) {
+        UI_INFO(UI_CAT_RENDER,
+                "UIWebView first snapshot OK (%dx%d)",
+                cairo_image_surface_get_width(surf),
+                cairo_image_surface_get_height(surf));
+        loggedFirstSuccess = 1;
+    }
+}
+
+// Renderer hook called once per frame from window.c's UIWebView branch.
+//
+// Pipeline:
+//   1. Pump GLib so any signals (load-changed, snapshot-finished, JS
+//      callbacks) that fired since last tick get delivered.
+//   2. If a new snapshot finished, upload it to the SDL streaming
+//      texture and discard the cairo surface.
+//   3. Resize the offscreen window if the destination size changed.
+//   4. Kick off a new snapshot request if none is in flight. WebKit
+//      will deliver it via OnSnapshotReady on a future tick.
+//
+// Why webkit_web_view_get_snapshot() instead of
+// gtk_offscreen_window_get_surface(): the offscreen-window API only
+// captures GTK's own draw pass; WebKitGTK renders the page via its
+// internal GPU process and copies the result into its own surface,
+// which the offscreen window never sees. The webview's snapshot API
+// (added exactly for this purpose) reaches into WebKit's renderer
+// and hands us the actually-composited page bitmap as a cairo
+// surface — same format (ARGB32 = BGRA on little-endian), zero
+// extra copies on our side.
+SDL_Texture* UIWebView_GetSnapshotTexture_Linux(UIWebView* wv, SDL_Renderer* r,
+                                                int w, int h) {
+    if (!wv || !wv->view || !r || w <= 0 || h <= 0) return NULL;
+
+    // 1. Drain the GLib main loop, advancing every webkit / cairo
+    //    source that's pending. Non-blocking.
+    while (g_main_context_iteration(NULL, FALSE)) {
+        // keep draining
+    }
+
+    // 2. If a snapshot is sitting in latestSnapshot, upload + free.
+    if (wv->latestSnapshot) {
+        int sw = cairo_image_surface_get_width(wv->latestSnapshot);
+        int sh = cairo_image_surface_get_height(wv->latestSnapshot);
+        if (sw > 0 && sh > 0) {
+            if (!wv->texture || wv->texW != sw || wv->texH != sh) {
+                if (wv->texture) SDL_DestroyTexture(wv->texture);
+                wv->texture = SDL_CreateTexture(r, SDL_PIXELFORMAT_BGRA32,
+                                                SDL_TEXTUREACCESS_STREAMING,
+                                                sw, sh);
+                wv->texW = sw;
+                wv->texH = sh;
+            }
+            if (wv->texture) {
+                cairo_surface_flush(wv->latestSnapshot);
+                const unsigned char* pixels =
+                    cairo_image_surface_get_data(wv->latestSnapshot);
+                int stride = cairo_image_surface_get_stride(wv->latestSnapshot);
+                if (pixels && stride > 0) {
+                    SDL_UpdateTexture(wv->texture, NULL, pixels, stride);
+                    wv->lastSnapshotTick = SDL_GetTicks();
+                }
+            }
+        }
+        cairo_surface_destroy(wv->latestSnapshot);
+        wv->latestSnapshot = NULL;
+    }
+
+    // 3. Resize the offscreen GTK window so WebKit reflows at the
+    //    requested resolution. We only resize when the size CHANGES,
+    //    not every frame — gtk_window_resize triggers a full WebKit
+    //    layout + render which then races snapshot requests we'd fire
+    //    in the next few frames (the docs are explicit: snapshot can
+    //    return WEBKIT_SNAPSHOT_ERROR_FAILED_TO_CREATE while the view
+    //    is mid-allocation). The `resizedAt` tick lets us hold off on
+    //    requesting a new snapshot for a beat after a resize.
+    if (wv->requestedW != w || wv->requestedH != h) {
+        gtk_window_resize(GTK_WINDOW(wv->offscreenWindow), w, h);
+        gtk_widget_set_size_request(GTK_WIDGET(wv->view), w, h);
+        gtk_widget_queue_resize(GTK_WIDGET(wv->view));
+        wv->requestedW = w;
+        wv->requestedH = h;
+        wv->lastSnapshotTick = SDL_GetTicks(); // reuse field as resize-debounce timer
+    }
+
+    // 4. Throttle snapshot requests. WebKit's get_snapshot is async +
+    //    surprisingly expensive (full software composite when HW accel
+    //    is off, as it is on WSLg). Firing one every render tick at
+    //    1700+ FPS thrashes WebKit's compositor and produces a steady
+    //    stream of FAILED_TO_CREATE errors that never let a real
+    //    snapshot complete. lastSnapshotTick is set both on successful
+    //    uploads AND on resizes (above) so a single >=150ms gate gives
+    //    WebKit a beat to settle either way before the next request.
+    //    ~150 ms = ~7 effective Hz of webview refresh — plenty for any
+    //    text-heavy UI use case, cheap enough not to peg CPU.
+    const Uint32 nowTick = SDL_GetTicks();
+    const Uint32 sinceLast = nowTick - wv->lastSnapshotTick;
+    const Uint32 quietMs = 150;
+    if (!wv->snapshotPending && sinceLast >= quietMs) {
+        wv->snapshotPending = 1;
+        webkit_web_view_get_snapshot(
+            wv->view,
+            WEBKIT_SNAPSHOT_REGION_VISIBLE,
+            WEBKIT_SNAPSHOT_OPTIONS_NONE,
+            NULL,                       // cancellable
+            OnSnapshotReady, wv);
+    }
+
+    return wv->texture;
+}
+
+void UIWebView_Destroy(UIWebView* wv) {
+    if (!wv) return;
+    if (wv->offscreenWindow) {
+        // gtk_widget_destroy drops the view + ucm refs in the right
+        // order (children first, then the offscreen window itself).
+        gtk_widget_destroy(wv->offscreenWindow);
+    }
+    if (wv->latestSnapshot) {
+        cairo_surface_destroy(wv->latestSnapshot);
+        wv->latestSnapshot = NULL;
+    }
+    if (wv->texture) SDL_DestroyTexture(wv->texture);
+    while (wv->pendingScripts) {
+        WVPendingScript* n = wv->pendingScripts->next;
+        free(wv->pendingScripts->js);
+        free(wv->pendingScripts);
+        wv->pendingScripts = n;
+    }
+    free(wv->pendingUrl);
+    free(wv);
+}
+
+// ----- Stubs for Win32-specific APIs (no Linux equivalent / phase 2) ----
+UIWebView* UIWebView_SetCompositionMode(UIWebView* wv, int e)        { (void)e; return wv; }
+UIWebView* UIWebView_SetBrowserArguments(UIWebView* wv, const char* a){(void)a; return wv; }
+UIWebView* UIWebView_AppendBrowserArguments(UIWebView* wv, const char* a){(void)a; return wv; }
+const char* UIWebView_GetDefaultBrowserArguments(void)               { return ""; }
+UIWebView* UIWebView_SetUserAgent(UIWebView* wv, const char* s) {
+    if (wv && wv->view && s) {
+        WebKitSettings* set = webkit_web_view_get_settings(wv->view);
+        webkit_settings_set_user_agent(set, s);
+    }
+    return wv;
+}
+UIWebView* UIWebView_SetDevToolsEnabled(UIWebView* wv, int e) {
+    if (wv && wv->view) {
+        WebKitSettings* set = webkit_web_view_get_settings(wv->view);
+        webkit_settings_set_enable_developer_extras(set, e ? TRUE : FALSE);
+    }
+    return wv;
+}
+UIWebView* UIWebView_SetContextMenusEnabled(UIWebView* wv, int e) { (void)e; return wv; }
+UIWebView* UIWebView_SetIsolated(UIWebView* wv, int e)            { (void)e; return wv; }
+UIWebView* UIWebView_OnProcessFailed(UIWebView* wv, UIWebViewProcessFailedCallback cb, void* ud) {
+    (void)cb; (void)ud; return wv;
+}
+UIWebView* UIWebView_OnRequest(UIWebView* wv, UIWebViewRequestCallback cb, void* ud) {
+    (void)cb; (void)ud; return wv;
+}
+int  UIWebView_AddD2DOverlay(UIWebView* wv, int x, int y, int w, int h, float r, UIColor c) {
+    (void)wv; (void)x; (void)y; (void)w; (void)h; (void)r; (void)c; return -1;
+}
+void UIWebView_SetD2DOverlayText(UIWebView* wv, int h, const char* t, const char* f, float s, UIColor c, float p) {
+    (void)wv; (void)h; (void)t; (void)f; (void)s; (void)c; (void)p;
+}
+void UIWebView_MoveD2DOverlay(UIWebView* wv, int h, int x, int y, int w, int hh) {
+    (void)wv; (void)h; (void)x; (void)y; (void)w; (void)hh;
+}
+void UIWebView_RemoveD2DOverlay(UIWebView* wv, int h) { (void)wv; (void)h; }
+
+// Input dispatchers — phase 2. The display-only MVP returns 0 for hover
+// cursor and ignores motion / clicks / wheel. To implement, walk the
+// children, find the UIWebView under the cursor, translate (x, y) into
+// widget-local coords, synthesize a GdkEventMotion / Button / Scroll
+// with the local coords and gtk_widget_event into wv->view.
+void UIWebView_DispatchMouseMotion(UIChildren* c, float x, float y) { (void)c; (void)x; (void)y; }
+void UIWebView_DispatchMouseDown  (UIChildren* c, float x, float y, int b) { (void)c; (void)x; (void)y; (void)b; }
+void UIWebView_DispatchMouseUp    (UIChildren* c, float x, float y, int b) { (void)c; (void)x; (void)y; (void)b; }
+void UIWebView_DispatchMouseWheel (UIChildren* c, float x, float y, float dx, float dy) {
+    (void)c; (void)x; (void)y; (void)dx; (void)dy;
+}
+int  UIWebView_HoverCursorAt      (UIChildren* c, float x, float y) { (void)c; (void)x; (void)y; return 0; }
+
+#else // !_WIN32 && !(linux + WebKitGTK)
 
 /** Non-Windows stub of UIWebView. Stores only what is needed so calls
  *  don't crash; rendering and navigation are no-ops. */

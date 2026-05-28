@@ -37,6 +37,22 @@ typedef struct UIVideo UIVideo;
 typedef void (*UIVideoCallback)(UIVideo* v, void* userdata);
 
 /**
+ * Optional early-init hook for the video backend.
+ *
+ * On most platforms UIVideo_Create lazily initialises the backend on
+ * first use. On Linux with GStreamer 1.28 + SDL3 (notably WSLg), the
+ * lazy path crashes inside gst_init_check because SDL has already
+ * touched GLib state in a way GStreamer's option parser can't recover
+ * from. Calling UIVideo_PreInit at the top of main() — BEFORE any
+ * SDL or other mocida call — sidesteps the conflict.
+ *
+ * Idempotent; safe to call zero, one, or many times. No-op on Windows
+ * (Media Foundation initialises per-instance inside UIVideo_Create)
+ * and on builds without a video backend.
+ */
+void UIVideo_PreInit(void);
+
+/**
  * Loads a video file. Returns NULL when the format isn't supported or
  * the file is missing. Heavy initialization (MF startup, codec probe)
  * happens here; the first frame is NOT decoded yet.

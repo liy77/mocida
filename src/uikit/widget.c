@@ -14,6 +14,7 @@
 #include <uikit/popup.h>
 #include <uikit/video.h>
 #include <uikit/file_drop.h>
+#include <uikit/container.h>
 #include <uikit/window.h>
 #include <SDL3/SDL.h>
 
@@ -47,6 +48,7 @@ UIWidget* UIWidget_Create(UIWidgetData data)  {
     widget->data = data;
     widget->id = NULL;
     widget->focused = 0;
+    widget->clipChildren = 0;
 
     return widget;
 }
@@ -126,6 +128,16 @@ UIWidget* UIWidget_SetVisible(UIWidget* widget, int visible) {
     return widget;
 }
 
+UIWidget* UIWidget_SetClipChildren(UIWidget* widget, int enabled) {
+    if (widget == NULL) return NULL;
+    widget->clipChildren = enabled ? 1 : 0;
+    return widget;
+}
+
+int UIWidget_GetClipChildren(const UIWidget* widget) {
+    return (widget && widget->clipChildren) ? 1 : 0;
+}
+
 UIWidget* UIWidget_GetParent(UIWidget* widget) {
     if (widget == NULL) return NULL;
     // The previous check returned NULL when parent->width / height were
@@ -154,50 +166,61 @@ void UIWidget_Destroy(UIWidget* widget) {
 
     if (widget->data) {
         UIWidgetBase* base = (UIWidgetBase*)widget->data;
-        if (!strcmp(base->__widget_type, UI_WIDGET_TEXT)) {
+        const char* t = base->__widget_type;
+        if (UIWidget_TypeIs(t, UI_WIDGET_TEXT)) {
             UIText_Destroy((UIText*)base);           // already frees 'base'
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_RECTANGLE)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_RECTANGLE)) {
             UIRectangle_Destroy((UIRectangle*)base); // already frees 'base'
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_BUTTON)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_BUTTON)) {
             UIButton_Destroy((UIButton*)base);       // already frees 'base'
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_IMAGE)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_IMAGE)) {
             UIImage_Destroy((UIImage*)base);         // already frees 'base'
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_MOUSE_AREA)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_MOUSE_AREA)) {
             UIMouseArea_Destroy((UIMouseArea*)base); // already frees 'base'
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_CHECKBOX)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_CHECKBOX)) {
             UICheckbox_Destroy((UICheckbox*)base);
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_SWITCH)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_SWITCH)) {
             UISwitch_Destroy((UISwitch*)base);
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_RADIO)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_RADIO)) {
             UIRadio_Destroy((UIRadioButton*)base);
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_SLIDER)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_SLIDER)) {
             UISlider_Destroy((UISlider*)base);
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_PROGRESS_BAR)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_PROGRESS_BAR)) {
             UIProgressBar_Destroy((UIProgressBar*)base);
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_SPINNER)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_SPINNER)) {
             UISpinner_Destroy((UISpinner*)base);
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_TEXTFIELD)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_TEXTFIELD)) {
             UITextField_Destroy((UITextField*)base);
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_TEXTAREA)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_TEXTAREA)) {
             UITextArea_Destroy((UITextArea*)base);
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_STACK)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_STACK)) {
             UIStack_Destroy((UIStack*)base);
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_DIALOG)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_DIALOG)) {
             UIDialog_Destroy((UIDialog*)base);
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_TABVIEW)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_TABVIEW)) {
             UITabView_Destroy((UITabView*)base);
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_TOOLTIP)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_TOOLTIP)) {
             UITooltip_Destroy((UITooltip*)base);
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_MENU)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_MENU)) {
             UIMenu_Destroy((UIMenu*)base);
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_DROPDOWN)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_DROPDOWN)) {
             UIDropdown_Destroy((UIDropdown*)base);
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_VIDEO)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_VIDEO)) {
             UIVideo_Destroy((UIVideo*)base);
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_WEBVIEW)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_WEBVIEW)) {
             UIWebView_Destroy((UIWebView*)base);
-        } else if (!strcmp(base->__widget_type, UI_WIDGET_FILE_DROP)) {
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_FILE_DROP)) {
             UIFileDrop_Destroy((UIFileDrop*)base);
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_GRID)) {
+            // Previously fell through to `free(base)` which kept g->items
+            // and every child widget inside it alive. Hits any code path
+            // that wraps a UIGrid in a UIWidget (UIListView, custom grid
+            // layouts) on destroy.
+            UIGrid_Destroy((UIGrid*)base);
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_SCROLL)) {
+            // Same story as GRID — UIScroll owns content + background;
+            // the default path leaked both.
+            UIScroll_Destroy((UIScroll*)base);
         } else {
             // Unknown type - at least free the base struct so it doesn't leak.
             free(base);

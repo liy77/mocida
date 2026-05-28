@@ -9,9 +9,84 @@
 #else
 #include <sys/stat.h>
 #include <dirent.h>
+#include <strings.h>   // strcasecmp (POSIX, not in <string.h>)
 #endif
 
 #include <SDL3_ttf/SDL_ttf.h>
+
+#ifndef _WIN32
+// Recursive walker for UISearchFonts on Linux/BSD/macOS. Returns
+// silently on any I/O error so a half-populated font tree never
+// crashes the host app — we just end up with whichever fonts were
+// reachable before the failure.
+//
+// Pass the bootstrap dir (SYSTEM_FONTS_PATH) as `dirPath`; the
+// function recurses into every subdirectory it discovers. Both .ttf
+// and .otf are accepted because SDL_ttf 3 opens both via the same
+// TTF_OpenFont entry point.
+static void WalkFontsDir(const char* dirPath, int* count) {
+    if (!dirPath || !count) return;
+    DIR* dir = opendir(dirPath);
+    if (!dir) return;
+
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_name[0] == '.') continue; // skip "." / ".." / hidden
+
+        char child[1024];
+        snprintf(child, sizeof(child), "%s/%s", dirPath, entry->d_name);
+
+        // d_type can be DT_UNKNOWN on some filesystems (e.g. XFS,
+        // overlayfs in containers). Fall back to stat() to learn the
+        // real type rather than skipping a valid entry.
+        int isDir = 0, isReg = 0;
+        if (entry->d_type == DT_DIR)      isDir = 1;
+        else if (entry->d_type == DT_REG) isReg = 1;
+        else if (entry->d_type == DT_UNKNOWN || entry->d_type == DT_LNK) {
+            struct stat st;
+            if (stat(child, &st) == 0) {
+                if (S_ISDIR(st.st_mode)) isDir = 1;
+                else if (S_ISREG(st.st_mode)) isReg = 1;
+            }
+        }
+
+        if (isDir) { WalkFontsDir(child, count); continue; }
+        if (!isReg) continue;
+
+        const char* ext = strrchr(entry->d_name, '.');
+        if (!ext) continue;
+        if (strcasecmp(ext, ".ttf") != 0 && strcasecmp(ext, ".otf") != 0)
+            continue;
+
+        TTF_Font* font = TTF_OpenFont(child, 12);
+        if (!font) {
+            UI_WARN(UI_CAT_FONT, "failed to load font '%s': %s", child, SDL_GetError());
+            continue;
+        }
+
+        const char* familyName = TTF_GetFontFamilyName(font);
+        char* familyDup = strdup(familyName ? familyName : "Unknown Family");
+        TTF_CloseFont(font);
+        if (!familyDup) continue;
+
+        FontEntry** grown = realloc(UIFonts, sizeof(FontEntry*) * ((*count) + 1));
+        if (!grown) { free(familyDup); continue; }
+        UIFonts = grown;
+        UIFonts[*count] = malloc(sizeof(FontEntry));
+        if (!UIFonts[*count]) { free(familyDup); continue; }
+        UIFonts[*count]->family_name = familyDup;
+        UIFonts[*count]->file_path   = strdup(child);
+        if (!UIFonts[*count]->file_path) {
+            free(UIFonts[*count]->family_name);
+            free(UIFonts[*count]);
+            continue;
+        }
+        (*count)++;
+    }
+
+    closedir(dir);
+}
+#endif // !_WIN32
 
 void UISearchFonts() {
     int fontCount = 0;
@@ -113,84 +188,12 @@ void UISearchFonts() {
     UIFonts[fontCount] = NULL; // NULL-terminate the array
 
 #elif defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
-    DIR *dir = opendir(SYSTEM_FONTS_PATH);
-
-    if (!dir) {
-        printf("No fonts found in: %s\n", SYSTEM_FONTS_PATH);
-        TTF_Quit();
-        return;
-    }
-
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL) {
-        if (entry->d_type == DT_DIR)
-            continue;
-
-        if (strstr(entry->d_name, ".ttf") == NULL)
-            continue;
-
-        char fontPath[512];
-        snprintf(fontPath, sizeof(fontPath), "%s/%s", SYSTEM_FONTS_PATH, entry->d_name);
-
-        // Load the font temporarily to get the family name
-        TTF_Font* font = TTF_OpenFont(fontPath, 12); // Arbitrary size, just to load the font
-        if (!font) {
-            UI_WARN(UI_CAT_FONT, "failed to load font '%s': %s", fontPath, TTF_GetError());
-            continue;
-        }
-
-        // Extract the real family name from the font
-        const char* family_name = TTF_FontFaceFamilyName(font);
-        char* family_name_copy = NULL;
-        if (family_name) {
-            family_name_copy = strdup(family_name);
-        } else {
-            UI_WARN(UI_CAT_FONT, "no family name found in font '%s'", fontPath);
-            family_name_copy = strdup("Unknown Family"); // Fallback
-        }
-
-        TTF_CloseFont(font);
-
-        if (!family_name_copy) {
-            printf("Failed to duplicate family name for font: %s\n", entry->d_name);
-            continue;
-        }
-
-        FontEntry** temp = realloc(UIFonts, sizeof(FontEntry *) * (fontCount + 1));
-        if (temp == NULL) {
-            printf("Memory allocation failed\n");
-            free(family_name_copy);
-            closedir(dir);
-            TTF_Quit();
-            return;
-        }
-        UIFonts = temp;
-
-        UIFonts[fontCount] = malloc(sizeof(FontEntry));
-        if (!UIFonts[fontCount]) {
-            printf("Memory allocation failed\n");
-            free(family_name_copy);
-            closedir(dir);
-            TTF_Quit();
-            return;
-        }
-
-        UIFonts[fontCount]->family_name = family_name_copy;
-        UIFonts[fontCount]->file_path = strdup(fontPath);
-        if (!UIFonts[fontCount]->family_name || !UIFonts[fontCount]->file_path) {
-            printf("String duplication failed\n");
-            free(UIFonts[fontCount]->family_name);
-            free(UIFonts[fontCount]->file_path);
-            free(UIFonts[fontCount]);
-            closedir(dir);
-            TTF_Quit();
-            return;
-        }
-        fontCount++;
-        printf("Font loaded: %s, Path: %s\n", family_name_copy, fontPath);
-    }
-
-    closedir(dir);
+    // Linux distros nest fonts under category subdirs (truetype/, opentype/,
+    // X11/, vendor-specific dirs, ...), so a single-level opendir of
+    // /usr/share/fonts returns ZERO .ttf entries — only those subdirs.
+    // Walk the tree recursively. .otf is accepted alongside .ttf because
+    // SDL_ttf 3 opens both via the same path.
+    WalkFontsDir(SYSTEM_FONTS_PATH, &fontCount);
 
     FontEntry** temp = realloc(UIFonts, sizeof(FontEntry *) * (fontCount + 1));
     if (temp == NULL) {
@@ -199,7 +202,7 @@ void UISearchFonts() {
         return;
     }
     UIFonts = temp;
-    UIFonts[fontCount] = NULL; 
+    UIFonts[fontCount] = NULL;
 #endif
 
     printf("Fonts found: %d\n", fontCount);

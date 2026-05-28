@@ -257,6 +257,11 @@ static void OnFpsTick(UIEventData data) {
 // ---- main -------------------------------------------------------------
 
 int main(void) {
+    // Linux: gst_init must run before SDL_Init or it segfaults inside
+    // GLib's option parser on certain WSL/Ubuntu builds. UIVideo_PreInit
+    // is a no-op on Windows.
+    UIVideo_PreInit();
+
     UIApp* app = UIApp_Create("video", 960, 760);
     if (!app) return 1;
     g_app = app;
