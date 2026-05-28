@@ -25,6 +25,21 @@ typedef struct {
 } UIWidgetBase;
 
 /**
+ * Fast widget-type compare. Used in the render dispatch (called per
+ * widget per frame, ~20× per call). Every UI_WIDGET_* tag is a single
+ * string literal pooled by the toolchain (MSVC /GF, GCC/Clang
+ * .rodata.str1.1 with SHF_MERGE|SHF_STRINGS), so the same tag has the
+ * same address across TUs in practice and the pointer compare is a
+ * single CMP. The strcmp fallback keeps the function correct even if
+ * the linker ever decides not to merge a particular constant.
+ */
+static inline int UIWidget_TypeIs(const char* a, const char* b) {
+    if (a == b) return 1;
+    if (!a || !b) return 0;
+    return strcmp(a, b) == 0;
+}
+
+/**
  * UIMarginsObject structure representing the margins of a widget.
  * It contains properties for left, top, right, and bottom margins.
  */
@@ -63,6 +78,16 @@ typedef struct {
      * UIWidget_IsFocused.
      */
     int focused;
+
+    /**
+     * When non-zero, any widget anchored to this one (via UIAlignment with
+     * this widget as target) is rendered with an SDL clip rect set to
+     * this widget's bounds — overflow is hidden. Useful when a sibling
+     * "follower" chip would otherwise extend past its parent card. The
+     * widget's OWN draw is unaffected; only anchored children are clipped.
+     * Off by default for backwards compatibility.
+     */
+    int clipChildren;
 
     UIWidgetData data; /**< Concrete widget payload (UIRectangle*, UIText*, ...). */
 } UIWidget;
@@ -131,6 +156,23 @@ UIWidget *UIWidget_SetZIndex(UIWidget* widget, int z);
  * @return Pointer to the updated UIWidget object.
  */
 UIWidget *UIWidget_SetVisible(UIWidget *widget, int visible);
+
+/**
+ * Marks `widget` as a clipping ancestor: any widget anchored to it via
+ * UIAlignment is rendered with an SDL clip rect set to this widget's
+ * own bounds. Draws that would extend past the bounds are cut off.
+ * Useful for "card" containers where overflowing children would look
+ * broken.
+ *
+ * Pass `enabled = 0` to disable (the default). The widget's own draw
+ * is never affected — only anchored followers.
+ *
+ * @return The widget, for chaining.
+ */
+UIWidget* UIWidget_SetClipChildren(UIWidget* widget, int enabled);
+
+/** True when clipChildren was previously enabled on `widget`. */
+int       UIWidget_GetClipChildren(const UIWidget* widget);
 
 /**
  * Generic keyboard focus control. Works on ANY widget (button, text

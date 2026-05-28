@@ -38,69 +38,77 @@ void UIAlignment_Align(UIWidget* widget) {
     UIWidget* targetH = UIAlignment_GetHTarget(&alignment);
     UIWidget* targetV = UIAlignment_GetVTarget(&alignment);
 
-    if (targetH == NULL || targetV == NULL || 
-        targetH->width == NULL || targetH->height == NULL) {
+    if (targetH == NULL || targetV == NULL ||
+        targetH->width == NULL || targetH->height == NULL ||
+        targetV->width == NULL || targetV->height == NULL) {
         UI_WARN(UI_CAT_LAYOUT, "alignment target is NULL or has no defined size");
         return;
     }
 
-    float targetV_width = *targetV->width;
-    float targetV_height = *targetV->height;
-    float targetV_X = targetV->x, targetV_Y = targetV->y;
-    float targetH_width = *targetH->width;
-    float targetH_height = *targetH->height;
-    float targetH_X = targetH->x, targetH_Y = targetH->y;
-    float widgetWidth = *widget->width, widgetHeight = *widget->height;
-    
-    float V_marginLeft = 0, V_marginRight = 0, V_marginTop = 0, V_marginBottom = 0;
-    float H_marginLeft = 0, H_marginRight = 0, H_marginTop = 0, H_marginBottom = 0;
+    const float targetV_height = *targetV->height;
+    const float targetV_Y      = targetV->y;
+    const float targetH_width  = *targetH->width;
+    const float targetH_X      = targetH->x;
+    const float widgetWidth    = *widget->width;
+    const float widgetHeight   = *widget->height;
 
-    UIWidgetBase* base;
-    if ((base = (UIWidgetBase*)targetV->data) != NULL &&
-        (strcmp(base->__widget_type, UI_WIDGET_RECTANGLE) == 0 || strcmp(base->__widget_type, UI_WIDGET_TEXT) == 0)) {
-        UIMarginsObject* margins = (UIMarginsObject*)base;
-        V_marginLeft = margins->marginLeft;
-        V_marginRight = margins->marginRight;
-        V_marginTop = margins->marginTop;
-        V_marginBottom = margins->marginBottom;
+    // Margins are read from the WIDGET BEING ALIGNED (CSS-margin semantics):
+    // they offset the widget away from its anchor point. The previous
+    // implementation read them from the target, which conflated the
+    // target's intrinsic inset with the child's outer margin and made
+    // anchoring with a per-widget offset impossible.
+    //
+    // Only UIRectangle / UIText expose the margin fields at a known offset
+    // (same prefix as UIMarginsObject). For every other widget type the
+    // margins are taken as zero — those widgets shouldn't carry their
+    // own margin metadata since the field layout isn't compatible with
+    // the UIMarginsObject cast.
+    float marginLeft = 0, marginRight = 0, marginTop = 0, marginBottom = 0;
+    UIWidgetBase* base = (UIWidgetBase*)widget->data;
+    if (base != NULL &&
+        (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_RECTANGLE) ||
+         UIWidget_TypeIs(base->__widget_type, UI_WIDGET_TEXT))) {
+        UIMarginsObject* m = (UIMarginsObject*)base;
+        marginLeft   = m->marginLeft;
+        marginRight  = m->marginRight;
+        marginTop    = m->marginTop;
+        marginBottom = m->marginBottom;
     }
 
-    if ((base = (UIWidgetBase*)targetH->data) != NULL && 
-        (strcmp(base->__widget_type, UI_WIDGET_RECTANGLE) == 0 || strcmp(base->__widget_type, UI_WIDGET_TEXT) == 0)) {
-        UIMarginsObject* margins = (UIMarginsObject*)base;
-        H_marginLeft = margins->marginLeft;
-        H_marginRight = margins->marginRight;
-        H_marginTop = margins->marginTop;
-        H_marginBottom = margins->marginBottom;
-    }
-
+    // Horizontal: compute the anchor-only base, then offset by the
+    // widget's own margins. Margins compose as (left - right) so a
+    // negative right margin lets the widget hang off the right edge
+    // of its target.
     switch (alignment.horizontal.value) {
         case UI_ALIGN_H_LEFT:
-            widget->x = targetH_X + H_marginLeft;
+            widget->x = targetH_X;
             break;
         case UI_ALIGN_H_CENTER:
-            widget->x = (targetH_X + (targetH_width - widgetWidth) / 2) + H_marginLeft;
+            widget->x = targetH_X + (targetH_width - widgetWidth) / 2.0f;
             break;
         case UI_ALIGN_H_RIGHT:
-            widget->x = targetH_X + targetH_width + H_marginLeft - widgetWidth - H_marginRight;
+            widget->x = targetH_X + targetH_width - widgetWidth;
             break;
         default:
             break;
     }
+    widget->x += marginLeft - marginRight;
 
+    // Vertical: same shape as horizontal.
     switch (alignment.vertical.value) {
         case UI_ALIGN_V_TOP:
-            widget->y = targetV_Y + V_marginTop - V_marginBottom;
+            widget->y = targetV_Y;
             break;
         case UI_ALIGN_V_CENTER:
-            widget->y = targetV_Y + V_marginTop + (targetV_height - V_marginTop - V_marginBottom - widgetHeight) / 2;
+            widget->y = targetV_Y + (targetV_height - widgetHeight) / 2.0f;
             break;
         case UI_ALIGN_V_BOTTOM:
-            widget->y = targetV_Y + V_marginTop + targetV_height - widgetHeight - V_marginBottom;
+            widget->y = targetV_Y + targetV_height - widgetHeight;
             break;
         default:
             break;
     }
+    widget->y += marginTop - marginBottom;
 } 
 
 void UIWidget_SetAlignmentByParent(UIWidget* widget, uint8_t valign, uint8_t halign) {
