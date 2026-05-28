@@ -2,11 +2,12 @@
 setlocal enabledelayedexpansion
 
 :: Convenience wrapper: build mocida as a DLL + the GUI installer in one
-:: cmake invocation. Result lands in build\mocida_installer.exe, with
+:: cmake invocation. Result lands in build\win32\mocida_installer.exe, with
 :: mocida.dll, the SDL DLLs, and src\headers\* staged next to it so the
 :: installer can ship them as its payload.
 
 set "MOCIDA_ROOT=%~dp0.."
+set "BUILD_DIR=%MOCIDA_ROOT%\build\win32"
 
 :: ----------------------------------------------------------------------
 :: Parse args (order-agnostic):
@@ -55,9 +56,10 @@ if not defined VCINSTALLDIR (
     )
 )
 
-mkdir "%MOCIDA_ROOT%\build" 2>nul
-pushd "%MOCIDA_ROOT%\build" || (
-    echo Could not enter build directory.
+if not exist "%MOCIDA_ROOT%\build" mkdir "%MOCIDA_ROOT%\build"
+if not exist "%BUILD_DIR%"        mkdir "%BUILD_DIR%"
+pushd "%BUILD_DIR%" || (
+    echo Could not enter build directory %BUILD_DIR%.
     exit /b 1
 )
 
@@ -137,7 +139,7 @@ if errorlevel 1 (
 popd
 
 echo.
-echo Installer built: %MOCIDA_ROOT%\build\mocida_installer.exe
+echo Installer built: %BUILD_DIR%\mocida_installer.exe
 echo Fully static: no DLLs are shipped alongside the .exe. The installer
 echo talks to GitHub via WinINet and bundles the WebView2 static loader.
 echo.

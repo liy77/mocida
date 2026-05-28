@@ -21,6 +21,51 @@ if(MSVC)
     string(APPEND CMAKE_EXE_LINKER_FLAGS_RELEASE " /LTCG /OPT:REF /OPT:ICF")
 endif()
 
+# GCC / Clang Release: CMake's default is just -O3 -DNDEBUG. We add LTO
+# and host-CPU codegen so the render hot path (CPU-side rasterization,
+# strcmp dispatch on widget types, the per-pixel coverage loops) gets
+# the same level of treatment Windows already gets via /GL /LTCG.
+#
+# -march=native: produces a non-portable binary tuned for the build
+#   host's CPU. Fine for a local dev / WSL2 measurement loop; if you
+#   later ship Linux binaries to other machines, drop this or set
+#   -march=x86-64-v3 for a broadly compatible SIMD floor.
+# -fno-plt: removes a layer of indirection in calls to shared libs
+#   (SDL3, libcurl). Tiny but free.
+# -fno-semantic-interposition: lets the compiler inline across the
+#   mocida shared lib boundary on Linux ELF (where the default is to
+#   leave a slot for LD_PRELOAD-style overrides). Safe — we don't rely
+#   on interposition.
+# -funroll-loops: GCC defaults this off even at -O3 (Clang has its own
+#   policy); the render-batch vertex builder + analytic-coverage circle
+#   rasterizer are small fixed-trip loops that benefit measurably.
+# -ffunction-sections / -fdata-sections + linker --gc-sections: strip
+#   unreachable static helpers from the final binary. Slightly smaller
+#   image, slightly better i-cache locality on the hot path.
+# -fmerge-all-constants: aggressively pool identical literals/constants
+#   across TUs. Helps the UIWidget_TypeIs pointer-compare fast path —
+#   the default -fmerge-constants only merges within a TU.
+if(NOT MSVC AND (CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"))
+    # Flags portable across Linux/macOS/Windows-clang.
+    string(APPEND CMAKE_C_FLAGS_RELEASE   " -flto -march=native -funroll-loops -fmerge-all-constants")
+    string(APPEND CMAKE_CXX_FLAGS_RELEASE " -flto -march=native -funroll-loops -fmerge-all-constants")
+    string(APPEND CMAKE_EXE_LINKER_FLAGS_RELEASE    " -flto")
+    string(APPEND CMAKE_SHARED_LINKER_FLAGS_RELEASE " -flto")
+
+    # Linux/macOS-only: -fno-plt and -fno-semantic-interposition affect
+    # ELF PLT and ELF/Mach-O symbol interposition — both no-ops (and
+    # warnings) on Windows where clang targets the MS-COFF + lld-link
+    # toolchain. --gc-sections is GNU-ld / lld-elf only; lld-link
+    # ignores it with a warning. Splitting these out avoids the noise
+    # on `build.bat --release`.
+    if(NOT WIN32)
+        string(APPEND CMAKE_C_FLAGS_RELEASE   " -fno-plt -fno-semantic-interposition -ffunction-sections -fdata-sections")
+        string(APPEND CMAKE_CXX_FLAGS_RELEASE " -fno-plt -fno-semantic-interposition -ffunction-sections -fdata-sections")
+        string(APPEND CMAKE_EXE_LINKER_FLAGS_RELEASE    " -Wl,--gc-sections")
+        string(APPEND CMAKE_SHARED_LINKER_FLAGS_RELEASE " -Wl,--gc-sections")
+    endif()
+endif()
+
 # Default to a Debug build if the user didn't pick one — keeps the
 # UI_TRACE/UI_DEBUG macros (gated behind NDEBUG in debug.h) live.
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -64,6 +109,52 @@ set(SDLTTF_SAMPLES OFF CACHE BOOL "" FORCE)
 set(SDLIMAGE_VENDORED ON CACHE BOOL "" FORCE)
 set(SDLIMAGE_AVIF OFF CACHE BOOL "" FORCE)
 set(SDLIMAGE_SAMPLES OFF CACHE BOOL "" FORCE)
+
+# ----------------------------------------------------------------------
+# Local SDL3 patch: SDL_tray.c global-symbol fix.
+#
+# Upstream SDL3 (libsdl-org/SDL, every commit through 877399b at least)
+# declares two GLib function pointers in src/tray/unix/SDL_tray.c
+# WITHOUT the `static` keyword:
+#
+#     gpointer (*g_object_ref_sink)(gpointer object);
+#     gpointer (*g_object_ref)(gpointer object);
+#
+# All other ~30 similar lookup pointers in the same file ARE `static`.
+# These two are a long-standing oversight (no obvious reason to expose
+# them as ELF globals — they're written once via dlsym at init and read
+# from this file only).
+#
+# The non-static names collide with libgobject's real functions of the
+# same name. When SDL3 is statically linked into the same binary as
+# libgobject (which happens any time mocida pulls in libgstreamer for
+# UIVideo or libwebkit2gtk for UIWebView on Linux), the dynamic linker
+# resolves every libgobject `g_object_ref_sink` reference to SDL3's
+# uninitialised BSS pointer. The first call segfaults inside
+# `gst_init` → `g_option_context_parse` → SDL's NULL.
+#
+# setup.ps1 (re-)clones SDL3 from the upstream commit each time, so a
+# manual local edit of SDL_tray.c does not survive a fresh checkout.
+# We patch the file at configure time instead — idempotent, runs once
+# per configure, no-op when the file is already patched (either by a
+# previous configure, by upstream eventually fixing it, or by hand).
+# ----------------------------------------------------------------------
+set(_sdl_tray_unix "${CMAKE_CURRENT_SOURCE_DIR}/SDL/src/tray/unix/SDL_tray.c")
+if(EXISTS "${_sdl_tray_unix}")
+    file(READ "${_sdl_tray_unix}" _sdltray_content)
+    if(_sdltray_content MATCHES "\ngpointer \\(\\*g_object_ref_sink\\)")
+        string(REPLACE
+            "\ngpointer (*g_object_ref_sink)(gpointer object);"
+            "\nstatic gpointer (*g_object_ref_sink)(gpointer object);"
+            _sdltray_content "${_sdltray_content}")
+        string(REPLACE
+            "\ngpointer (*g_object_ref)(gpointer object);"
+            "\nstatic gpointer (*g_object_ref)(gpointer object);"
+            _sdltray_content "${_sdltray_content}")
+        file(WRITE "${_sdl_tray_unix}" "${_sdltray_content}")
+        message(NOTICE "Mocida: patched SDL/src/tray/unix/SDL_tray.c (static-symbol fix for libgobject co-link — see CMakeLists.txt comment)")
+    endif()
+endif()
 
 add_subdirectory(SDL)
 
@@ -164,6 +255,30 @@ endif()
 target_include_directories(mocida PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/headers
 )
+
+# ----------------------------------------------------------------------
+# Precompiled headers. SDL3/SDL.h alone pulls in ~30k lines of system
+# headers per TU; pre-parsing it once and reusing it cuts a full mocida
+# rebuild by roughly a third. We only PCH headers that change very
+# rarely (SDL public surface + C stdlib) — anything from src/headers/
+# would invalidate the PCH on every internal edit and make things
+# slower, not faster.
+#
+# Opt out with -DMOCIDA_USE_PCH=OFF if a TU breaks due to ordering
+# (e.g. a file that needs WIN32_LEAN_AND_MEAN defined before windows.h).
+# ----------------------------------------------------------------------
+option(MOCIDA_USE_PCH "Precompile SDL3/SDL.h + C stdlib for faster builds" ON)
+if(MOCIDA_USE_PCH)
+    target_precompile_headers(mocida PRIVATE
+        <SDL3/SDL.h>
+        <stdio.h>
+        <stdlib.h>
+        <string.h>
+        <math.h>
+        <stdint.h>
+        <stdbool.h>
+    )
+endif()
 
 # Pick the SDL target flavour that matches mocida's build mode:
 #   shared mocida → link the SDL3::SDL3 / SDL3_image / SDL3_ttf shared
@@ -308,6 +423,111 @@ target_compile_definitions(mocida PUBLIC
     _CRT_NONSTDC_NO_WARNINGS
 )
 
+# `_strdup` is the MSVC spelling of POSIX's `strdup`. The codebase uses
+# `_strdup` everywhere so the Windows build matches the rest of the
+# Microsoft CRT naming. On non-Windows, alias it back to the standard
+# name so the same source compiles unmodified. Public so tests/demos
+# inherit the alias.
+if(NOT WIN32)
+    target_compile_definitions(mocida PUBLIC _strdup=strdup)
+    # strdup + a few other things we rely on are gated behind glibc
+    # feature-test macros. _GNU_SOURCE is the catch-all on Linux that
+    # exposes everything POSIX, XSI, BSD, and GNU.
+    target_compile_definitions(mocida PUBLIC _GNU_SOURCE)
+    # mimalloc-override.h re-defines _strdup -> mi_strdup, which (correctly)
+    # supersedes the shim above. Suppress the cosmetic redefinition warning.
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(mocida PUBLIC -Wno-macro-redefined)
+    endif()
+endif()
+
+# ----------------------------------------------------------------------
+# Linux video backend: GStreamer for the UIVideo widget.
+#
+# The Windows build uses Media Foundation (linked unconditionally
+# above via `mfplat`/`mfreadwrite`/etc). On Linux we use GStreamer's
+# `playbin` because:
+#   - it covers MP4 / MKV / WebM / AVI / etc. via the standard plugin
+#     set (gst-plugins-good / bad / ugly / libav).
+#   - it routes to NVDEC / VAAPI / V4L2 hw decoders when available
+#     (matching the hardware path Media Foundation takes on Windows).
+#   - it gives us a non-FFmpeg architecture as requested.
+#
+# Detection is best-effort: when GStreamer dev packages are missing
+# we leave MOCIDA_HAS_GSTREAMER undefined and video.c falls back to
+# the stub branch. Build still succeeds; UIVideo_Create just returns
+# NULL on Linux. Install with:
+#   sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+#                    gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+#                    gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
+#                    gstreamer1.0-libav
+# The RUNTIME `gstreamer1.0-plugins-base` package is critical — it
+# provides the `playbin` and `appsink` elements we use. The -dev
+# package only ships headers; without the runtime plugin,
+# gst_element_factory_make returns NULL and UIVideo_Create bails.
+# ----------------------------------------------------------------------
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(GSTREAMER QUIET
+            gstreamer-1.0
+            gstreamer-app-1.0
+            gstreamer-audio-1.0
+            gstreamer-video-1.0)
+        if(GSTREAMER_FOUND)
+            message(STATUS "Mocida: linking GStreamer ${GSTREAMER_VERSION} (UIVideo backend)")
+            target_include_directories(mocida PRIVATE ${GSTREAMER_INCLUDE_DIRS})
+            target_link_libraries     (mocida PRIVATE ${GSTREAMER_LIBRARIES})
+            target_compile_definitions(mocida PRIVATE MOCIDA_HAS_GSTREAMER=1)
+        else()
+            message(STATUS "Mocida: GStreamer not found — UIVideo will be a stub on Linux. "
+                           "Install libgstreamer1.0-dev + plugins to enable.")
+        endif()
+    endif()
+endif()
+
+# ----------------------------------------------------------------------
+# Linux video / webview backends.
+#
+# The webview backend on Linux uses WebKitGTK (the same engine Epiphany,
+# Geary and GNOME Web are built on). It pulls in GTK3 + WebKit2 +
+# transitive GLib / Cairo / SoupHTTP. Detection is best-effort, identical
+# pattern to GStreamer above:
+#
+#   - found    : MOCIDA_HAS_WEBKITGTK=1, real backend compiled
+#   - missing  : UIWebView_Create returns NULL on Linux, app still builds
+#
+# We try webkit2gtk-4.1 first (Ubuntu 24.04+, Fedora 40+, Debian trixie),
+# then fall back to webkit2gtk-4.0 (Ubuntu 22.04 LTS and earlier). Both
+# expose the same C API in our usage.
+#
+# To install on Ubuntu/Debian:
+#   sudo apt install libwebkit2gtk-4.1-dev      # preferred (newer)
+#   sudo apt install libwebkit2gtk-4.0-dev      # LTS fallback
+# To install on Fedora:
+#   sudo dnf install webkit2gtk4.1-devel
+# To install on Arch:
+#   sudo pacman -S webkit2gtk-4.1
+# ----------------------------------------------------------------------
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(WEBKITGTK QUIET webkit2gtk-4.1)
+        if(NOT WEBKITGTK_FOUND)
+            pkg_check_modules(WEBKITGTK QUIET webkit2gtk-4.0)
+        endif()
+        if(WEBKITGTK_FOUND)
+            message(STATUS "Mocida: linking WebKitGTK ${WEBKITGTK_VERSION} (UIWebView backend)")
+            target_include_directories(mocida PRIVATE ${WEBKITGTK_INCLUDE_DIRS})
+            target_link_libraries     (mocida PRIVATE ${WEBKITGTK_LIBRARIES})
+            target_compile_definitions(mocida PRIVATE MOCIDA_HAS_WEBKITGTK=1)
+        else()
+            message(STATUS "Mocida: WebKitGTK not found — UIWebView will be a stub on Linux. "
+                           "Install libwebkit2gtk-4.1-dev (or 4.0) to enable.")
+        endif()
+    endif()
+endif()
+
 # Wire mimalloc into the lib's public link interface so that:
 #  - mocida.lib (and every consumer like demo / tests) get mi_malloc
 #    linked in.
@@ -327,6 +547,21 @@ function(mocida_add_executable target_name source_file)
     # subsystem (WIN32_EXECUTABLE TRUE) routes WinMain → user `main`.
     add_executable(${target_name} ${source_file} ${MOCIDA_WINMAIN_SRC})
     target_link_libraries(${target_name} PRIVATE mocida)
+
+    # Linux: hide symbols of every static archive we link in (SDL3,
+    # SDL3_image, SDL3_ttf, bundled harfbuzz / freetype / etc., mimalloc)
+    # from the exe's exported dynamic symbol table. Otherwise the dynamic
+    # linker resolves system libs' calls (libpango / libcairo / libgtk
+    # via WebKitGTK, all of which pull in the system harfbuzz) back to
+    # OUR statically-bundled copies — different structs, different
+    # versions, garbage memory access, SIGSEGV inside hb_face_t::
+    # reference_table the first time pango asks for a glyph.
+    # `--exclude-libs,ALL` is the GNU-ld / lld-elf flag that does this;
+    # MSVC's linker has different semantics and doesn't need it.
+    if(UNIX AND NOT APPLE)
+        target_link_options(${target_name} PRIVATE
+            "LINKER:--exclude-libs,ALL")
+    endif()
 
     if(WIN32)
         # Link as the Windows (GUI) subsystem so no console window

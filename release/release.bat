@@ -110,9 +110,10 @@ if not errorlevel 1 set "GENERATOR=Ninja"
 :: cleanly, so we just run the configure twice.
 :: ----------------------------------------------------------------------
 
-set "BUILD_SDK=%MOCIDA_ROOT%\build-release-sdk"
-set "BUILD_INST=%MOCIDA_ROOT%\build-release-installer"
+set "BUILD_SDK=%MOCIDA_ROOT%\build\win32-release-sdk"
+set "BUILD_INST=%MOCIDA_ROOT%\build\win32-release-installer"
 
+if not exist "%MOCIDA_ROOT%\build" mkdir "%MOCIDA_ROOT%\build"
 mkdir "%BUILD_SDK%"  2>nul
 mkdir "%BUILD_INST%" 2>nul
 
