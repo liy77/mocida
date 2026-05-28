@@ -50,12 +50,12 @@ build.bat --clean    :: force CMake reconfiguration
 Each file in `tests/` becomes its own executable:
 
 ```bat
-.\build\demo.exe              :: original demo
-.\build\test_image.exe        :: fill-mode gallery + tint
-.\build\test_shadows.exe      :: drop shadows + icon
-.\build\test_quality.exe      :: cycles MSAA LOW/MEDIUM/HIGH/ULTRA
-.\build\test_button.exe       :: interactive buttons
-.\build\test_fps.exe          :: FPS cap cycle
+.\build\win32\demo.exe              :: original demo
+.\build\win32\test_image.exe        :: fill-mode gallery + tint
+.\build\win32\test_shadows.exe      :: drop shadows + icon
+.\build\win32\test_quality.exe      :: cycles MSAA LOW/MEDIUM/HIGH/ULTRA
+.\build\win32\test_button.exe       :: interactive buttons
+.\build\win32\test_fps.exe          :: FPS cap cycle
 ```
 
 ---

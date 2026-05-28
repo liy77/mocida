@@ -120,6 +120,10 @@ int main(void) {
     UISearchFonts();
 
     UIApp_SetBackgroundColor(app, (UIColor){ 15, 23, 42, 1.0f });
+    // Chips have a hard-coded size, so the layout assumes enough card
+    // height for three rows + title. Lock in a minimum viewport so the
+    // user can't shrink the window into a TOP/CENTER/BOTTOM overlap.
+    UIApp_SetMinSize(app, 640, 420);
 
     UIChildren* children = UIChildren_Create(64);
 
@@ -133,12 +137,21 @@ int main(void) {
     UIRectangle_SetBorderWidth(cardBg, 1.0f);
     UIWidget* card = widgcs(cardBg, START_W - 2 * padding, START_H - 2 * padding);
     UIWidget_SetPosition(card, padding, padding);
+    // Card clips its anchored children: anything that hangs off the
+    // edge (e.g. the TAIL pinned below the bottom-right chip) is cut
+    // at the card border instead of bleeding into the window
+    // background. Demonstrates the UIWidget_SetClipChildren feature.
+    UIWidget_SetClipChildren(card, 1);
     UIChildren_Add(children, card);
 
     // Sub-title on top of the card (anchored to the card itself).
     UIText* title = UIText_Create("Anchored to the slate card. Resize the window.", 14.0f);
     UIText_SetFontFamily(title, UIGetFont("Arial"));
     UIText_SetColor(title, (UIColor){ 148, 163, 184, 1.0f });
+    // Centre the text WITHIN its widget bounds. Without this the
+    // widget itself is centred on the card but the glyphs left-align
+    // inside it, drifting the visible text away from the card centre.
+    UIText_SetAlignment(title, UI_TEXT_HALIGN_CENTER, UI_TEXT_VALIGN_CENTER);
     UIWidget* title_w = widgcs(title, 480.0f, 24.0f);
     UIWidget_SetAlignment(title_w, UIAlignment_Create(
         (UIAlign){ .value = UI_ALIGN_V_TOP,    .target_widget = card },
@@ -219,16 +232,17 @@ int main(void) {
               90.0f, 38.0f,
               0.0f, 0.0f, -110.0f, 0.0f); // negative right-margin floats it outside the rose chip's right edge
 
-    // Pink "TAIL" anchored below the bottom-right chip. Its anchor
-    // is the bottom-right chip itself; vertical = TOP (so it sits at
-    // the chip's top — push it down with a negative top margin so it
-    // ends up ABOVE the chip).
+    // Pink "TAIL" anchored to the bottom-right chip. Vertical = TOP
+    // with a NEGATIVE top margin lifts the tail above the chip's top
+    // edge, so it sits like a small label floating just above the
+    // BOTTOM/RIGHT chip. With clipChildren on the card it would also
+    // be clipped at the card border if pushed further out.
     UIColor pink = { 236, 72, 153, 1.0f };
     make_chip(children, botRight,
-              UI_ALIGN_V_BOTTOM, UI_ALIGN_H_CENTER,
+              UI_ALIGN_V_TOP, UI_ALIGN_H_CENTER,
               pink, "TAIL",
               80.0f, 28.0f,
-              0.0f, 64.0f, 0.0f, 0.0f); // top margin shifts it down past the chip's bottom
+              0.0f, -36.0f, 0.0f, 0.0f); // -36 = lift it 36px above botRight's top
 
     UIApp_SetChildren(app, children);
     UIApp_ShowWindow(app);

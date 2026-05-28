@@ -45,7 +45,7 @@ UIColor* UIColor_RGBA(int r, int g, int b, float a) {
 
 UIColor* UIColor_Hex(const char* hex) {
     int r, g, b;
-    if (sscanf_s(hex, "#%02x%02x%02x", &r, &g, &b) == 3) {
+    if (sscanf(hex, "#%02x%02x%02x", &r, &g, &b) == 3) {
         return UIColor_RGBA(r, g, b, 1.0f);
     }
     return NULL; // Invalid hex string

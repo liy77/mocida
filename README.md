@@ -109,7 +109,7 @@ If you'd rather skip `setup.bat`, make sure the executables above are on `PATH`,
 | Graphviz  | Class/include graphs in the docs (Doxygen calls `dot` if present)       | `Graphviz.Graphviz`                |
 | RenderDoc | GPU frame capture against the lib                                       | `BaezonDev.RenderDoc`              |
 
-**Disk** — a fresh clone + first `setup.bat` run pulls SDL/SDL_image/SDL_ttf + vcpkg + libcurl + WebView2 SDK + mimalloc, then builds everything. Reserve about **3–4 GB** total (vcpkg alone is ~2 GB once libcurl is built). Incremental rebuilds touch only `build/` and add ~200 MB.
+**Disk** — a fresh clone + first `setup.bat` run pulls SDL/SDL_image/SDL_ttf + vcpkg + libcurl + WebView2 SDK + mimalloc, then builds everything. Reserve about **3–4 GB** total (vcpkg alone is ~2 GB once libcurl is built). Incremental rebuilds touch only `build\win32\` (or `build/linux`, `build/darwin`) and add ~200 MB.
 
 **Hardware** — any 64-bit CPU with SSE2 and a GPU that supports one of D3D11 / D3D12 / OpenGL 3.3+ / Vulkan 1.1. The default renderer picks the best available driver at startup; you can override via `UIApp_SetRenderDriver`.
 
@@ -129,11 +129,19 @@ Installs Git, CMake, LLVM/clang, Ninja, and Make via `winget` (skips what's alre
 
 ```bat
 build.bat                 :: Debug, static lib, demo only (default flavour)
-build.bat --clean         :: wipe build/ and reconfigure from scratch
+build.bat --clean         :: wipe build\win32 and reconfigure from scratch
 release.bat               :: Release build + zipped distribution
 ```
 
 `build.bat` auto-detects MSVC (via `vswhere`) and calls `vcvarsall.bat x64` for you, so it works from any console — you don't need to launch a "Developer Command Prompt for VS" first.
+
+On Linux / macOS (including WSL), use `build.sh` instead — same flags, output lands in `build/linux` or `build/darwin`. Per-platform subdirs let one checkout host parallel Windows + Linux builds without colliding (handy when WSL mounts the project at `/mnt/c/...`).
+
+```sh
+./build.sh                :: Debug, static lib, demo only
+./build.sh --tests        :: also compile every test_*
+./build.sh --clean        :: wipe build/<platform> and reconfigure
+```
 
 ### Build flavours
 
@@ -144,7 +152,7 @@ release.bat               :: Release build + zipped distribution
 | `--shared`     | Build `mocida.dll` instead of the static `mocida.lib`. Symbols are exported automatically via CMake's `WINDOWS_EXPORT_ALL_SYMBOLS` — no `__declspec` annotations needed in the source. The DLL is copied next to every executable in the build dir. | OFF (static) |
 | `--tests`      | Compile every `tests/test_*.c` into its own `.exe` (35 focused visual scenarios — one per feature). Skipped by default to keep incremental rebuilds fast. | OFF |
 | `--no-demo`    | Skip the showcase `demo.exe`. Useful when you only need the library.                                  | demo ON |
-| `--clean`      | Drop `build/` before configuring.                                                                     | — |
+| `--clean`      | Drop `build\win32\` before configuring.                                                               | — |
 | `--static`     | Force the static-lib flavour (overrides a previously cached `--shared`).                              | — |
 | `--no-tests`   | Force tests OFF (overrides a previously cached `--tests`).                                            | — |
 
@@ -162,16 +170,18 @@ build.bat --shared --tests      :: DLL + every test linked against it
 The same options exist on the CMake side if you prefer driving it directly:
 
 ```bat
-cmake -B build -DMOCIDA_BUILD_SHARED=ON -DMOCIDA_BUILD_TESTS=ON ..
-cmake --build build --parallel
+cmake -B build\win32 -DMOCIDA_BUILD_SHARED=ON -DMOCIDA_BUILD_TESTS=ON .
+cmake --build build\win32 --parallel
 ```
 
-### What lands in `build/`
+### What lands in `build\win32\`
+
+Output dirs are per-platform: `build\win32\` on Windows, `build/linux/` and `build/darwin/` on the respective Unix hosts (handled by `build.sh`).
 
 After a default build:
 
 ```
-build\
+build\win32\
 ├── mocida.lib        :: static archive (static flavour)
 └── demo.exe          :: showcase
 ```
@@ -179,7 +189,7 @@ build\
 After `--shared`:
 
 ```
-build\
+build\win32\
 ├── mocida.dll        :: shared library
 ├── mocida.lib        :: import library (link against this)
 ├── demo.exe          :: small (~30 KB) — most code is in the DLL
@@ -192,14 +202,14 @@ build\
 After `--tests` you additionally get `test_button.exe`, `test_image.exe`, `test_shadows.exe`, `test_quality.exe`, `test_anchors.exe`, `test_textarea.exe`, … (one per file in `tests/`). Notable ones:
 
 ```bat
-.\build\demo.exe              :: drag + AA cycle + FPS toggle
-.\build\test_anchors.exe      :: alignment / anchor system live resize
-.\build\test_quality.exe      :: cycles MSAA LOW/MEDIUM/HIGH/ULTRA
-.\build\test_button.exe       :: interactive button states + click
-.\build\test_shadows.exe      :: SDF drop shadows
-.\build\test_image.exe        :: fill modes + tint
-.\build\test_video.exe        :: requires assets/sample.mp4 — see assets/README.md
-.\build\test_sound.exe        :: generates assets/click.wav on first run
+.\build\win32\demo.exe              :: drag + AA cycle + FPS toggle
+.\build\win32\test_anchors.exe      :: alignment / anchor system live resize
+.\build\win32\test_quality.exe      :: cycles MSAA LOW/MEDIUM/HIGH/ULTRA
+.\build\win32\test_button.exe       :: interactive button states + click
+.\build\win32\test_shadows.exe      :: SDF drop shadows
+.\build\win32\test_image.exe        :: fill modes + tint
+.\build\win32\test_video.exe        :: requires assets/sample.mp4 — see assets/README.md
+.\build\win32\test_sound.exe        :: generates assets/click.wav on first run
 ```
 
 ### Consuming mocida in your own project
@@ -209,7 +219,7 @@ After building with `--shared`, link your app against the import library + ship 
 ```cmake
 # CMake (using mocida as a vendored/installed prebuilt)
 target_include_directories(myapp PRIVATE path/to/mocida/src/headers)
-target_link_libraries     (myapp PRIVATE path/to/mocida/build/mocida.lib)
+target_link_libraries     (myapp PRIVATE path/to/mocida/build/win32/mocida.lib)
 # At runtime, mocida.dll + SDL3*.dll + WebView2Loader.dll must sit next to myapp.exe
 ```
 

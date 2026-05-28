@@ -137,5 +137,5 @@ Make-Wav   (Join-Path $here "click.wav")
 
 Write-Host ""
 Write-Host "[make-samples] done. Run:"
-Write-Host "    .\build\test_video.exe"
-Write-Host "    .\build\test_sound.exe"
+Write-Host "    .\build\win32\test_video.exe"
+Write-Host "    .\build\win32\test_sound.exe"
