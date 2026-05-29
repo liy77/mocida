@@ -88,10 +88,35 @@ def vcpkg_triplet():
 
 
 # --- clone helper -------------------------------------------------------
+# Entries we consider "not real content" when deciding whether a leftover
+# directory is just an empty placeholder we can safely remove.
+_INSIGNIFICANT = {".git", ".DS_Store", "Thumbs.db"}
+
+
+def _is_empty_placeholder(target):
+    """True if `target` is a directory with no real git checkout and no real
+    content — i.e. a stale placeholder we can delete and re-clone.
+
+    Cloning the mocida repo leaves SDL / SDL_image / SDL_ttf / mimalloc as
+    EMPTY directories: the parent repo records them as gitlinks (no
+    .gitmodules), so a plain `git clone` creates the directory but never
+    checks anything out. A real clone, by contrast, has a `.git` directory.
+    A bare gitlink file (`.git` is a *file*, not a dir) with nothing else is
+    also just a placeholder.
+    """
+    if (target / ".git").is_dir():
+        return False  # a real checkout — never touch it
+    try:
+        entries = list(target.iterdir())
+    except OSError:
+        return False
+    return all(p.name in _INSIGNIFICANT for p in entries)
+
+
 def clone(dirname, url, sha, force):
     target = ROOT / dirname
     pinned = bool(sha)
-    if (target / ".git").exists():
+    if (target / ".git").is_dir():
         if pinned and force:
             info(f"{dirname}: --force, re-checking out {sha}")
             run(["git", "fetch", "--quiet", "origin"], cwd=target)
@@ -100,7 +125,15 @@ def clone(dirname, url, sha, force):
             ok(f"{dirname} already cloned" + (" (use --force to re-checkout)" if pinned else ""))
         return
     if target.exists():
-        raise SetupError(f"{dirname} exists but is not a git repo. Remove it and retry.")
+        # Auto-heal the fresh-clone case: an empty / stale placeholder dir
+        # (gitlink with nothing checked out) is removed so the clone below
+        # can recreate it, instead of erroring out.
+        if _is_empty_placeholder(target):
+            warn(f"{dirname} present but empty (stale clone placeholder) — removing")
+            shutil.rmtree(target, ignore_errors=True)
+        else:
+            raise SetupError(f"{dirname} exists with content but is not a git "
+                             f"checkout. Remove it and retry.")
     if pinned:
         info(f"{dirname}: cloning {url}")
         run(["git", "clone", "--quiet", url, str(target)])

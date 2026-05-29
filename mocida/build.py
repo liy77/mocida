@@ -47,6 +47,14 @@ else:
 
 WV2_VERSION = "1.0.2792.45"
 
+# Vendored deps pulled in via add_subdirectory() in CMakeLists.txt. A fresh
+# clone of the mocida repo leaves these as EMPTY placeholder directories
+# (recorded as gitlinks in the parent repo, never checked out), which makes
+# CMake's add_subdirectory fail with a cryptic error. We detect + clean
+# those here and point the user at setup.py.
+_DEP_DIRS = ["SDL", "SDL_image", "SDL_ttf", "mimalloc"]
+_INSIGNIFICANT = {".git", ".DS_Store", "Thumbs.db"}
+
 # =======================================================================
 #  Pretty terminal output: colors, spinner, progress bar
 # =======================================================================
@@ -260,6 +268,43 @@ def fetch_webview2(mocida_root):
 
 
 # =======================================================================
+#  Dependency pre-flight
+# =======================================================================
+def _is_empty_placeholder(target):
+    """True if `target` is a vendored-dep dir with no real git checkout and
+    no real content — a stale placeholder left by `git clone` of the parent
+    repo (gitlink, never checked out). A real clone has a `.git` directory."""
+    if (target / ".git").is_dir():
+        return False
+    try:
+        entries = list(target.iterdir())
+    except OSError:
+        return False
+    return all(p.name in _INSIGNIFICANT for p in entries)
+
+
+def check_dependencies():
+    """Verify the vendored deps are actually checked out. Empty placeholder
+    dirs (the fresh-clone case) are removed automatically so a subsequent
+    `python setup.py` re-clones cleanly, instead of CMake failing on an
+    empty add_subdirectory. Returns True when all deps are present."""
+    missing = []
+    for name in _DEP_DIRS:
+        p = ROOT / name
+        if not p.exists():
+            missing.append(name)
+        elif _is_empty_placeholder(p):
+            warn(f"{name}/ is empty (stale clone placeholder) — removing")
+            shutil.rmtree(p, ignore_errors=True)
+            missing.append(name)
+    if missing:
+        err(f"vendored dependencies missing / empty: {', '.join(missing)}")
+        err("These are not checked out yet. Run:  python setup.py")
+        return False
+    return True
+
+
+# =======================================================================
 #  Build
 # =======================================================================
 def parse_args(argv):
@@ -310,6 +355,12 @@ def main(argv=None):
     sanitize = "address,undefined" if args.asan else ""
 
     print(_c("Mocida Build" + (" (installer)" if args.installer else ""), "35;1"))
+
+    # --- dependency pre-flight -----------------------------------------
+    # Catch the fresh-clone case (empty SDL / SDL_image / SDL_ttf / mimalloc)
+    # before CMake configure hits a cryptic add_subdirectory error.
+    if not check_dependencies():
+        return 1
 
     # --- force / reconfigure -------------------------------------------
     if args.force and build_dir.exists():
