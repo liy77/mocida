@@ -5,8 +5,10 @@ use std::ffi::{c_void, CString};
 use mocida_sys as sys;
 
 use crate::color::Color;
+use crate::cursor::Cursor;
 use crate::error::{Error, Result};
 use crate::shadow::Shadow;
+use crate::text::FontStyle;
 use crate::widget::Widget;
 
 /// Visual state of a button. Painted with the matching [`ButtonStyle`].
@@ -99,6 +101,22 @@ impl Button {
     pub fn font_size(self, size: f32) -> Self {
         unsafe {
             sys::UIButton_SetFontSize(self.ptr, size);
+        }
+        self
+    }
+
+    /// Sets the label font style (e.g. `FontStyle::BOLD | FontStyle::ITALIC`).
+    pub fn font_style(self, style: FontStyle) -> Self {
+        unsafe {
+            sys::UIButton_SetFontStyle(self.ptr, style.bits());
+        }
+        self
+    }
+
+    /// Cursor shown while hovering.
+    pub fn cursor(self, cursor: Cursor) -> Self {
+        unsafe {
+            sys::UIButton_SetCursor(self.ptr, cursor.into_raw());
         }
         self
     }

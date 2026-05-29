@@ -83,6 +83,14 @@ impl Rectangle {
         self
     }
 
+    /// Consume the wrapper and hand the raw `UIRectangle*` to a C API
+    /// that takes ownership (e.g. `UIText_SetBackground`). Suppresses
+    /// the Rust-side destructor.
+    pub(crate) fn into_raw(mut self) -> *mut sys::UIRectangle {
+        self.moved = true;
+        self.ptr
+    }
+
     /// Lift the rectangle into a [`Widget`] (auto-sized).
     pub fn into_widget(mut self) -> Result<Widget> {
         self.moved = true;

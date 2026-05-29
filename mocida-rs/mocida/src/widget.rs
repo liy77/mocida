@@ -159,6 +159,50 @@ impl Widget {
     pub fn is_focused(&self) -> bool {
         unsafe { sys::UIWidget_IsFocused(self.ptr) != 0 }
     }
+
+    /// Clip descendants to this widget's bounds (mirrors
+    /// `UIWidget_SetClipChildren`).
+    pub fn clip_children(self, enabled: bool) -> Self {
+        unsafe {
+            sys::UIWidget_SetClipChildren(self.ptr, enabled as i32);
+        }
+        self
+    }
+
+    /// True when children are clipped to this widget's bounds.
+    pub fn is_clip_children(&self) -> bool {
+        unsafe { sys::UIWidget_GetClipChildren(self.ptr as *const _) != 0 }
+    }
+
+    /// Borrow the raw parent `UIWidget*` (NULL if unparented). The
+    /// pointee is owned by the scene graph, not by you — do not free it.
+    #[inline]
+    pub fn parent_ptr(&self) -> *mut sys::UIWidget {
+        unsafe { sys::UIWidget_GetParent(self.ptr) }
+    }
+
+    /// The raw `UIWidget*` that currently holds keyboard focus, or NULL
+    /// (mirrors `UIWidget_GetFocused`). Borrowed — do not free.
+    #[inline]
+    pub fn focused_ptr() -> *mut sys::UIWidget {
+        unsafe { sys::UIWidget_GetFocused() }
+    }
+
+    /// Clear keyboard focus from whichever widget currently holds it
+    /// (mirrors `UIWidget_ClearFocus`).
+    pub fn clear_focus() {
+        unsafe { sys::UIWidget_ClearFocus() };
+    }
+
+    /// Look up a widget by its payload `data` pointer, matched by
+    /// identity. Returns a borrowed `UIWidget*` (NULL if not found).
+    ///
+    /// # Safety
+    /// `data` should be a pointer obtained from this library; it is only
+    /// compared by address, never dereferenced.
+    pub unsafe fn find_by_data(data: *mut std::ffi::c_void) -> *mut sys::UIWidget {
+        unsafe { sys::UIWidget_FindByData(data) }
+    }
 }
 
 impl Drop for Widget {

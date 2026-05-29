@@ -110,7 +110,7 @@ pub use shadow::Shadow;
 pub use sound::Sound;
 pub use stack::{Stack, StackOrientation};
 pub use tab::TabView;
-pub use text::{Text, TextHAlign, TextVAlign, WrapMode};
+pub use text::{FontStyle, Text, TextHAlign, TextVAlign, WrapMode};
 pub use textarea::TextArea;
 pub use textfield::TextField;
 pub use theme::Theme;

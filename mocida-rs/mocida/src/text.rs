@@ -5,8 +5,57 @@ use std::ffi::CString;
 use mocida_sys as sys;
 
 use crate::color::Color;
+use crate::cursor::Cursor;
 use crate::error::{Error, Result};
+use crate::rect::Rectangle;
 use crate::widget::Widget;
+
+/// Font style flags (bitmask). Combine with `|`, e.g.
+/// `FontStyle::BOLD | FontStyle::ITALIC`. Mirrors the C `FontStyle`
+/// enum and applies to [`Text`], [`Button`](crate::button::Button),
+/// text fields and text areas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FontStyle(i32);
+
+impl FontStyle {
+    /// No styling.
+    pub const NORMAL: FontStyle = FontStyle(0);
+    /// Bold weight.
+    pub const BOLD: FontStyle = FontStyle(1 << 0);
+    /// Italic / oblique.
+    pub const ITALIC: FontStyle = FontStyle(1 << 1);
+    /// Underline.
+    pub const UNDERLINE: FontStyle = FontStyle(1 << 2);
+    /// Strikethrough.
+    pub const STRIKETHROUGH: FontStyle = FontStyle(1 << 3);
+
+    /// Raw bitmask as passed to the C API.
+    #[inline]
+    pub const fn bits(self) -> i32 {
+        self.0
+    }
+
+    /// `true` if every flag in `other` is set.
+    #[inline]
+    pub const fn contains(self, other: FontStyle) -> bool {
+        (self.0 & other.0) == other.0
+    }
+}
+
+impl std::ops::BitOr for FontStyle {
+    type Output = FontStyle;
+    #[inline]
+    fn bitor(self, rhs: FontStyle) -> FontStyle {
+        FontStyle(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitOrAssign for FontStyle {
+    #[inline]
+    fn bitor_assign(&mut self, rhs: FontStyle) {
+        self.0 |= rhs.0;
+    }
+}
 
 /// Horizontal alignment of the glyph block within the widget bounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,6 +204,53 @@ impl Text {
             sys::UIText_SetSelectable(self.ptr, enabled as i32);
         }
         self
+    }
+
+    /// Sets the font style bitmask (e.g. `FontStyle::BOLD | FontStyle::ITALIC`).
+    pub fn font_style(self, style: FontStyle) -> Self {
+        unsafe {
+            sys::UIText_SetFontStyle(self.ptr, style.bits());
+        }
+        self
+    }
+
+    /// Overlays a background rectangle behind the glyphs. Ownership of
+    /// `background` transfers to the text (freed alongside it).
+    pub fn background(self, background: Rectangle) -> Self {
+        unsafe {
+            sys::UIText_SetBackground(self.ptr, background.into_raw());
+        }
+        self
+    }
+
+    /// Sets the highlight color used for selected text.
+    pub fn selection_color(self, color: Color) -> Self {
+        unsafe {
+            sys::UIText_SetSelectionColor(self.ptr, color.into_raw());
+        }
+        self
+    }
+
+    /// Clears the current text selection.
+    pub fn clear_selection(&mut self) {
+        unsafe {
+            sys::UIText_ClearSelection(self.ptr);
+        }
+    }
+
+    /// Cursor shown while hovering (pairs well with [`Text::selectable`]).
+    pub fn cursor(self, cursor: Cursor) -> Self {
+        unsafe {
+            sys::UIText_SetCursor(self.ptr, cursor.into_raw());
+        }
+        self
+    }
+
+    /// Drops the cached glyph texture, forcing a re-render next frame.
+    pub fn destroy_texture(&mut self) {
+        unsafe {
+            sys::UIText_DestroyTexture(self.ptr);
+        }
     }
 
     /// Borrow the raw `UIText*`. Stays valid as long as `self`

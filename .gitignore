@@ -1,3 +1,7 @@
+# --- Python build scripts (build.py / setup.py / release.py / docs.py) ---
+__pycache__/
+*.py[cod]
+
 # --- Rust workspace (mocida-rs) ---
 /mocida-rs/target/
 /mocida-rs/Cargo.lock

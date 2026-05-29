@@ -409,6 +409,12 @@ int main(void) {
     // hand-coded `BuildCard` positions above and the OnResize math).
     OnResize(WIN_W, WIN_H, NULL);
 
+    // The debug overlay is opt-in. Enable it here so the demo shows it
+    // off; toggle live with F9 (bounds) · F10 (stats HUD) · F8 (heatmap)
+    // · F12 (all). Start with the stats/FPS HUD visible.
+    UIDebugOverlay_SetEnabled(1);
+    UIDebugOverlay_SetFlags(UI_OVERLAY_STATS);
+
     UIApp_ShowWindow(app);
     UIApp_Run(app);
 

@@ -30,9 +30,9 @@ A Mocida program is built around these pieces:
 
 First time on a fresh PC:
 
-```bat
-:: from the project root
-setup.bat
+```sh
+# from the project root (same command on Windows / Linux / macOS)
+python setup.py
 ```
 
 That will install (if missing) Git, CMake, LLVM/clang, Ninja, and Make
@@ -41,10 +41,10 @@ at pinned commits; and run the first build.
 
 After that, incremental builds are just:
 
-```bat
-build.bat            :: Debug
-release.bat          :: Release + distribution zip
-build.bat --clean    :: force CMake reconfiguration
+```sh
+python build.py            # Debug
+python release.py          # Release + distribution zip
+python build.py --clean    # force CMake reconfiguration
 ```
 
 Each file in `tests/` becomes its own executable:
@@ -116,7 +116,7 @@ int main(void) {
 If `doxygen` is on the PATH:
 
 ```bat
-docs.bat                                 :: from the repo root
+python docs.py                           :: from the repo root
 :: or, from a configured build dir:
 cmake --build build --target docs
 ```

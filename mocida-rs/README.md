@@ -134,7 +134,7 @@ Every public header in `mocida/src/headers/uikit/` has a Rust module.
 | `webview_dcomp.h`   | `webview_dcomp`       | Windows-only DComp + D2D overlay wrappers, `WebViewOptions`.              |
 | `debug.h`           | `debug`               | `LogLevel`, sinks (terminal / file / TCP / custom), `log` / leak tracker. |
 | `profile.h`         | `profile`             | `FrameStats`, trace start / stop / save, RAII `Scope`.                    |
-| `overlay.h`         | `overlay`             | `OverlayFlag` + `set_flags` / `toggle_flag` / `handle_scancode`.          |
+| `overlay.h`         | `overlay`             | `OverlayFlag` + `set_enabled` / `set_flags` / `toggle_flag` / `handle_scancode` (opt-in; F9·F10·F8·F12). |
 | `crash.h`           | `crash`               | `install` / `uninstall` + custom callback + manual `dump_report`.         |
 | `walker.h`          | `walker`              | `walk_tree(root, |widget, depth| WalkResult)`.                            |
 | `arena.h`           | `arena`               | Bump allocator with `alloc` / `alloc_zero` / `strdup` / `reset`.          |

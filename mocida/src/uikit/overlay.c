@@ -23,6 +23,16 @@
 #endif
 
 static unsigned g_overlayFlags = 0;
+static int      g_overlayEnabled = 0;   /* opt-in: off until the app enables it */
+
+void UIDebugOverlay_SetEnabled(int enabled) {
+    g_overlayEnabled = enabled ? 1 : 0;
+    UI_INFO(UI_CAT_RENDER, "overlay %s", g_overlayEnabled ? "enabled" : "disabled");
+}
+
+int UIDebugOverlay_IsEnabled(void) {
+    return g_overlayEnabled;
+}
 
 void UIDebugOverlay_SetFlags(unsigned flags) {
     g_overlayFlags = flags;
@@ -40,10 +50,13 @@ void UIDebugOverlay_ToggleFlag(UIOverlayFlag flag) {
 }
 
 int UIDebugOverlay_HandleScancode(int scancode) {
+    /* Hotkeys only respond while the overlay is enabled; otherwise the
+     * key passes through untouched to the focused widget. */
+    if (!g_overlayEnabled) return 0;
     switch (scancode) {
         case SDL_SCANCODE_F9:  UIDebugOverlay_ToggleFlag(UI_OVERLAY_BOUNDS);  return 1;
         case SDL_SCANCODE_F10: UIDebugOverlay_ToggleFlag(UI_OVERLAY_STATS);   return 1;
-        case SDL_SCANCODE_F11: UIDebugOverlay_ToggleFlag(UI_OVERLAY_HEATMAP); return 1;
+        case SDL_SCANCODE_F8:  UIDebugOverlay_ToggleFlag(UI_OVERLAY_HEATMAP); return 1;
         case SDL_SCANCODE_F12:
             if (g_overlayFlags) UIDebugOverlay_SetFlags(0);
             else UIDebugOverlay_SetFlags(UI_OVERLAY_BOUNDS | UI_OVERLAY_STATS);
@@ -166,11 +179,11 @@ static void draw_stats_hud(SDL_Renderer* r, UIWindow* w) {
     /* Hint line at the bottom of the screen */
     SDL_SetRenderDrawColor(r, 180, 180, 180, 200);
     SDL_RenderDebugText(r, 8, (float)w->height - 16,
-                        "F9 bounds  F10 stats  F11 heatmap  F12 toggle-all");
+                        "F9 bounds  F10 stats  F8 heatmap  F12 toggle-all");
 }
 
 void UIDebugOverlay_Draw(UIWindow* window) {
-    if (!MOCIDA_DEBUG_ENABLED) return;
+    if (!g_overlayEnabled) return;
     if (!window || !window->sdlRenderer) return;
 
     const unsigned flags = g_overlayFlags;

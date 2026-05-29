@@ -51,6 +51,18 @@ impl Checkbox {
         self
     }
 
+    /// Sets only the box (background) color.
+    pub fn box_color(self, color: Color) -> Self {
+        unsafe { sys::UICheckbox_SetBoxColor(self.ptr, color.into_raw()) };
+        self
+    }
+
+    /// Sets only the checkmark color.
+    pub fn check_color(self, color: Color) -> Self {
+        unsafe { sys::UICheckbox_SetCheckColor(self.ptr, color.into_raw()) };
+        self
+    }
+
     /// Sets the border color and thickness.
     pub fn border(self, color: Color, width: f32) -> Self {
         unsafe { sys::UICheckbox_SetBorder(self.ptr, color.into_raw(), width) };
@@ -181,6 +193,24 @@ impl Slider {
         self
     }
 
+    /// Sets only the track (background rail) color.
+    pub fn track_color(self, color: Color) -> Self {
+        unsafe { sys::UISlider_SetTrackColor(self.ptr, color.into_raw()) };
+        self
+    }
+
+    /// Sets only the fill (active portion) color.
+    pub fn fill_color(self, color: Color) -> Self {
+        unsafe { sys::UISlider_SetFillColor(self.ptr, color.into_raw()) };
+        self
+    }
+
+    /// Sets only the knob color.
+    pub fn knob_color(self, color: Color) -> Self {
+        unsafe { sys::UISlider_SetKnobColor(self.ptr, color.into_raw()) };
+        self
+    }
+
     /// Sets the track height in pixels.
     pub fn track_height(self, height: f32) -> Self {
         unsafe { sys::UISlider_SetTrackHeight(self.ptr, height) };
@@ -286,6 +316,18 @@ impl ProgressBar {
     /// Sets both track and fill colors.
     pub fn colors(self, track: Color, fill: Color) -> Self {
         unsafe { sys::UIProgressBar_SetColors(self.ptr, track.into_raw(), fill.into_raw()) };
+        self
+    }
+
+    /// Sets only the track (background) color.
+    pub fn track_color(self, color: Color) -> Self {
+        unsafe { sys::UIProgressBar_SetTrackColor(self.ptr, color.into_raw()) };
+        self
+    }
+
+    /// Sets only the fill (filled portion) color.
+    pub fn fill_color(self, color: Color) -> Self {
+        unsafe { sys::UIProgressBar_SetFillColor(self.ptr, color.into_raw()) };
         self
     }
 
@@ -434,6 +476,24 @@ impl Switch {
         self
     }
 
+    /// Sets only the off-state track color.
+    pub fn off_color(self, color: Color) -> Self {
+        unsafe { sys::UISwitch_SetOffColor(self.ptr, color.into_raw()) };
+        self
+    }
+
+    /// Sets only the on-state track color.
+    pub fn on_color(self, color: Color) -> Self {
+        unsafe { sys::UISwitch_SetOnColor(self.ptr, color.into_raw()) };
+        self
+    }
+
+    /// Sets only the knob color.
+    pub fn knob_color(self, color: Color) -> Self {
+        unsafe { sys::UISwitch_SetKnobColor(self.ptr, color.into_raw()) };
+        self
+    }
+
     /// Sets border color and width.
     pub fn border(self, color: Color, width: f32) -> Self {
         unsafe { sys::UISwitch_SetBorder(self.ptr, color.into_raw(), width) };
@@ -555,6 +615,18 @@ impl RadioButton {
     /// Sets the disc background and inner-dot colors.
     pub fn colors(self, box_color: Color, dot: Color) -> Self {
         unsafe { sys::UIRadio_SetColors(self.ptr, box_color.into_raw(), dot.into_raw()) };
+        self
+    }
+
+    /// Sets only the disc (background) color.
+    pub fn box_color(self, color: Color) -> Self {
+        unsafe { sys::UIRadio_SetBoxColor(self.ptr, color.into_raw()) };
+        self
+    }
+
+    /// Sets only the inner-dot color.
+    pub fn dot_color(self, color: Color) -> Self {
+        unsafe { sys::UIRadio_SetDotColor(self.ptr, color.into_raw()) };
         self
     }
 

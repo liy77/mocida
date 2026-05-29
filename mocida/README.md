@@ -25,7 +25,7 @@
 
 - **Widgets that look right.** Rounded rectangles with analytic-coverage anti-aliasing, SDF-based drop shadows, configurable MSAA (1×/4×/16×/64× SPP), optional SSAA / FXAA / TAA on top.
 - **A real component model.** Buttons, text, images, text fields/areas, tabs, dialogs, popups, dropdowns, sliders, switches, file drop zones, scroll views, grids, video, and an embedded WebView2 surface — all built around the same `UIWidget` envelope.
-- **Built-in debug stack.** Logger with TCP/file/handler sinks · Chrome-Trace profiler · F9/F10/F11 overlay (bounds + FPS HUD + overdraw heatmap) · always-on crash handler with stack trace + widget-tree dump · optional ASAN/UBSAN.
+- **Built-in debug stack.** Logger with TCP/file/handler sinks · Chrome-Trace profiler · opt-in debug overlay — widget bounds + FPS/timing HUD + overdraw heatmap, toggled with F9 / F10 / F8 (F12 = all) · always-on crash handler with stack trace + widget-tree dump · optional ASAN/UBSAN.
 - **Modern allocator.** Optional Microsoft [mimalloc](https://github.com/microsoft/mimalloc) plugged in transparently via `mocida_alloc.h`.
 - **Themed C API.** Single header (`<uikit/app.h>`) re-exports the whole surface; consistent `UIType_Verb()` naming throughout.
 
@@ -75,7 +75,16 @@ UIProfile_TraceStart(0);
 UIProfile_TraceSave("trace.json");          // open in chrome://tracing
 ```
 
-Press **F9** for widget bounds, **F10** for the FPS HUD, **F11** for the depth heatmap, **F12** to toggle them all. Crashes (segfault, abort, divide-by-zero, …) write `mocida_crash_YYYYMMDD_HHMMSS.log` with a symbolicated backtrace + recent log lines + widget tree snapshot — wherever the process was running.
+The debug overlay is **opt-in** — enable it from your app, then toggle layers with the hotkeys:
+
+```c
+UIDebugOverlay_SetEnabled(1);                 // off by default
+UIDebugOverlay_SetFlags(UI_OVERLAY_STATS);    // optional: start with a layer on
+```
+
+Once enabled: **F9** widget bounds · **F10** FPS/timing HUD · **F8** depth heatmap · **F12** toggle all. (F11 is deliberately avoided — it's the conventional fullscreen key.) While the overlay is disabled the keys pass straight through to your widgets, and it costs nothing. It works in Debug *and* Release builds.
+
+Crashes (segfault, abort, divide-by-zero, …) write `mocida_crash_YYYYMMDD_HHMMSS.log` with a symbolicated backtrace + recent log lines + widget tree snapshot — wherever the process was running.
 
 ---
 
@@ -83,7 +92,7 @@ Press **F9** for widget bounds, **F10** for the FPS HUD, **F11** for the depth h
 
 **OS** · Windows 10 (1809+) or Windows 11, **x64**. Most of the code is portable C11; only the WebView2 (`webview.c` + `webview_dcomp.cpp`) and Media Foundation (`video.c`) backends are Windows-only — every other widget builds without them in a future cross-platform port.
 
-**Required at build time** — all installed automatically by `setup.bat` via [winget](https://learn.microsoft.com/windows/package-manager/), so you typically don't need to install anything by hand:
+**Required at build time** — all installed automatically by `python setup.py` via [winget](https://learn.microsoft.com/windows/package-manager/), so you typically don't need to install anything by hand:
 
 | Tool        | Why                                             | winget id                          |
 |-------------|-------------------------------------------------|------------------------------------|
@@ -93,7 +102,7 @@ Press **F9** for widget bounds, **F10** for the FPS HUD, **F11** for the depth h
 | Ninja       | Fast generator (falls back to `make` if absent) | `Ninja-build.Ninja`                |
 | Visual Studio Build Tools | MSVC CRT, Windows SDK headers       | `Microsoft.VisualStudio.2022.BuildTools` (workload: *Desktop development with C++*) |
 
-If you'd rather skip `setup.bat`, make sure the executables above are on `PATH`, then run `build.bat` directly. The script auto-detects an existing vcpkg / mimalloc checkout and won't re-clone them.
+If you'd rather skip `python setup.py`, make sure the executables above are on `PATH`, then run `python build.py` directly. The script auto-detects an existing vcpkg / mimalloc checkout and won't re-clone them.
 
 **Required at runtime** — already on every supported Windows out of the box:
 
@@ -104,12 +113,12 @@ If you'd rather skip `setup.bat`, make sure the executables above are on `PATH`,
 
 | Tool      | What for                                                                | winget id                          |
 |-----------|-------------------------------------------------------------------------|------------------------------------|
-| Doxygen   | Generating the API docs (`docs.bat`)                                    | `DimitriVanHeesch.Doxygen`         |
+| Doxygen   | Generating the API docs (`python docs.py`)                                    | `DimitriVanHeesch.Doxygen`         |
 | ffmpeg    | Synthesizing `sample.mp4` + `click.wav` for `test_video` / `test_sound` via `assets/make-samples.ps1` | `Gyan.FFmpeg` |
 | Graphviz  | Class/include graphs in the docs (Doxygen calls `dot` if present)       | `Graphviz.Graphviz`                |
 | RenderDoc | GPU frame capture against the lib                                       | `BaezonDev.RenderDoc`              |
 
-**Disk** — a fresh clone + first `setup.bat` run pulls SDL/SDL_image/SDL_ttf + vcpkg + libcurl + WebView2 SDK + mimalloc, then builds everything. Reserve about **3–4 GB** total (vcpkg alone is ~2 GB once libcurl is built). Incremental rebuilds touch only `build\win32\` (or `build/linux`, `build/darwin`) and add ~200 MB.
+**Disk** — a fresh clone + first `python setup.py` run pulls SDL/SDL_image/SDL_ttf + vcpkg + libcurl + WebView2 SDK + mimalloc, then builds everything. Reserve about **3–4 GB** total (vcpkg alone is ~2 GB once libcurl is built). Incremental rebuilds touch only `build\win32\` (or `build/linux`, `build/darwin`) and add ~200 MB.
 
 **Hardware** — any 64-bit CPU with SSE2 and a GPU that supports one of D3D11 / D3D12 / OpenGL 3.3+ / Vulkan 1.1. The default renderer picks the best available driver at startup; you can override via `UIApp_SetRenderDriver`.
 
@@ -119,33 +128,31 @@ If you'd rather skip `setup.bat`, make sure the executables above are on `PATH`,
 
 ### First time on a fresh PC
 
-```bat
-setup.bat
+```sh
+python setup.py
 ```
 
 Installs Git, CMake, LLVM/clang, Ninja, and Make via `winget` (skips what's already installed), bootstraps a local vcpkg, fetches libcurl + WebView2, clones SDL / SDL_image / SDL_ttf at pinned commits, then runs the first build for you.
 
 ### Day-to-day
 
-```bat
-build.bat                 :: Debug, static lib, demo only (default flavour)
-build.bat --clean         :: wipe build\win32 and reconfigure from scratch
-release.bat               :: Release build + zipped distribution
-```
-
-`build.bat` auto-detects MSVC (via `vswhere`) and calls `vcvarsall.bat x64` for you, so it works from any console — you don't need to launch a "Developer Command Prompt for VS" first.
-
-On Linux / macOS (including WSL), use `build.sh` instead — same flags, output lands in `build/linux` or `build/darwin`. Per-platform subdirs let one checkout host parallel Windows + Linux builds without colliding (handy when WSL mounts the project at `/mnt/c/...`).
+The build scripts are plain Python 3 (`build.py`, `setup.py`, `release.py`,
+`docs.py`) — the **same command works on Windows, Linux and macOS**:
 
 ```sh
-./build.sh                :: Debug, static lib, demo only
-./build.sh --tests        :: also compile every test_*
-./build.sh --clean        :: wipe build/<platform> and reconfigure
+python build.py                 # Debug, static lib, demo only (default flavour)
+python build.py --clean         # wipe build/<platform>/<config> and reconfigure
+python build.py --tests         # also compile every test_*
+python release.py               # Release build + zipped distribution (Windows)
 ```
+
+`python build.py` auto-detects MSVC (via `vswhere`) and imports `vcvarsall.bat x64` for you, so on Windows it works from any console — you don't need a "Developer Command Prompt for VS" first. On Linux / macOS (including WSL) it picks clang + Ninja automatically; output lands in `build/linux` or `build/darwin`. Per-platform subdirs let one checkout host parallel Windows + Linux builds without colliding (handy when WSL mounts the project at `/mnt/c/...`).
+
+> Thin wrappers `build.ps1` (Windows) and `build.sh` (Unix) at the **monorepo root** forward to `build.py` if you prefer `.\build.ps1` / `./build.sh`.
 
 ### Build flavours
 
-`build.bat` exposes three independent toggles. All flags are order-agnostic and compose freely:
+`python build.py` exposes three independent toggles. All flags are order-agnostic and compose freely:
 
 | Flag           | What it does                                                                                          | Default |
 |----------------|-------------------------------------------------------------------------------------------------------|---------|
@@ -159,12 +166,12 @@ On Linux / macOS (including WSL), use `build.sh` instead — same flags, output 
 Common combinations:
 
 ```bat
-build.bat                       :: static lib + demo (fastest, minimal)
-build.bat --shared              :: mocida.dll + demo
-build.bat --tests               :: static lib + demo + every test_*.exe
-build.bat --clean --shared      :: from-scratch DLL build
-build.bat --shared --no-demo    :: just the DLL — for embedding in your own project
-build.bat --shared --tests      :: DLL + every test linked against it
+python build.py                       :: static lib + demo (fastest, minimal)
+python build.py --shared              :: mocida.dll + demo
+python build.py --tests               :: static lib + demo + every test_*.exe
+python build.py --clean --shared      :: from-scratch DLL build
+python build.py --shared --no-demo    :: just the DLL — for embedding in your own project
+python build.py --shared --tests      :: DLL + every test linked against it
 ```
 
 The same options exist on the CMake side if you prefer driving it directly:
@@ -176,7 +183,7 @@ cmake --build build\win32 --parallel
 
 ### What lands in `build\win32\`
 
-Output dirs are per-platform: `build\win32\` on Windows, `build/linux/` and `build/darwin/` on the respective Unix hosts (handled by `build.sh`).
+Output dirs are per-platform: `build\win32\` on Windows, `build/linux/` and `build/darwin/` on the respective Unix hosts (handled by `build.py`).
 
 After a default build:
 
@@ -286,11 +293,11 @@ int main(void) {
 The full API reference is generated by Doxygen and lives under `docs/generated/html/`.
 
 ```bat
-docs.bat                     :: build only
-docs.bat --open              :: build + open the index in your browser
-docs.bat --serve             :: build + start a local HTTP server (default :8080)
-docs.bat --serve --port 4242 :: pick another port
-docs.bat --serve --no-build  :: just serve what's already there
+python docs.py                     :: build only
+python docs.py --open              :: build + open the index in your browser
+python docs.py --serve             :: build + start a local HTTP server (default :8080)
+python docs.py --serve --port 4242 :: pick another port
+python docs.py --serve --no-build  :: just serve what's already there
 ```
 
 `--serve` uses a native PowerShell HttpListener — no Python, Node, or extra tooling needed. The site supports **light / dark / auto** themes; click the moon/sun icon next to the logo to cycle. Your preference is remembered across reloads.
@@ -306,8 +313,8 @@ src/
 
 tests/               one .c per visual feature; each builds to its own .exe
 assets/              logo, SVG showcases, optional media for tests (sample.mp4 etc)
-docs/                Doxyfile, mainpage.md, custom theme + serve.ps1
-SDL/, SDL_image/, SDL_ttf/   vendored at pinned commits (see setup.bat)
+docs/                Doxyfile, mainpage.md, custom theme
+SDL/, SDL_image/, SDL_ttf/   vendored at pinned commits (see python setup.py)
 mimalloc/            optional allocator (auto-detected by CMake)
 vcpkg/               local toolchain bootstrap for libcurl + webview2
 ```

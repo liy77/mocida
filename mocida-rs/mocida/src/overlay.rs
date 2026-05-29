@@ -1,4 +1,9 @@
 //! `UIDebugOverlay_*` — debug overlay flags + hotkey passthrough.
+//!
+//! The overlay is **opt-in**: call [`set_enabled(true)`](set_enabled)
+//! before it draws or responds to hotkeys. Once enabled, the app event
+//! loop routes **F9** (bounds) · **F10** (stats HUD) · **F8** (heatmap) ·
+//! **F12** (toggle all). It works in any build (Debug or Release).
 
 use mocida_sys as sys;
 
@@ -26,6 +31,17 @@ impl OverlayFlag {
     pub fn bits(self) -> u32 {
         self as u32
     }
+}
+
+/// Master on/off switch (default off). The overlay only draws and only
+/// reacts to its hotkeys while enabled.
+pub fn set_enabled(enabled: bool) {
+    unsafe { sys::UIDebugOverlay_SetEnabled(enabled as i32) };
+}
+
+/// Returns whether the overlay is currently enabled.
+pub fn is_enabled() -> bool {
+    unsafe { sys::UIDebugOverlay_IsEnabled() != 0 }
 }
 
 /// Replaces the overlay flag mask.

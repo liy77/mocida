@@ -86,6 +86,34 @@ impl Image {
         Ok(Self { ptr, moved: false })
     }
 
+    /// Creates an image by decoding encoded bytes already in memory
+    /// (PNG / JPG / ...), instead of loading from a path.
+    ///
+    /// # Safety
+    /// `renderer` must be a valid live `SDL_Renderer*` (e.g. the one the
+    /// running app draws with). `data` is decoded during the call and
+    /// does not need to outlive it.
+    pub unsafe fn from_memory(
+        renderer: *mut sys::SDL_Renderer,
+        data: &[u8],
+        fill_mode: FillMode,
+        tint: Color,
+    ) -> Result<Self> {
+        let ptr = unsafe {
+            sys::UIImage_FromMemory(
+                renderer,
+                data.as_ptr() as *const std::ffi::c_void,
+                data.len(),
+                sys::UIFillMode(fill_mode as i32),
+                tint.into_raw(),
+            )
+        };
+        if ptr.is_null() {
+            return Err(Error::Null("UIImage_FromMemory"));
+        }
+        Ok(Self { ptr, moved: false })
+    }
+
     /// Borrow the raw `UIImage*`.
     #[inline]
     pub fn as_ptr(&self) -> *mut sys::UIImage {

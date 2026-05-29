@@ -34,9 +34,9 @@ To build from source instead:
 
 ```powershell
 git clone https://github.com/liy77/mocida.git C:\src\mocida
-cd C:\src\mocida
-.\setup.bat
-.\build.bat
+cd C:\src\mocida\mocida
+python setup.py
+python build.py
 ```
 
 ## 1. Tell mocida-rs where the C install lives
@@ -182,7 +182,7 @@ most visually rich example in the repo.
 ### `LINK : fatal error LNK1181: cannot open input file 'mocida.lib'`
 
 `MOCIDA_LIB_DIR` isn't set, or doesn't actually contain `mocida.lib`.
-Re-check the path the upstream `build.bat` wrote it to.
+Re-check the path the upstream `build.py` wrote it to.
 
 ### `The code execution cannot proceed because mocida.dll was not found`
 
@@ -250,7 +250,7 @@ instead of relying on `get_font`.
 ### `clang: error: unknown argument: '-include...'`
 
 `bindgen` couldn't find `clang`. Install LLVM (the upstream
-`setup.bat` does this for you) and re-run.
+`setup.py` does this for you) and re-run.
 
 ## 5. Writing your own example
 

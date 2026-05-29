@@ -13,24 +13,24 @@
   <g transform="translate(30, 30)">
     <rect width="200" height="100" rx="10" fill="url(#cardBg)" stroke="#1f2937"/>
     <text x="14" y="22" font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#38bdf8" letter-spacing="0.1em">LOGGER</text>
-    <g font-family="JetBrains Mono, Consolas, monospace" font-size="10" fill="#e2e8f0">
+    <g font-family="JetBrains Mono, Consolas, monospace" font-size="9" fill="#e2e8f0">
       <text x="14" y="44">
-        <tspan fill="#94a3b8">10:23.012</tspan>
-        <tspan fill="#22c55e"> INFO</tspan> [core]
+        <tspan fill="#94a3b8">10:23:45.012</tspan>
+        <tspan fill="#22c55e"> INFO </tspan><tspan fill="#94a3b8">[mocida.core]</tspan>
       </text>
       <text x="14" y="58">
-        <tspan fill="#94a3b8">10:23.512</tspan>
-        <tspan fill="#fbbf24"> WARN</tspan> [layout]
+        <tspan fill="#94a3b8">10:23:45.512</tspan>
+        <tspan fill="#fbbf24"> WARN </tspan><tspan fill="#94a3b8">[mocida.layout]</tspan>
         <animate attributeName="opacity" values="0;1;1" keyTimes="0;0.2;1" dur="4s" repeatCount="indefinite"/>
       </text>
       <text x="14" y="72">
-        <tspan fill="#94a3b8">10:24.001</tspan>
-        <tspan fill="#ef4444"> ERROR</tspan> [render]
+        <tspan fill="#94a3b8">10:23:46.001</tspan>
+        <tspan fill="#ef4444"> ERROR </tspan><tspan fill="#94a3b8">[mocida.render]</tspan>
         <animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.4;0.5;1" dur="4s" repeatCount="indefinite"/>
       </text>
       <text x="14" y="86">
-        <tspan fill="#94a3b8">10:24.234</tspan>
-        <tspan fill="#22c55e"> INFO</tspan> [memory]
+        <tspan fill="#94a3b8">10:23:46.234</tspan>
+        <tspan fill="#22c55e"> INFO </tspan><tspan fill="#94a3b8">[mocida.memory]</tspan>
         <animate attributeName="opacity" values="0;0;0;1;1" keyTimes="0;0.6;0.7;0.8;1" dur="4s" repeatCount="indefinite"/>
       </text>
     </g>
@@ -40,8 +40,9 @@
   <g transform="translate(245, 30)">
     <rect width="200" height="100" rx="10" fill="url(#cardBg)" stroke="#1f2937"/>
     <text x="14" y="22" font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#38bdf8" letter-spacing="0.1em">PROFILER</text>
+    <text x="186" y="22" text-anchor="end" font-family="JetBrains Mono, Consolas, monospace" font-size="11" font-weight="700" fill="#22d3ee">192 fps</text>
     <g font-family="JetBrains Mono, Consolas, monospace" font-size="10" fill="#e2e8f0">
-      <text x="14" y="44">frame  <tspan fill="#22d3ee">5.2 ms</tspan> · 192 fps</text>
+      <text x="14" y="44">frame  <tspan fill="#22d3ee">5.2 ms</tspan></text>
       <text x="14" y="58">event  <tspan fill="#22d3ee">0.4 ms</tspan></text>
       <text x="14" y="72">layout <tspan fill="#22d3ee">1.1 ms</tspan></text>
       <text x="14" y="86">render <tspan fill="#22d3ee">3.4 ms</tspan></text>
@@ -66,7 +67,7 @@
   <!-- Overlay card -->
   <g transform="translate(460, 30)">
     <rect width="210" height="100" rx="10" fill="url(#cardBg)" stroke="#1f2937"/>
-    <text x="14" y="22" font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#38bdf8" letter-spacing="0.1em">OVERLAY · F9 · F10 · F11</text>
+    <text x="14" y="22" font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#38bdf8" letter-spacing="0.1em">OVERLAY · F9 · F10 · F8</text>
     <!-- fake bounds: outlined widgets -->
     <g transform="translate(18, 36)" fill="none" stroke-width="1.5">
       <rect width="80" height="20" rx="3" stroke="#22d3ee"/>
