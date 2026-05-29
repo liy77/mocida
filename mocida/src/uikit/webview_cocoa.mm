@@ -98,11 +98,12 @@ struct UIWebView {
     UIWebViewRequestCallback       onRequest;       void* onRequestUserdata;
     UIWebViewProcessFailedCallback onProcessFailed; void* onProcessFailedUserdata;
 
-    // ---- Visuals (applied to the CALayer each tick) ----
+    // ---- Visuals (applied to the CALayer when dirty) ----
     float    cornerRadius;
     float    borderWidth;
     UIColor  borderColor;
     int      hasBorder;
+    int      visualsDirty;         // re-apply layer props on the next tick
 
     // ---- Settings ----
     int      contextMenusEnabled;     // 0 = inject a contextmenu suppressor
@@ -428,7 +429,7 @@ UIWebView* UIWebView_SetContextMenusEnabled(UIWebView* wv, int enabled) {
 
 // Visual setters: stored, applied to the CALayer in RendererTick_Mac.
 UIWebView* UIWebView_SetRadius(UIWebView* wv, float r) {
-    if (wv) wv->cornerRadius = (r < 0.0f) ? 0.0f : r;
+    if (wv) { wv->cornerRadius = (r < 0.0f) ? 0.0f : r; wv->visualsDirty = 1; }
     return wv;
 }
 UIWebView* UIWebView_SetBorder(UIWebView* wv, UIColor c, float w) {
@@ -436,6 +437,7 @@ UIWebView* UIWebView_SetBorder(UIWebView* wv, UIColor c, float w) {
     wv->borderColor = c;
     wv->borderWidth = (w < 0.0f) ? 0.0f : w;
     wv->hasBorder   = (wv->borderWidth > 0.0f);
+    wv->visualsDirty = 1;
     return wv;
 }
 
@@ -469,19 +471,28 @@ void UIWebView_RendererTick_Mac(UIWebView* wv, void* nsWindowPtr,
     if (!NSEqualRects(wv->view.frame, frame)) wv->view.frame = frame;
 
     // Layer visuals — WKWebView is layer-backed (wantsLayer set in Create).
-    CALayer* layer = wv->view.layer;
-    if (layer) {
-        layer.cornerRadius  = wv->cornerRadius;
-        layer.masksToBounds = (wv->cornerRadius > 0.0f) ? YES : NO;
-        if (wv->hasBorder) {
-            layer.borderWidth = wv->borderWidth;
-            layer.borderColor = CGColorCreateGenericRGB(
-                wv->borderColor.r / 255.0,
-                wv->borderColor.g / 255.0,
-                wv->borderColor.b / 255.0,
-                wv->borderColor.a);
-        } else {
-            layer.borderWidth = 0.0;
+    // Apply only when a setter marked them dirty: radius/border rarely
+    // change, and re-creating the borderColor every frame would leak one
+    // CGColor per frame (the layer retains its own copy; our +1 reference
+    // must be released).
+    if (wv->visualsDirty) {
+        CALayer* layer = wv->view.layer;
+        if (layer) {
+            layer.cornerRadius  = wv->cornerRadius;
+            layer.masksToBounds = (wv->cornerRadius > 0.0f) ? YES : NO;
+            if (wv->hasBorder) {
+                layer.borderWidth = wv->borderWidth;
+                CGColorRef cg = CGColorCreateGenericRGB(
+                    wv->borderColor.r / 255.0,
+                    wv->borderColor.g / 255.0,
+                    wv->borderColor.b / 255.0,
+                    wv->borderColor.a);
+                layer.borderColor = cg;     // layer retains
+                CGColorRelease(cg);         // drop our +1 — no per-frame leak
+            } else {
+                layer.borderWidth = 0.0;
+            }
+            wv->visualsDirty = 0;
         }
     }
 }
