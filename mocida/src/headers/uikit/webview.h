@@ -5,6 +5,10 @@
 #include <uikit/color.h>
 #include <uikit/children.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define UI_WIDGET_WEBVIEW "@uikit/webview"
 
 /**
@@ -367,5 +371,9 @@ UIWebView* UIWebView_OnRequest(UIWebView* wv,
 /** Destroys the widget. Called automatically by UIWidget_Destroy when
  *  the wrapping UIWidget goes away. */
 void UIWebView_Destroy(UIWebView* wv);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // UIKIT_WEBVIEW_H

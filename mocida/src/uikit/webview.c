@@ -2978,7 +2978,13 @@ int UIWebView_HoverCursorAt(UIChildren* c, float x, float y) {
     (void)c; (void)x; (void)y; return 0;
 }
 
-#else // !_WIN32 && !(linux + WebKitGTK)
+#elif defined(__APPLE__) && defined(MOCIDA_HAS_WKWEBVIEW)
+
+// macOS WKWebView backend lives in webview_cocoa.mm (Objective-C++).
+// This branch is intentionally empty so every UIWebView symbol resolves
+// there exactly once and we don't fall into the no-backend stub below.
+
+#else // !_WIN32 && !(linux + WebKitGTK) && !(apple + WKWebView)
 
 #include <SDL3/SDL.h>
 

@@ -1,5 +1,16 @@
 cmake_minimum_required(VERSION 3.11)
-project(mocida C CXX)
+
+# OBJCXX must be a project() language (not enable_language'd mid-configure,
+# which fails to load the OBJCXX archive/compile rules under CMake 4 with a
+# 3.11 minimum) so the macOS WKWebView backend (webview_cocoa.mm) compiles.
+# APPLE isn't known until project() runs; CMAKE_HOST_APPLE is set earlier,
+# so it drives the language list. Non-Apple hosts have no ObjC compiler and
+# must NOT request OBJCXX.
+if(CMAKE_HOST_APPLE)
+    project(mocida C CXX OBJCXX)
+else()
+    project(mocida C CXX)
+endif()
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -228,6 +239,16 @@ option(MOCIDA_BUILD_DEMO   "Build the main demo executable (src/main.c)"        
 file(GLOB_RECURSE MOCIDA_SOURCES   "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/*.c")
 file(GLOB_RECURSE MOCIDA_SOURCES_CXX "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/*.cpp")
 
+# macOS: the WKWebView backend (webview_cocoa.mm) is Objective-C++. The
+# globs above only catch .c/.cpp, so it's added explicitly. OBJCXX must
+# be enabled as a project language before the .mm can be compiled.
+set(MOCIDA_SOURCES_OBJCXX "")
+if(APPLE)
+    set(CMAKE_OBJCXX_STANDARD 17)
+    set(MOCIDA_SOURCES_OBJCXX
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/webview_cocoa.mm")
+endif()
+
 # winmain.c is the executable-side entry-point shim that delegates
 # WinMain → main. It has no place inside the library itself (which is
 # a DLL when MOCIDA_BUILD_SHARED=ON, and DLLs don't have an exe entry
@@ -237,7 +258,7 @@ file(GLOB_RECURSE MOCIDA_SOURCES_CXX "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/*.cp
 set(MOCIDA_WINMAIN_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/winmain.c")
 list(FILTER MOCIDA_SOURCES EXCLUDE REGEX "/winmain\\.c$")
 if(MOCIDA_BUILD_SHARED)
-    add_library(mocida SHARED ${MOCIDA_SOURCES} ${MOCIDA_SOURCES_CXX})
+    add_library(mocida SHARED ${MOCIDA_SOURCES} ${MOCIDA_SOURCES_CXX} ${MOCIDA_SOURCES_OBJCXX})
     set_target_properties(mocida PROPERTIES
         # Auto-emit a .def listing every function + global variable;
         # callers don't need __declspec(dllexport) in the headers.
@@ -248,13 +269,26 @@ if(MOCIDA_BUILD_SHARED)
     )
     message(STATUS "Mocida: building as shared library (DLL)")
 else()
-    add_library(mocida STATIC ${MOCIDA_SOURCES} ${MOCIDA_SOURCES_CXX})
+    add_library(mocida STATIC ${MOCIDA_SOURCES} ${MOCIDA_SOURCES_CXX} ${MOCIDA_SOURCES_OBJCXX})
     message(STATUS "Mocida: building as static library")
 endif()
 
 target_include_directories(mocida PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/headers
 )
+
+# macOS WKWebView backend: compile in the Objective-C++ source, link the
+# WebKit + Cocoa frameworks, and flip MOCIDA_HAS_WKWEBVIEW so webview.c
+# yields its symbols to webview_cocoa.mm instead of the no-backend stub.
+# The .mm opts out of the C precompiled header below (PCH is per-language;
+# the C stdlib PCH is not valid for an Objective-C++ translation unit).
+if(APPLE)
+    target_compile_definitions(mocida PRIVATE MOCIDA_HAS_WKWEBVIEW=1)
+    target_link_libraries(mocida PUBLIC "-framework WebKit" "-framework Cocoa")
+    set_source_files_properties(${MOCIDA_SOURCES_OBJCXX} PROPERTIES
+        SKIP_PRECOMPILE_HEADERS ON)
+    message(STATUS "Mocida: macOS UIWebView backend = WKWebView (webview_cocoa.mm)")
+endif()
 
 # ----------------------------------------------------------------------
 # Precompiled headers. SDL3/SDL.h alone pulls in ~30k lines of system

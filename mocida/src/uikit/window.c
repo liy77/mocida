@@ -2953,6 +2953,31 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
                 }
             }
         }
+#elif defined(__APPLE__) && defined(MOCIDA_HAS_WKWEBVIEW)
+        // macOS WKWebView path: the webview is a native NSView subview of
+        // the SDL window's NSWindow.contentView. It paints itself (and
+        // handles its own rounded corners / border via its CALayer), so
+        // there is no SDL-side compositing here — we only forward the
+        // current bounds + visibility to the Cocoa backend, which
+        // positions the subview (flipping Y into Cocoa's bottom-left
+        // space). Unlike the early-return paths above we ALSO tick when
+        // hidden so the backend can hide the subview.
+        UIWebView* wv = (UIWebView*)base;
+        if (!el->width || !el->height) return;
+
+        void* nsWindow = NULL;
+        if (window->sdlWindow) {
+            SDL_PropertiesID props = SDL_GetWindowProperties(window->sdlWindow);
+            nsWindow = SDL_GetPointerProperty(
+                props, SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, NULL);
+        }
+
+        extern void UIWebView_RendererTick_Mac(UIWebView*, void*,
+                                               int, int, int, int, int);
+        UIWebView_RendererTick_Mac(wv, nsWindow,
+                                   (int)el->x, (int)el->y,
+                                   (int)*el->width, (int)*el->height,
+                                   el->visible ? 1 : 0);
 #else
         // ---- No webview backend compiled in ----------------------------
         // Reached when the build has no UIWebView implementation for this
