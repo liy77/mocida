@@ -27,7 +27,7 @@ set -euo pipefail
 
 # Source: the Windows-side project. Default works for hcsbr; override
 # via WIN_SRC env if your checkout lives elsewhere.
-WIN_SRC="${WIN_SRC:-/mnt/c/Users/hcsbr/Documents/mocida}"
+WIN_SRC="${WIN_SRC:-/mnt/c/Users/hcsbr/Documents/mocida/mocida}"
 
 # Destination: this script's directory (the WSL-side ~/mocida copy).
 DST="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

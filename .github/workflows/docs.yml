@@ -4,10 +4,10 @@ on:
   push:
     branches: [master]
     paths:
-      - 'src/**'
-      - 'docs/**'
-      - 'README.md'
-      - 'Doxyfile'
+      - 'mocida/src/**'
+      - 'mocida/docs/**'
+      - 'mocida/README.md'
+      - 'mocida/Doxyfile'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -36,12 +36,13 @@ jobs:
           doxygen --version
 
       - name: Generate docs
+        working-directory: mocida
         run: doxygen Doxyfile
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/generated/html
+          path: mocida/docs/generated/html
 
   deploy:
     needs: build

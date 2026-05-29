@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = [
+    "mocida-sys",
+    "mocida",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+authors = ["mocida-rs contributors"]
+license = "MIT"
+repository = "https://github.com/liy77/mocida"
+description = "Rust bindings to the Mocida C UI toolkit (https://github.com/liy77/mocida)"
+readme = "README.md"
+
+[workspace.dependencies]
+mocida-sys = { path = "mocida-sys", version = "0.1.0" }

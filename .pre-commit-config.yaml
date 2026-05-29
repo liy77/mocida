@@ -1,0 +1,42 @@
+# .pre-commit-config.yaml — root of the mocida monorepo.
+#
+# Two hooks, both operating on STAGED files only (the pre-commit framework
+# passes just the staged file list to each hook; we never mass-reformat):
+#
+#   1. clang-format  — scoped to the project's own C under mocida/src.
+#                      Vendored SDL/SDL_image/SDL_ttf trees are excluded via
+#                      both the `files` allow-regex (only mocida/src/...) and
+#                      an explicit `exclude` deny-regex as defence in depth.
+#   2. cargo fmt     — scoped to the Rust workspace under mocida-rs/.
+#
+# Install once with:  pre-commit install   (see install notes).
+
+repos:
+  # ---- C: clang-format on mocida/src only -------------------------------
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v18.1.8
+    hooks:
+      - id: clang-format
+        name: clang-format (mocida/src C/H, vendored SDL excluded)
+        # Allow-list: only the project's own C and headers.
+        files: ^mocida/src/.*\.(c|h)$
+        # Deny-list: never touch vendored third-party SDL trees, even if a
+        # path somehow matches above. Belt-and-suspenders.
+        exclude: ^mocida/(SDL|SDL_image|SDL_ttf)/
+        args: [-i, --style=file]
+
+  # ---- Rust: cargo fmt on the mocida-rs workspace -----------------------
+  # A local hook is used so `cargo fmt` runs with the workspace manifest as
+  # its cwd (mocida-rs/), formatting only the staged .rs files it is handed.
+  - repo: local
+    hooks:
+      - id: cargo-fmt-mocida-rs
+        name: cargo fmt (mocida-rs workspace)
+        language: system
+        # Only fire for Rust files inside the workspace.
+        files: ^mocida-rs/.*\.rs$
+        # `cargo fmt` resolves rustfmt.toml/edition from the manifest dir,
+        # so point it at mocida-rs/Cargo.toml and pass the staged files
+        # after `--` to rustfmt. This formats staged files only.
+        entry: cargo fmt --manifest-path mocida-rs/Cargo.toml --
+        pass_filenames: true

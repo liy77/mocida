@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 420" width="420" height="420" preserveAspectRatio="xMidYMid meet" role="img" aria-label="mocida-rs">
+  <title>mocida-rs</title>
+  <defs>
+    <!-- Same soft outward glow as upstream so the icon reads the same
+         at favicon sizes. -->
+    <filter id="m-glow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="10" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Subtle inner shadow on the third block so the "rs" badge feels
+         pressed into the mark instead of floating above it. -->
+    <filter id="m-inset" x="-15%" y="-15%" width="130%" height="130%">
+      <feGaussianBlur stdDeviation="2" result="b"/>
+      <feOffset in="b" dx="0" dy="1" result="o"/>
+      <feMerge>
+        <feMergeNode in="o"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Mocida's two-square stack, kept identical so mocida-rs reads as
+       part of the same family. Blue + red, 50% overlap, glow halo. -->
+  <rect x="30"  y="30"  width="240" height="240" rx="32"
+        fill="#5271ff" filter="url(#m-glow)" opacity="0.95"/>
+  <rect x="150" y="150" width="240" height="240" rx="32"
+        fill="#ff3131" filter="url(#m-glow)" opacity="0.95"/>
+
+  <!-- "rs" badge — a third smaller block in Rust's orange, tucked in
+       the bottom-right where the red square would otherwise meet the
+       canvas edge. Echoes the two-square language and makes the Rust
+       binding explicit. -->
+  <g filter="url(#m-inset)">
+    <rect x="240" y="240" width="150" height="150" rx="22"
+          fill="#dea584" opacity="0.97"/>
+    <text x="315" y="338"
+          text-anchor="middle"
+          font-family="ui-monospace, SF Mono, Consolas, monospace"
+          font-size="86" font-weight="800" letter-spacing="-3"
+          fill="#2b1d0e">rs</text>
+  </g>
+</svg>

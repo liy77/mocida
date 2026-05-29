@@ -1,0 +1,14 @@
+# rustfmt.toml — formatting config for the mocida-rs Cargo workspace.
+# Edition matches the workspace ([workspace.package] edition = "2021").
+# These are stable-channel options only (rust-toolchain.toml pins "stable"),
+# so `cargo fmt` works without nightly.
+
+edition = "2021"
+max_width = 100
+hard_tabs = false
+tab_spaces = 4
+newline_style = "Unix"
+use_field_init_shorthand = true
+use_try_shorthand = true
+reorder_imports = true
+reorder_modules = true

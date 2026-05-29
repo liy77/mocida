@@ -1,0 +1,28 @@
+[package]
+name = "mocida-sys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Raw FFI bindings to the Mocida C UI toolkit"
+readme = "../README.md"
+links = "mocida"
+build = "build.rs"
+
+[features]
+default = []
+# Skip running bindgen and link-time wiring. Useful when you only want to
+# inspect/edit the pre-generated bindings.rs without a local mocida install.
+docs-only = []
+# Pull in the SDL3 system headers so generated types like SDL_Surface,
+# SDL_Scancode, Uint16/Uint64 resolve. Off by default — bindings are
+# pre-shimmed with portable typedefs to keep the no-SDL-on-PATH build green.
+sdl3-headers = []
+
+[build-dependencies]
+bindgen = "0.70"
+
+[lib]
+name = "mocida_sys"

@@ -1,110 +1,24 @@
-# =====================================================================
-#  Mocida — what NEVER goes into git.
-#
-#  Sections are grouped so adding a new entry has an obvious home.
-#  Things deliberately KEPT in source control: SDL / SDL_image / SDL_ttf
-#  (vendored at pinned commits by setup.bat), assets/{logo,banner,...}.svg,
-#  and the docs theme. If you ever pull a setup.bat-managed dir into the
-#  ignore list, run `git rm -r --cached <dir>` first to drop the cached
-#  index entries.
-# =====================================================================
+# --- Rust workspace (mocida-rs) ---
+/mocida-rs/target/
+/mocida-rs/Cargo.lock
 
-# ---------------------------------------------------------------------
-# Build outputs
-# ---------------------------------------------------------------------
+# --- pre-commit framework ---
+# (caches live under the user's home, not the repo, but ignore any local run
+#  artifacts just in case)
+.pre-commit-cache/
+
+# NOTE: the former root-level C .gitignore content now lives in mocida/.gitignore
+# (it moves with the C tree). This root .gitignore only needs the monorepo-wide
+# additions above plus whatever the C .gitignore did NOT already cover.
+
+# --- stale build/cache artifacts that may linger at the repo root ---
+# (the C build now runs under mocida/; these are leftovers from the old
+#  root-level layout or tool caches seeded by setup scripts)
 /build/
-/dist/
 build-*/
 cmake-build-*/
-out/
-
-# WebView2 NuGet cache fetched on first build (build.bat downloads the
-# Microsoft.Web.WebView2 package once to grab WebView2LoaderStatic.lib).
 /.webview2/
-
-# Stray CMake outputs that occasionally land outside build/
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-CTestTestfile.cmake
-compile_commands.json
-
-# Compiler / linker artifacts
-*.o
-*.obj
-*.a
-*.lib
-*.exp
-*.exe
-*.dll
-*.so
-*.dylib
-*.pdb
-*.ilk
-*.idb
-*.map
-
-# ---------------------------------------------------------------------
-# Bootstrapped / external tooling
-#   - vcpkg/   : local toolchain seeded by setup.bat for libcurl + webview2
-#   - mimalloc/: optional allocator cloned by setup.bat
-#   - nasm/    : assembler some vcpkg ports pull in
-# All three are regenerated from a clean checkout by re-running setup.
-# ---------------------------------------------------------------------
 /vcpkg/
 /mimalloc/
-/nasm/
-
-# ---------------------------------------------------------------------
-# Editor / IDE state
-# ---------------------------------------------------------------------
-/.vscode/
-/.idea/
-/.vs/
-.cache/
-.clangd/
-.ccls-cache/
-*.swp
-*.swo
-*~
-*.user
-*.suo
-*.userprefs
-
-# ---------------------------------------------------------------------
-# Docs — the Doxygen output is rebuilt by docs.bat in seconds, no
-# reason to track thousands of generated HTML files.
-# ---------------------------------------------------------------------
-/docs/generated/
-Doxyfile.bak
-*.bak
-
-# ---------------------------------------------------------------------
-# Runtime artifacts (logs, crash dumps, profile traces)
-# ---------------------------------------------------------------------
-mocida_crash_*.log
 mocida_webview.log
-trace.json
-*.dmp
-
-# ---------------------------------------------------------------------
-# Generated test media — see assets/make-samples.ps1.
-# Keep static visuals (logo.svg, banner.svg, feature-*.svg, sdl_logo.png)
-# tracked; ignore only the synthesized audio/video samples.
-# ---------------------------------------------------------------------
-/assets/sample.mp4
-/assets/sample.mkv
-/assets/sample.mov
-/assets/sample.avi
-/assets/click.wav
-
-# ---------------------------------------------------------------------
-# OS junk
-# ---------------------------------------------------------------------
-.DS_Store
-.AppleDouble
-.LSOverride
-Thumbs.db
-ehthumbs.db
-desktop.ini
-$RECYCLE.BIN/
+mocida_crash_*.log

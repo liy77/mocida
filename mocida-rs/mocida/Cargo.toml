@@ -1,0 +1,21 @@
+[package]
+name = "mocida"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Safe, idiomatic Rust wrapper over mocida-sys (the Mocida C UI toolkit)"
+readme = "../README.md"
+
+[dependencies]
+mocida-sys = { workspace = true }
+
+[features]
+default = []
+docs-only = ["mocida-sys/docs-only"]
+
+[[example]]
+name = "hello_world"
+path = "examples/hello_world.rs"
