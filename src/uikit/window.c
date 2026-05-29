@@ -2875,9 +2875,153 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
                 wv, window->sdlRenderer, (int)dst.w, (int)dst.h);
             if (wvTex) {
                 SDL_SetTextureBlendMode(wvTex, SDL_BLENDMODE_BLEND);
-                SDL_SetTextureAlphaMod(wvTex, (Uint8)(op * 255.0f + 0.5f));
-                SDL_RenderTexture(window->sdlRenderer, wvTex, NULL, &dst);
-                SDL_SetTextureAlphaMod(wvTex, 255);
+
+                // Inner corner radius: when bordered, nest inside the ring
+                // exactly like the border path's inner rect; otherwise use
+                // the full radius.
+                float innerR = wvRadius;
+                if (wvHasBorder && wvBorderW > 0.0f) {
+                    innerR = wvRadius - wvBorderW;
+                    if (innerR < 0.0f) innerR = 0.0f;
+                }
+
+                const int rtw = (int)ceilf(dst.w);
+                const int rth = (int)ceilf(dst.h);
+
+                // Round only when there is a real radius; otherwise keep the
+                // straight, allocation-free fast path.
+                SDL_Texture* scratch = (innerR > 0.5f && rtw > 0 && rth > 0)
+                    ? SDL_CreateTexture(window->sdlRenderer,
+                        SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, rtw, rth)
+                    : NULL;
+
+                if (scratch) {
+                    // Porter-Duff DST_IN: dst' = dst * src_alpha. Same blend
+                    // the UIImage rounded path uses.
+                    const SDL_BlendMode kDstInWv = SDL_ComposeCustomBlendMode(
+                        SDL_BLENDFACTOR_ZERO, SDL_BLENDFACTOR_SRC_ALPHA,
+                        SDL_BLENDOPERATION_ADD,
+                        SDL_BLENDFACTOR_ZERO, SDL_BLENDFACTOR_SRC_ALPHA,
+                        SDL_BLENDOPERATION_ADD);
+
+                    SDL_SetTextureBlendMode(scratch, SDL_BLENDMODE_BLEND);
+                    SDL_Texture* prevTarget = SDL_GetRenderTarget(window->sdlRenderer);
+
+                    // (1) Snapshot -> scratch at local origin.
+                    SDL_SetRenderTarget(window->sdlRenderer, scratch);
+                    SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_NONE);
+                    SDL_SetRenderDrawColor(window->sdlRenderer, 0, 0, 0, 0);
+                    SDL_RenderClear(window->sdlRenderer);
+                    SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_BLEND);
+                    SDL_FRect localDst = { 0.0f, 0.0f, dst.w, dst.h };
+                    SDL_RenderTexture(window->sdlRenderer, wvTex, NULL, &localDst);
+
+                    // (2) White rounded mask -> its own target.
+                    SDL_Texture* mask = SDL_CreateTexture(window->sdlRenderer,
+                        SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, rtw, rth);
+                    if (mask) {
+                        SDL_SetTextureBlendMode(mask, SDL_BLENDMODE_BLEND);
+                        SDL_SetRenderTarget(window->sdlRenderer, mask);
+                        SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_NONE);
+                        SDL_SetRenderDrawColor(window->sdlRenderer, 0, 0, 0, 0);
+                        SDL_RenderClear(window->sdlRenderer);
+                        SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_BLEND);
+
+                        SDL_FRect maskRect = { 0.0f, 0.0f, dst.w, dst.h };
+                        const UIColor white = { 255, 255, 255, 1.0f };
+                        DrawRoundedRectFill(window->sdlRenderer, maskRect, white, innerR);
+
+                        // (3) DST_IN: clip scratch to the rounded shape.
+                        SDL_SetRenderTarget(window->sdlRenderer, scratch);
+                        SDL_SetTextureBlendMode(mask, kDstInWv);
+                        SDL_RenderTexture(window->sdlRenderer, mask, NULL, &maskRect);
+                        SDL_DestroyTexture(mask);
+                    }
+
+                    // (4) Blit rounded scratch to screen with opacity.
+                    SDL_SetRenderTarget(window->sdlRenderer, prevTarget);
+                    SDL_SetTextureBlendMode(scratch, SDL_BLENDMODE_BLEND);
+                    SDL_SetTextureAlphaMod(scratch, (Uint8)(op * 255.0f + 0.5f));
+                    SDL_RenderTexture(window->sdlRenderer, scratch, NULL, &dst);
+                    SDL_SetTextureAlphaMod(scratch, 255);
+                    SDL_DestroyTexture(scratch);
+                } else {
+                    // No radius (or alloc failed): straight blit, unchanged.
+                    SDL_SetTextureAlphaMod(wvTex, (Uint8)(op * 255.0f + 0.5f));
+                    SDL_RenderTexture(window->sdlRenderer, wvTex, NULL, &dst);
+                    SDL_SetTextureAlphaMod(wvTex, 255);
+                }
+            }
+        }
+#else
+        // ---- No webview backend compiled in ----------------------------
+        // Reached when the build has no UIWebView implementation for this
+        // platform — most commonly Linux without WebKitGTK (the
+        // libwebkit2gtk-4.x dev package was absent at configure time, so
+        // MOCIDA_HAS_WEBKITGTK is undefined and UIWebView_Create returned a
+        // no-op stub). Rather than leave a silently-blank rectangle that
+        // looks like a broken page, paint a clear error placeholder so the
+        // missing dependency is obvious on screen.
+        if (!el->width || !el->height || !el->visible) return;
+        {
+            const float wx = el->x, wy = el->y;
+            const float ww = *el->width, wh = *el->height;
+            SDL_FRect box = { wx, wy, ww, wh };
+
+            // Muted slate card so the light message text reads against it.
+            UIColor bg = { 30, 41, 59, 1.0f }; bg.a *= op;   // slate-800
+            DrawRoundedRectFill(window->sdlRenderer, box, bg, 8.0f);
+
+            const char* msg =
+#if defined(__linux__)
+                "WebView unavailable\n\n"
+                "WebKitGTK was not found at build time.\n"
+                "Install the library and rebuild:\n"
+                "sudo apt install libwebkit2gtk-4.1-dev";
+#else
+                "WebView unavailable: no backend for this platform.";
+#endif
+
+            // Resolve a usable font path directly so the placeholder works
+            // even if UISearchFonts() was never called by the host app.
+            const char* fpath = NULL;
+#if defined(__APPLE__)
+            fpath = "/Library/Fonts/Arial.ttf";
+#else
+            static const char* kFontCands[] = {
+                "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+                NULL
+            };
+            for (int i = 0; kFontCands[i]; i++) {
+                FILE* tf = fopen(kFontCands[i], "rb");
+                if (tf) { fclose(tf); fpath = kFontCands[i]; break; }
+            }
+#endif
+            TTF_Font* font = fpath ? GetFont(fpath, 15.0f) : NULL;
+            if (font) {
+                SDL_Color sc = { 226, 232, 240,
+                                 (Uint8)SDL_clamp((int)(op * 255.0f), 0, 255) };
+                int wrapW = (int)(ww - 48.0f);
+                if (wrapW < 1) wrapW = 1;
+                SDL_Surface* surf = TTF_RenderText_Blended_Wrapped(
+                    font, msg, strlen(msg), sc, wrapW);
+                if (surf) {
+                    SDL_Texture* tex =
+                        SDL_CreateTextureFromSurface(window->sdlRenderer, surf);
+                    if (tex) {
+                        SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
+                        float tw = 0, th = 0;
+                        SDL_GetTextureSize(tex, &tw, &th);
+                        SDL_FRect tdst = { wx + (ww - tw) * 0.5f,
+                                           wy + (wh - th) * 0.5f, tw, th };
+                        SDL_RenderTexture(window->sdlRenderer, tex, NULL, &tdst);
+                        SDL_DestroyTexture(tex);
+                    }
+                    SDL_DestroySurface(surf);
+                }
             }
         }
 #endif

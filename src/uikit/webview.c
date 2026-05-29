@@ -2166,12 +2166,17 @@ struct UIWebView {
     void*                         onUrlChangeUserdata;
     UIWebViewLoadingCallback      onLoading;
     void*                         onLoadingUserdata;
+    UIWebViewRequestCallback      onRequest;
+    void*                         onRequestUserdata;
+    UIWebViewProcessFailedCallback onProcessFailed;
+    void*                         onProcessFailedUserdata;
 
     // ---- Visuals (consumed by the SDL render path) ----
     float            cornerRadius;
     float            borderWidth;
     UIColor          borderColor;
     int              hasBorder;
+    int              contextMenusEnabled;   // 1 = show default menu (default), 0 = suppress
 };
 
 // One-shot GTK init. Same shape as the GStreamer init in video.c — must
@@ -2275,6 +2280,104 @@ static void OnUriChanged(GObject* obj, GParamSpec* spec, gpointer ud) {
     if (uri && wv->onUrlChange) wv->onUrlChange(wv, uri, wv->onUrlChangeUserdata);
 }
 
+// decide-policy signal: the only UI-process-side mechanism in
+// webkit2gtk-4.1 that can BLOCK a load by URL. Fires for top-level /
+// subframe navigations (NAVIGATION_ACTION, NEW_WINDOW_ACTION) and for
+// resource responses (RESPONSE). It does NOT fire for every
+// fetch/XHR/img subresource the way the Win32 WebResourceRequested "*"
+// filter does — so the Linux block surface is navigations + responses,
+// a documented subset of the Win32 contract. resource-load-started /
+// sent-request are observe-only (void return in the 4.1 GIR) and cannot
+// cancel, so they are not usable here. We extract the request URL, hand
+// it to the user callback, and ignore() the decision (aborting the
+// load) if the callback returns 1. Returning TRUE marks the decision
+// handled; returning FALSE lets WebKit apply its own default policy
+// (important for RESPONSE decisions that may be downloads).
+static gboolean OnDecidePolicy(WebKitWebView* view,
+                               WebKitPolicyDecision* decision,
+                               WebKitPolicyDecisionType type,
+                               gpointer ud) {
+    (void)view;
+    UIWebView* wv = (UIWebView*)ud;
+    if (!wv || !wv->onRequest) return FALSE;   // no handler: WebKit defaults
+
+    const char* url = NULL;
+    if (type == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION ||
+        type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION) {
+        WebKitNavigationPolicyDecision* nav =
+            WEBKIT_NAVIGATION_POLICY_DECISION(decision);
+        WebKitNavigationAction* act =
+            webkit_navigation_policy_decision_get_navigation_action(nav);
+        WebKitURIRequest* req = act ? webkit_navigation_action_get_request(act) : NULL;
+        if (req) url = webkit_uri_request_get_uri(req);
+    } else if (type == WEBKIT_POLICY_DECISION_TYPE_RESPONSE) {
+        WebKitResponsePolicyDecision* resp =
+            WEBKIT_RESPONSE_POLICY_DECISION(decision);
+        WebKitURIRequest* req = webkit_response_policy_decision_get_request(resp);
+        if (req) url = webkit_uri_request_get_uri(req);
+    }
+
+    if (url && wv->onRequest(wv, url, wv->onRequestUserdata) == 1) {
+        webkit_policy_decision_ignore(decision);   // BLOCK: abort the load
+        return TRUE;                                // handled
+    }
+    return FALSE;   // ALLOW: let WebKit apply its default policy
+}
+
+// web-process-terminated signal (Since 2.20): the renderer/web process
+// died. WebKitWebProcessTerminationReason has exactly three values in
+// 2.52 (CRASHED, EXCEEDED_MEMORY_LIMIT, TERMINATED_BY_API) — there is
+// no "unresponsive" value, so UI_WEBVIEW_PROCESS_RENDERER_UNRESPONSIVE
+// is never produced by this backend.
+static void OnWebProcessTerminated(WebKitWebView* view,
+                                   WebKitWebProcessTerminationReason reason,
+                                   gpointer ud) {
+    (void)view;
+    UIWebView* wv = (UIWebView*)ud;
+    if (!wv) return;
+    // The snapshot pipeline will stop producing fresh frames; mark
+    // not-loading and let the app react.
+    if (wv->loading) {
+        wv->loading = 0;
+        if (wv->onLoading) wv->onLoading(wv, 0, wv->onLoadingUserdata);
+    }
+    if (!wv->onProcessFailed) return;
+    UIWebViewProcessKind kind;
+    switch (reason) {
+        case WEBKIT_WEB_PROCESS_CRASHED:
+        case WEBKIT_WEB_PROCESS_EXCEEDED_MEMORY_LIMIT:
+            // Renderer/web process gone; page is blank, app may reload.
+            kind = UI_WEBVIEW_PROCESS_RENDERER;
+            break;
+        case WEBKIT_WEB_PROCESS_TERMINATED_BY_API:
+            // Deliberate teardown via API, not a crash.
+            kind = UI_WEBVIEW_PROCESS_OTHER;
+            break;
+        default:
+            kind = UI_WEBVIEW_PROCESS_OTHER;
+            break;
+    }
+    wv->onProcessFailed(wv, kind, wv->onProcessFailedUserdata);
+}
+
+// context-menu signal: fires on right-click before WebKit builds its
+// default menu. Returning TRUE suppresses the default menu; FALSE lets
+// it show. We read the live flag so the public setter takes effect
+// whether called before or after the view is ready. (Note: under the
+// current offscreen/snapshot render model right-clicks are not yet
+// forwarded to the view, so this is correct but not observable until
+// input forwarding lands.)
+static gboolean OnContextMenu(WebKitWebView* view,
+                              WebKitContextMenu* menu,
+                              GdkEvent* event,
+                              WebKitHitTestResult* hit,
+                              gpointer ud) {
+    (void)view; (void)menu; (void)event; (void)hit;
+    UIWebView* wv = (UIWebView*)ud;
+    if (!wv) return FALSE;
+    return wv->contextMenusEnabled ? FALSE : TRUE;  // TRUE = suppress
+}
+
 static void RunJsCallback(GObject* src, GAsyncResult* res, gpointer ud) {
     (void)ud;
     WebKitWebView* view = WEBKIT_WEB_VIEW(src);
@@ -2372,6 +2475,7 @@ UIWebView* UIWebView_Create(const char* initialUrl) {
     wv->cornerRadius = 0.0f;
     wv->borderWidth = 0.0f;
     wv->borderColor = (UIColor){ 0, 0, 0, 0.0f };
+    wv->contextMenusEnabled = 1;   // default: context menus enabled
 
     wv->offscreenWindow = gtk_offscreen_window_new();
     wv->ucm = webkit_user_content_manager_new();
@@ -2403,6 +2507,12 @@ UIWebView* UIWebView_Create(const char* initialUrl) {
                      G_CALLBACK(OnLoadChanged), wv);
     g_signal_connect(wv->view, "notify::uri",
                      G_CALLBACK(OnUriChanged), wv);
+    g_signal_connect(wv->view, "decide-policy",
+                     G_CALLBACK(OnDecidePolicy), wv);
+    g_signal_connect(wv->view, "web-process-terminated",
+                     G_CALLBACK(OnWebProcessTerminated), wv);
+    g_signal_connect(wv->view, "context-menu",
+                     G_CALLBACK(OnContextMenu), wv);
 
     if (initialUrl && *initialUrl) {
         webkit_web_view_load_uri(wv->view, initialUrl);
@@ -2699,13 +2809,18 @@ UIWebView* UIWebView_SetDevToolsEnabled(UIWebView* wv, int e) {
     }
     return wv;
 }
-UIWebView* UIWebView_SetContextMenusEnabled(UIWebView* wv, int e) { (void)e; return wv; }
+UIWebView* UIWebView_SetContextMenusEnabled(UIWebView* wv, int enabled) {
+    if (wv) wv->contextMenusEnabled = enabled ? 1 : 0;
+    return wv;
+}
 UIWebView* UIWebView_SetIsolated(UIWebView* wv, int e)            { (void)e; return wv; }
 UIWebView* UIWebView_OnProcessFailed(UIWebView* wv, UIWebViewProcessFailedCallback cb, void* ud) {
-    (void)cb; (void)ud; return wv;
+    if (wv) { wv->onProcessFailed = cb; wv->onProcessFailedUserdata = ud; }
+    return wv;
 }
 UIWebView* UIWebView_OnRequest(UIWebView* wv, UIWebViewRequestCallback cb, void* ud) {
-    (void)cb; (void)ud; return wv;
+    if (wv) { wv->onRequest = cb; wv->onRequestUserdata = ud; }
+    return wv;
 }
 int  UIWebView_AddD2DOverlay(UIWebView* wv, int x, int y, int w, int h, float r, UIColor c) {
     (void)wv; (void)x; (void)y; (void)w; (void)h; (void)r; (void)c; return -1;
@@ -2718,20 +2833,154 @@ void UIWebView_MoveD2DOverlay(UIWebView* wv, int h, int x, int y, int w, int hh)
 }
 void UIWebView_RemoveD2DOverlay(UIWebView* wv, int h) { (void)wv; (void)h; }
 
-// Input dispatchers — phase 2. The display-only MVP returns 0 for hover
-// cursor and ignores motion / clicks / wheel. To implement, walk the
-// children, find the UIWebView under the cursor, translate (x, y) into
-// widget-local coords, synthesize a GdkEventMotion / Button / Scroll
-// with the local coords and gtk_widget_event into wv->view.
-void UIWebView_DispatchMouseMotion(UIChildren* c, float x, float y) { (void)c; (void)x; (void)y; }
-void UIWebView_DispatchMouseDown  (UIChildren* c, float x, float y, int b) { (void)c; (void)x; (void)y; (void)b; }
-void UIWebView_DispatchMouseUp    (UIChildren* c, float x, float y, int b) { (void)c; (void)x; (void)y; (void)b; }
-void UIWebView_DispatchMouseWheel (UIChildren* c, float x, float y, float dx, float dy) {
-    (void)c; (void)x; (void)y; (void)dx; (void)dy;
+// =====================================================================
+// Input forwarding (mouse motion / down / up / wheel) into the
+// off-screen WebKitWebView.
+//
+// We mirror the Win32 contract (find_comp_webview_at +
+// widget_to_visual_local) but the delivery mechanism is different:
+// instead of WebView2's CompositionController.SendMouseInput we
+// synthesize a classic GdkEvent and route it into the view's internal
+// WebKitWebViewBase via gtk_widget_event(). In GTK3 that calls the
+// widget's button_press_event / motion_notify_event / scroll_event
+// vfuncs directly, regardless of whether the GdkWindow is mapped on
+// screen — which is exactly what we need for an off-screen window.
+//
+// Every event MUST carry a valid `window` (g_object_ref'd into the
+// event; gdk_event_free unrefs it) and a GdkDevice, or WebKit drops it.
+// =====================================================================
+
+// Find the topmost ready UIWebView whose widget bounds contain (x,y).
+static UIWebView* find_wv_at_linux(UIChildren* children, float x, float y) {
+    if (!children) return NULL;
+    for (int i = children->count - 1; i >= 0; i--) {
+        UIWidget* w = children->children[i];
+        if (!w || !w->visible || !w->data || !w->width || !w->height) continue;
+        UIWidgetBase* b = (UIWidgetBase*)w->data;
+        if (strcmp(b->__widget_type, UI_WIDGET_WEBVIEW) != 0) continue;
+        UIWebView* wv = (UIWebView*)b;
+        if (!wv->ready || !wv->view) continue;
+        const float ww = *w->width, hh = *w->height;
+        if (x < w->x || x >= w->x + ww || y < w->y || y >= w->y + hh) continue;
+        return wv;
+    }
+    return NULL;
 }
-int  UIWebView_HoverCursorAt      (UIChildren* c, float x, float y) { (void)c; (void)x; (void)y; return 0; }
+
+// Translate window coords to view-local (page) coords for wv. The
+// snapshot texture is drawn inset by the border width (window.c), so we
+// subtract the same border here to land 1:1 on the page.
+static void wv_local_linux(UIChildren* children, UIWebView* wv,
+                           float x, float y, double* lx, double* ly) {
+    *lx = 0; *ly = 0;
+    if (!children || !wv) return;
+    for (int i = 0; i < children->count; i++) {
+        UIWidget* w = children->children[i];
+        if (!w || w->data != (UIWidgetData)wv) continue;
+        const int bw = wv->hasBorder ? (int)wv->borderWidth : 0;
+        *lx = (double)(x - w->x - bw);
+        *ly = (double)(y - w->y - bw);
+        return;
+    }
+}
+
+// Grab the view's realized GdkWindow + pointer device, or return 0.
+static int wv_input_ctx(UIWebView* wv, GdkWindow** outWin, GdkDevice** outPtr) {
+    GtkWidget* tw = GTK_WIDGET(wv->view);
+    if (!gtk_widget_get_realized(tw)) gtk_widget_realize(tw);
+    GdkWindow* gw = gtk_widget_get_window(tw);
+    if (!gw) return 0;
+    GdkDisplay* dpy = gdk_window_get_display(gw);
+    GdkSeat* seat = gdk_display_get_default_seat(dpy);
+    if (outWin) *outWin = gw;
+    if (outPtr) *outPtr = gdk_seat_get_pointer(seat);
+    return 1;
+}
+
+void UIWebView_DispatchMouseMotion(UIChildren* children, float x, float y) {
+    UIWebView* wv = find_wv_at_linux(children, x, y);
+    if (!wv) return;
+    GdkWindow* gw; GdkDevice* dev;
+    if (!wv_input_ctx(wv, &gw, &dev)) return;
+    double lx, ly; wv_local_linux(children, wv, x, y, &lx, &ly);
+    GdkEvent* ev = gdk_event_new(GDK_MOTION_NOTIFY);
+    ev->motion.window  = g_object_ref(gw);
+    ev->motion.send_event = TRUE;
+    ev->motion.time    = (guint32)(g_get_monotonic_time() / 1000);
+    ev->motion.x = lx; ev->motion.y = ly;
+    ev->motion.x_root = lx; ev->motion.y_root = ly;
+    ev->motion.state   = 0;
+    ev->motion.is_hint = FALSE;
+    gdk_event_set_device(ev, dev);
+    gtk_widget_event(GTK_WIDGET(wv->view), ev);
+    gdk_event_free(ev);
+}
+
+static void wv_send_button(UIChildren* children, float x, float y,
+                           int sdlButton, int down) {
+    UIWebView* wv = find_wv_at_linux(children, x, y);
+    if (!wv) return;
+    GdkWindow* gw; GdkDevice* dev;
+    if (!wv_input_ctx(wv, &gw, &dev)) return;
+    double lx, ly; wv_local_linux(children, wv, x, y, &lx, &ly);
+    guint btn = (sdlButton >= 1 && sdlButton <= 3) ? (guint)sdlButton : 1;
+    GdkEvent* ev = gdk_event_new(down ? GDK_BUTTON_PRESS : GDK_BUTTON_RELEASE);
+    ev->button.window = g_object_ref(gw);
+    ev->button.send_event = TRUE;
+    ev->button.time   = (guint32)(g_get_monotonic_time() / 1000);
+    ev->button.x = lx; ev->button.y = ly;
+    ev->button.x_root = lx; ev->button.y_root = ly;
+    ev->button.button = btn;
+    // On release advertise the button as having been held, which some
+    // hit-test paths consult when finishing a click.
+    ev->button.state  = down ? 0 : (guint)(GDK_BUTTON1_MASK << (btn - 1));
+    gdk_event_set_device(ev, dev);
+    gtk_widget_event(GTK_WIDGET(wv->view), ev);
+    gdk_event_free(ev);
+}
+
+void UIWebView_DispatchMouseDown(UIChildren* c, float x, float y, int b) {
+    wv_send_button(c, x, y, b, 1);
+}
+void UIWebView_DispatchMouseUp(UIChildren* c, float x, float y, int b) {
+    wv_send_button(c, x, y, b, 0);
+}
+
+void UIWebView_DispatchMouseWheel(UIChildren* children, float x, float y,
+                                  float dx, float dy) {
+    UIWebView* wv = find_wv_at_linux(children, x, y);
+    if (!wv || (dx == 0.0f && dy == 0.0f)) return;
+    GdkWindow* gw; GdkDevice* dev;
+    if (!wv_input_ctx(wv, &gw, &dev)) return;
+    double lx, ly; wv_local_linux(children, wv, x, y, &lx, &ly);
+    GdkEvent* ev = gdk_event_new(GDK_SCROLL);
+    ev->scroll.window = g_object_ref(gw);
+    ev->scroll.send_event = TRUE;
+    ev->scroll.time   = (guint32)(g_get_monotonic_time() / 1000);
+    ev->scroll.x = lx; ev->scroll.y = ly;
+    ev->scroll.x_root = lx; ev->scroll.y_root = ly;
+    ev->scroll.direction = GDK_SCROLL_SMOOTH;
+    // SDL wheel.y>0 = away from user (page should scroll up); GDK smooth
+    // delta_y>0 scrolls content down -> negate. ~3 px/notch feel. There
+    // is NO 120 WHEEL_DELTA on Linux (that is a Win32 convention).
+    ev->scroll.delta_x = -(double)dx * 3.0;
+    ev->scroll.delta_y = -(double)dy * 3.0;
+    ev->scroll.state  = 0;
+    gdk_event_set_device(ev, dev);
+    gtk_widget_event(GTK_WIDGET(wv->view), ev);
+    gdk_event_free(ev);
+}
+
+// WebKitGTK has no simple per-widget cursor query; honest MVP returns
+// default. (To support page cursors you'd connect WebKitWebView's
+// "mouse-target-changed" and stash a UICursor in struct UIWebView.)
+int UIWebView_HoverCursorAt(UIChildren* c, float x, float y) {
+    (void)c; (void)x; (void)y; return 0;
+}
 
 #else // !_WIN32 && !(linux + WebKitGTK)
+
+#include <SDL3/SDL.h>
 
 /** Non-Windows stub of UIWebView. Stores only what is needed so calls
  *  don't crash; rendering and navigation are no-ops. */
@@ -2741,6 +2990,33 @@ struct UIWebView {
 };
 
 UIWebView* UIWebView_Create(const char* initialUrl) {
+    // No native webview backend was compiled in for this platform. The
+    // most common cause is building on Linux without WebKitGTK (the
+    // libwebkit2gtk-4.x dev package was absent at configure time). Surface
+    // this loudly the first time an app tries to open a webview: log the
+    // cause and pop a native error dialog so it isn't a silent failure.
+    // The widget itself still draws a matching error placeholder in
+    // window.c so the message persists after the dialog is dismissed.
+    static int warned = 0;
+    if (!warned) {
+        warned = 1;
+#if defined(__linux__)
+        const char* title = "WebView unavailable";
+        const char* body  =
+            "The WebKitGTK backend is not available.\n\n"
+            "Mocida was built without WebKitGTK, so the webview cannot be "
+            "displayed.\n\n"
+            "Install the library and rebuild:\n"
+            "    sudo apt install libwebkit2gtk-4.1-dev";
+#else
+        const char* title = "WebView unavailable";
+        const char* body  =
+            "No webview backend is available for this platform.";
+#endif
+        fprintf(stderr, "[mocida] UIWebView: %s. %s\n", title, body);
+        fflush(stderr);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, title, body, NULL);
+    }
     UIWebView* wv = (UIWebView*)calloc(1, sizeof(UIWebView));
     if (!wv) return NULL;
     wv->__widget_type = UI_WIDGET_WEBVIEW;
