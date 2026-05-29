@@ -4580,6 +4580,35 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
                             SDL_HINT_DEFAULT);
 #endif
 
+#if defined(__APPLE__)
+    // macOS render-creation hints. Both MUST be set before SDL_CreateRenderer
+    // (they only influence renderer creation), so they live here rather than
+    // in OptimizeSDLForHighPerformance which runs afterwards. DEFAULT priority
+    // = "set only if the user/env didn't already pick", so UIApp_SetRenderDriver
+    // and SDL_RENDER_DRIVER still win.
+    //
+    //   RENDER_DRIVER "metal,opengl,software" — SDL already picks Metal first
+    //   on macOS, but being explicit pins the fallback chain: Metal is the
+    //   only HW path that matters (D3D/Vulkan don't exist here, MoltenVK would
+    //   add a translation layer), opengl is the deprecated-but-present
+    //   fallback, software last. No "gpu" entry: SDL's GPU renderer on macOS
+    //   sits on top of Metal anyway, so it only adds an indirection for a 2D
+    //   UI workload.
+    SDL_SetHintWithPriority(SDL_HINT_RENDER_DRIVER, "metal,opengl,software",
+                            SDL_HINT_DEFAULT);
+
+    //   METAL_PREFER_LOW_POWER_DEVICE "1" — on dual-GPU Intel MacBooks
+    //   (integrated Intel + discrete AMD) this keeps us on the integrated GPU.
+    //   For a 2D UI the integrated GPU is more than enough, and forcing it
+    //   avoids the discrete-GPU power-up: a multi-hundred-ms GPU-switch hitch
+    //   the first time a Metal device is requested, plus a constant battery
+    //   drain for the rest of the session. On Apple Silicon there is a single
+    //   unified GPU so the hint is a harmless no-op. Users that genuinely want
+    //   the discrete GPU can override via the env var (DEFAULT priority).
+    SDL_SetHintWithPriority(SDL_HINT_RENDER_METAL_PREFER_LOW_POWER_DEVICE, "1",
+                            SDL_HINT_DEFAULT);
+#endif
+
     // In SDL3, CreateRenderer has different parameters
     SDL_Renderer* sdlRenderer = SDL_CreateRenderer(sdlWindow, NULL);
     if (!sdlRenderer) {
