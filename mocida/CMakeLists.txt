@@ -246,7 +246,8 @@ set(MOCIDA_SOURCES_OBJCXX "")
 if(APPLE)
     set(CMAKE_OBJCXX_STANDARD 17)
     set(MOCIDA_SOURCES_OBJCXX
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/webview_cocoa.mm")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/webview_cocoa.mm"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/video_avf.mm")
 endif()
 
 # winmain.c is the executable-side entry-point shim that delegates
@@ -283,11 +284,16 @@ target_include_directories(mocida PUBLIC
 # The .mm opts out of the C precompiled header below (PCH is per-language;
 # the C stdlib PCH is not valid for an Objective-C++ translation unit).
 if(APPLE)
-    target_compile_definitions(mocida PRIVATE MOCIDA_HAS_WKWEBVIEW=1)
-    target_link_libraries(mocida PUBLIC "-framework WebKit" "-framework Cocoa")
+    target_compile_definitions(mocida PRIVATE
+        MOCIDA_HAS_WKWEBVIEW=1
+        MOCIDA_HAS_AVFOUNDATION=1)
+    target_link_libraries(mocida PUBLIC
+        "-framework WebKit" "-framework Cocoa"
+        "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo")
     set_source_files_properties(${MOCIDA_SOURCES_OBJCXX} PROPERTIES
         SKIP_PRECOMPILE_HEADERS ON)
     message(STATUS "Mocida: macOS UIWebView backend = WKWebView (webview_cocoa.mm)")
+    message(STATUS "Mocida: macOS UIVideo  backend = AVFoundation (video_avf.mm)")
 endif()
 
 # ----------------------------------------------------------------------

@@ -1152,7 +1152,13 @@ SDL_Texture* UIVideo_GetTexture(UIVideo* v) {
     return v ? v->texture : NULL;
 }
 
-#else // !_WIN32 && !(linux + GStreamer)
+#elif defined(__APPLE__) && defined(MOCIDA_HAS_AVFOUNDATION)
+
+// macOS AVFoundation backend lives in video_avf.mm (Objective-C++).
+// This branch is intentionally empty so every UIVideo symbol resolves
+// there exactly once and we don't fall into the no-backend stub below.
+
+#else // !_WIN32 && !(linux + GStreamer) && !(apple + AVFoundation)
 
 // Stub backend for non-Windows builds. Lets the rest of the project
 // compile; callers get a NULL UIVideo and a stderr message.

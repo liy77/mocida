@@ -6,6 +6,10 @@
 #include <uikit/color.h>
 #include <uikit/image.h>     // reuses UIFillMode
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define UI_WIDGET_VIDEO "@uikit/video"
 
 /**
@@ -93,5 +97,9 @@ void UIVideo_Destroy(UIVideo* v);
 // ---------------------------------------------------------------------
 void          UIVideo_Tick      (UIVideo* v, SDL_Renderer* renderer);
 SDL_Texture*  UIVideo_GetTexture(UIVideo* v);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // UIKIT_VIDEO_H
