@@ -1101,6 +1101,30 @@ void UIApp_Run(UIApp* app) {
             }
         }
 
+        // Reconcile layout with the live window size AND safe-area insets.
+        // On iOS rotation the window size and the safe area update on
+        // DIFFERENT frames: SDL_GetWindowSafeArea keeps reporting the old
+        // orientation's (transposed) insets for a frame or two after the
+        // size already changed. A size-only relayout therefore sized the
+        // panel against a stale safe area, so after rotating back to
+        // portrait the background container came back short. Poll both and
+        // relayout whenever EITHER diverges, so the layout self-heals the
+        // moment the safe area settles. No-op when nothing changed.
+        if (app->window->visible && app->window->sdlWindow) {
+            static int lastW = -1, lastH = -1;
+            static UIScreenInsets lastSafe = { -1, -1, -1, -1 };
+            int liveW = 0, liveH = 0;
+            SDL_GetWindowSize(app->window->sdlWindow, &liveW, &liveH);
+            const UIScreenInsets s = UIScreen_GetSafeArea();
+            if (liveW > 0 && liveH > 0 &&
+                (liveW != lastW || liveH != lastH ||
+                 s.top != lastSafe.top || s.left != lastSafe.left ||
+                 s.bottom != lastSafe.bottom || s.right != lastSafe.right)) {
+                lastW = liveW; lastH = liveH; lastSafe = s;
+                ApplyResize(app, liveW, liveH);
+            }
+        }
+
         // Advance any in-flight animations with the real elapsed time.
         const Uint64 nowPC = SDL_GetPerformanceCounter();
         const Uint32 dtMs  = (Uint32)((nowPC - lastTickPC) * 1000ULL / freq);
