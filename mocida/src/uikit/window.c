@@ -1711,31 +1711,80 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
         // into these labels (TabView has no fontStyle field).
         if (font) TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
 
+        // If the shared font changed, drop every cached label texture so
+        // they re-raster at the new face/size.
+        if (tv->__titleFontCached != (void*)tv->fontFamily ||
+            tv->__titleSizeCached != tv->fontSize) {
+            for (int i = 0; i < tv->__titleCacheN; i++) {
+                if (tv->__titleTex && tv->__titleTex[i]) {
+                    SDL_DestroyTexture(tv->__titleTex[i]);
+                    tv->__titleTex[i] = NULL;
+                }
+            }
+            tv->__titleFontCached = (void*)tv->fontFamily;
+            tv->__titleSizeCached = tv->fontSize;
+        }
+        // Grow the parallel cache arrays to tabCount (zero-initialised).
+        if (tv->__titleCacheN < tv->tabCount) {
+            SDL_Texture** nt = (SDL_Texture**)realloc(tv->__titleTex,
+                                    sizeof(*nt) * tv->tabCount);
+            int* na  = (int*)realloc(tv->__titleActiveCached, sizeof(int) * tv->tabCount);
+            const char** ns = (const char**)realloc(tv->__titleStrCached,
+                                    sizeof(*ns) * tv->tabCount);
+            if (nt) tv->__titleTex = nt;
+            if (na) tv->__titleActiveCached = na;
+            if (ns) tv->__titleStrCached = ns;
+            if (nt && na && ns) {
+                for (int i = tv->__titleCacheN; i < tv->tabCount; i++) {
+                    tv->__titleTex[i] = NULL;
+                    tv->__titleActiveCached[i] = -1;
+                    tv->__titleStrCached[i] = NULL;
+                }
+                tv->__titleCacheN = tv->tabCount;
+            }
+        }
+
         for (int i = 0; i < tv->tabCount; i++) {
             SDL_FRect h = { el->x + i * tabW, el->y, tabW, headerH };
             const int active = (i == tv->activeIndex);
             UIColor bg = active ? tv->tabBgActive : tv->tabBg; bg.a *= op;
             DrawRoundedRectFill(window->sdlRenderer, h, bg, tv->radius);
 
-            if (font && tv->titles[i]) {
-                const UIColor txt = active ? tv->tabTextActive : tv->tabText;
-                SDL_Color sc = {(Uint8)txt.r,(Uint8)txt.g,(Uint8)txt.b,
-                                (Uint8)SDL_clamp((int)(txt.a*op*255.0f),0,255)};
-                const size_t len = strlen(tv->titles[i]);
-                SDL_Surface* surf = TTF_RenderText_Blended(font, tv->titles[i], len, sc);
-                if (surf) {
-                    SDL_Texture* tex = SDL_CreateTextureFromSurface(window->sdlRenderer, surf);
-                    if (tex) {
-                        SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
-                        float tw = 0, th = 0;
-                        SDL_GetTextureSize(tex, &tw, &th);
-                        SDL_FRect dst = { h.x + (tabW - tw) * 0.5f,
-                                          h.y + (headerH - th) * 0.5f,
-                                          tw, th };
-                        SDL_RenderTexture(window->sdlRenderer, tex, NULL, &dst);
-                        SDL_DestroyTexture(tex);
+            if (font && tv->titles[i] && tv->__titleTex && i < tv->__titleCacheN) {
+                // Rebuild this tab's label only when its text or active
+                // state changed. The colour is baked at full opacity; the
+                // per-frame `op` is applied via alpha-mod at blit so fading
+                // a TabView doesn't invalidate the cache.
+                if (!tv->__titleTex[i] ||
+                    tv->__titleActiveCached[i] != active ||
+                    tv->__titleStrCached[i] != tv->titles[i]) {
+                    if (tv->__titleTex[i]) SDL_DestroyTexture(tv->__titleTex[i]);
+                    tv->__titleTex[i] = NULL;
+                    const UIColor txt = active ? tv->tabTextActive : tv->tabText;
+                    SDL_Color sc = {(Uint8)txt.r,(Uint8)txt.g,(Uint8)txt.b,
+                                    (Uint8)SDL_clamp((int)(txt.a*255.0f),0,255)};
+                    const size_t len = strlen(tv->titles[i]);
+                    SDL_Surface* surf = TTF_RenderText_Blended(font, tv->titles[i], len, sc);
+                    if (surf) {
+                        tv->__titleTex[i] = SDL_CreateTextureFromSurface(
+                            window->sdlRenderer, surf);
+                        SDL_DestroySurface(surf);
+                        if (tv->__titleTex[i])
+                            SDL_SetTextureScaleMode(tv->__titleTex[i], SDL_SCALEMODE_LINEAR);
                     }
-                    SDL_DestroySurface(surf);
+                    tv->__titleActiveCached[i] = active;
+                    tv->__titleStrCached[i] = tv->titles[i];
+                }
+                SDL_Texture* tex = tv->__titleTex[i];
+                if (tex) {
+                    float tw = 0, th = 0;
+                    SDL_GetTextureSize(tex, &tw, &th);
+                    SDL_FRect dst = { h.x + (tabW - tw) * 0.5f,
+                                      h.y + (headerH - th) * 0.5f,
+                                      tw, th };
+                    SDL_SetTextureAlphaMod(tex, (Uint8)SDL_clamp((int)(op*255.0f),0,255));
+                    SDL_RenderTexture(window->sdlRenderer, tex, NULL, &dst);
+                    SDL_SetTextureAlphaMod(tex, 255);
                 }
             }
         }

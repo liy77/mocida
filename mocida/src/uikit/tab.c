@@ -62,6 +62,13 @@ void UITabView_Destroy(UITabView* tv) {
     if (!tv) return;
     for (int i = 0; i < tv->tabCount; i++) free(tv->titles[i]);
     free(tv->titles);
+    // Per-tab cached label textures (built lazily by the renderer).
+    for (int i = 0; i < tv->__titleCacheN; i++) {
+        if (tv->__titleTex && tv->__titleTex[i]) SDL_DestroyTexture(tv->__titleTex[i]);
+    }
+    free(tv->__titleTex);
+    free(tv->__titleActiveCached);
+    free(tv->__titleStrCached);
     if (tv->panels) UIChildren_Destroy(tv->panels);
     free(tv->fontFamily);
     free(tv);

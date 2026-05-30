@@ -37,6 +37,19 @@ struct UITabView {
 
     UITabChangedCallback onTabChanged; /**< Fires when activeIndex changes. */
     void* userdata;                    /**< Opaque pointer forwarded to onTabChanged. */
+
+    /* Per-tab cached label textures. Rasterising every title with
+     * TTF every frame was a measurable cost; the renderer keeps a texture
+     * per tab here and only rebuilds one when its title, active state, or
+     * the shared font changed. Opacity is applied via alpha-mod at blit so
+     * fades don't invalidate the cache. Arrays are length __titleCacheN
+     * (grown lazily to tabCount by the renderer); all freed in Destroy. */
+    SDL_Texture** __titleTex;          /**< cached label texture per tab */
+    int*          __titleActiveCached; /**< active flag each texture was built for */
+    const char**  __titleStrCached;    /**< title pointer each texture was built for */
+    int           __titleCacheN;       /**< allocated length of the arrays above */
+    void*         __titleFontCached;   /**< fontFamily ptr the textures were built with */
+    float         __titleSizeCached;   /**< fontSize the textures were built with */
 };
 
 UITabView* UITabView_Create(float tabHeight);
