@@ -93,7 +93,17 @@ if(NOT MSVC AND (CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"))
     # toolchain. --gc-sections is GNU-ld / lld-elf only; lld-link
     # ignores it with a warning. Splitting these out avoids the noise
     # on `build.bat --release`.
-    if(NOT WIN32)
+    if(APPLE)
+        # Mach-O / Apple ld64: --gc-sections is GNU/lld-elf syntax and is
+        # REJECTED by ld64 ("ld: unknown options: --gc-sections"); the
+        # equivalent is -dead_strip. -fno-plt / -fno-semantic-interposition
+        # are ELF-only (clang warns "argument unused" on Mach-O), so they're
+        # omitted on Apple.
+        string(APPEND CMAKE_C_FLAGS_RELEASE   " -ffunction-sections -fdata-sections")
+        string(APPEND CMAKE_CXX_FLAGS_RELEASE " -ffunction-sections -fdata-sections")
+        string(APPEND CMAKE_EXE_LINKER_FLAGS_RELEASE    " -Wl,-dead_strip")
+        string(APPEND CMAKE_SHARED_LINKER_FLAGS_RELEASE " -Wl,-dead_strip")
+    elseif(NOT WIN32)
         string(APPEND CMAKE_C_FLAGS_RELEASE   " -fno-plt -fno-semantic-interposition -ffunction-sections -fdata-sections")
         string(APPEND CMAKE_CXX_FLAGS_RELEASE " -fno-plt -fno-semantic-interposition -ffunction-sections -fdata-sections")
         string(APPEND CMAKE_EXE_LINKER_FLAGS_RELEASE    " -Wl,--gc-sections")
@@ -876,6 +886,13 @@ if(MOCIDA_BUILD_INSTALLER)
     # so we don't drag libcurl.dll + zlib.dll + their shared deps next
     # to the installer.exe. Mocida's other libcurl users (if any) still
     # see CURL in the regular mocida target.
+    # The single-exe Windows installer ships AS mocida.dll, so it links a
+    # PRIVATE static copy of the library (it can't depend on the very DLL it
+    # installs). That rationale is Windows-only — and this trimmed static copy
+    # omits the Obj-C++ (macOS) / GTK (Linux) media + webview backends and
+    # their framework links. So on macOS/Linux the installer links the real
+    # `mocida` target instead (static by default, all backends wired up).
+    if(WIN32)
     add_library(mocida_static_installer STATIC
         ${MOCIDA_SOURCES} ${MOCIDA_SOURCES_CXX})
     target_include_directories(mocida_static_installer PUBLIC
@@ -931,6 +948,7 @@ if(MOCIDA_BUILD_INSTALLER)
         target_compile_definitions(mocida_static_installer PUBLIC
             MOCIDA_USE_MIMALLOC=1)
     endif()
+    endif()  # WIN32: private static installer lib
 
     # ------------------------------------------------------------------
     # Embed assets/logo.svg directly into the installer binary so the
@@ -1045,7 +1063,13 @@ static const size_t g_logo_svg_len = 0;
         installer/installer.c
         ${_installer_resources}
         ${MOCIDA_WINMAIN_SRC})
-    target_link_libraries(mocida_installer PRIVATE mocida_static_installer)
+    if(WIN32)
+        target_link_libraries(mocida_installer PRIVATE mocida_static_installer)
+    else()
+        # macOS / Linux: link the real mocida (static by default) — it already
+        # pulls in SDL + the platform media/webview backends and frameworks.
+        target_link_libraries(mocida_installer PRIVATE mocida)
+    endif()
     target_include_directories(mocida_installer PRIVATE "${_inst_assets_dir}")
     if(WIN32)
         # GUI subsystem — same as mocida_add_executable. Auto-console

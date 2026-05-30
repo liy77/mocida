@@ -28,11 +28,37 @@
 #include <uikit/asset.h>
 #include <SDL3/SDL.h>
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shlwapi.h>
 #include <wininet.h>
+#define MOCIDA_PSEP "\\"
+#else
+// POSIX (macOS / Linux): there is no Win32 — we shell out to curl/tar for
+// download + extract and publish the env vars into the user's shell rc.
+// Provide the handful of Win32 names the shared code references so the
+// common paths (OnInstall, main) compile unchanged across platforms.
+#include <stdlib.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <limits.h>
+#ifndef MAX_PATH
+#define MAX_PATH PATH_MAX
+#endif
+typedef unsigned long DWORD;
+#define MOCIDA_PSEP "/"
+#define DeleteFileA(p)               remove(p)
+#define SetEnvironmentVariableA(k,v) setenv((k), (v), 1)
+// Registry value-type constants are ignored by the POSIX SetEnvPersistent
+// (it writes to ~/.mocida.env); defined here only for call-site parity.
+#define REG_SZ        0
+#define REG_EXPAND_SZ 0
+#endif
 
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -44,7 +70,21 @@
 // Stable "latest release" asset URL. GitHub redirects this to the
 // asset of the most-recent published release, so the installer
 // always pulls the freshest SDK without baking in a version number.
-#define MOCIDA_SDK_ASSET_NAME "mocida-sdk-windows-x64.zip"
+#if defined(_WIN32)
+#  define MOCIDA_SDK_ASSET_NAME "mocida-sdk-windows-x64.zip"
+#elif defined(__APPLE__)
+#  if defined(__aarch64__) || defined(__arm64__)
+#    define MOCIDA_SDK_ASSET_NAME "mocida-sdk-macos-arm64.tar.gz"
+#  else
+#    define MOCIDA_SDK_ASSET_NAME "mocida-sdk-macos-x64.tar.gz"
+#  endif
+#else
+#  if defined(__aarch64__) || defined(__arm64__)
+#    define MOCIDA_SDK_ASSET_NAME "mocida-sdk-linux-arm64.tar.gz"
+#  else
+#    define MOCIDA_SDK_ASSET_NAME "mocida-sdk-linux-x64.tar.gz"
+#  endif
+#endif
 #define MOCIDA_SDK_URL                                                       \
     "https://github.com/liy77/mocida/releases/latest/download/"              \
     MOCIDA_SDK_ASSET_NAME
@@ -74,8 +114,15 @@ static const UIColor C_MUTED_BORDER= { 203, 213, 225, 1.0f }; // slate-300 outli
 // Default install paths. The user-scope one uses %LOCALAPPDATA% so it
 // resolves to e.g. C:\Users\<you>\AppData\Local\Programs\Mocida without
 // admin. The system-scope one needs an elevated process.
+#ifdef _WIN32
 static const char* kUserDefault   = "%LOCALAPPDATA%\\Programs\\Mocida";
 static const char* kSystemDefault = "C:\\Program Files\\Mocida";
+#else
+// User scope: no admin needed (~/.local/share). System scope: /usr/local
+// (needs the installer launched via sudo to write there).
+static const char* kUserDefault   = "$HOME/.local/share/mocida";
+static const char* kSystemDefault = "/usr/local/mocida";
+#endif
 
 typedef struct {
     UIApp*         app;
@@ -98,16 +145,31 @@ static InstallerState g;
 // --------------------------------------------------------------------
 
 static void ExpandEnv(const char* in, char* out, DWORD outSize) {
+#ifdef _WIN32
     DWORD n = ExpandEnvironmentStringsA(in, out, outSize);
     if (n == 0 || n > outSize) {
         // Fallback: copy literally.
         strncpy(out, in, outSize);
         out[outSize - 1] = 0;
     }
+#else
+    // Expand a leading "$HOME" or "~" to the user's home directory; copy
+    // the rest verbatim. Enough for the install-path defaults we ship.
+    const char* home = getenv("HOME");
+    if (!home) home = ".";
+    if (strncmp(in, "$HOME", 5) == 0) {
+        snprintf(out, outSize, "%s%s", home, in + 5);
+    } else if (in[0] == '~' && (in[1] == '/' || in[1] == '\0')) {
+        snprintf(out, outSize, "%s%s", home, in + 1);
+    } else {
+        snprintf(out, outSize, "%s", in);
+    }
+#endif
 }
 
-// Process token check: returns 1 if the current process is elevated.
+// Process check: returns 1 if the current process is elevated / root.
 static int IsProcessElevated(void) {
+#ifdef _WIN32
     HANDLE tok = NULL;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) return 0;
     TOKEN_ELEVATION el = {0};
@@ -118,6 +180,9 @@ static int IsProcessElevated(void) {
     }
     CloseHandle(tok);
     return elevated;
+#else
+    return geteuid() == 0;
+#endif
 }
 
 // mkdir -p: walks the path and creates each segment in turn.
@@ -127,8 +192,8 @@ static int MakeDirRecursive(const char* path) {
     if (n == 0 || n >= sizeof(tmp)) return 0;
     memcpy(tmp, path, n + 1);
 
-    // Skip the drive letter prefix ("C:\") so we don't try to mkdir
-    // "C:".
+#ifdef _WIN32
+    // Skip the drive letter prefix ("C:\") so we don't try to mkdir "C:".
     size_t start = 0;
     if (n >= 3 && tmp[1] == ':' && (tmp[2] == '\\' || tmp[2] == '/')) start = 3;
 
@@ -144,6 +209,19 @@ static int MakeDirRecursive(const char* path) {
     DWORD attrs = GetFileAttributesA(tmp);
     return (attrs != INVALID_FILE_ATTRIBUTES) &&
            (attrs & FILE_ATTRIBUTE_DIRECTORY);
+#else
+    // POSIX: create each "/"-separated segment (skip the leading root).
+    for (size_t i = 1; i < n; i++) {
+        if (tmp[i] == '/') {
+            tmp[i] = 0;
+            mkdir(tmp, 0755);
+            tmp[i] = '/';
+        }
+    }
+    mkdir(tmp, 0755);
+    struct stat st;
+    return stat(tmp, &st) == 0 && S_ISDIR(st.st_mode);
+#endif
 }
 
 // Forward declaration: the curl progress callback (further down)
@@ -158,7 +236,7 @@ static void SetStatus(const char* msg, UIColor color);
 // release on github.com/liy77/mocida. The zip is expected to contain
 // an `include/uikit/*.h` tree and a flat `lib/` with mocida.dll,
 // mocida.lib, the SDL3*.dll set, and WebView2Loader.dll. The release
-// script (release/release.bat) is what produces this layout.
+// script (release.py) is what produces this layout, per platform.
 
 // Pumps SDL events and repaints once. Called periodically from the
 // download loop so the OS doesn't paint "Not Responding" over the
@@ -194,6 +272,7 @@ static void ShowProgress(int visible) {
 // runtime DLLs alongside the installer (wininet.dll is a Windows system
 // library; statically linking wininet.lib is just an import lib).
 // Returns 1 on success, 0 on failure (error written into `errOut`).
+#ifdef _WIN32
 static int DownloadFile(const char* url, const char* outPath,
                         char* errOut, size_t errSize) {
     HINTERNET hSession = InternetOpenA("Mocida-Installer/1.0",
@@ -312,10 +391,54 @@ static int DownloadFile(const char* url, const char* outPath,
     }
     return 1;
 }
+#else
+// POSIX: shell out to curl (then wget as a fallback). Both ship with macOS
+// and almost every Linux box, so the installer stays dependency-free (no
+// libcurl link). Paths are single-quoted for the shell.
+static int DownloadFile(const char* url, const char* outPath,
+                        char* errOut, size_t errSize) {
+    SetStatus("Downloading SDK...", C_TEXT_DIM);
+    SetProgress(0.10f);
+    PumpAndRepaint();
+
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd),
+             "curl -fL --retry 2 -o '%s' '%s' >/dev/null 2>&1", outPath, url);
+    int rc = system(cmd);
+    if (rc != 0) {
+        snprintf(cmd, sizeof(cmd), "wget -q -O '%s' '%s'", outPath, url);
+        rc = system(cmd);
+    }
+    if (rc != 0) {
+        snprintf(errOut, errSize,
+                 "Download failed. Is the network up and curl/wget installed?");
+        remove(outPath);
+        return 0;
+    }
+
+    FILE* fp = fopen(outPath, "rb");
+    if (!fp) {
+        snprintf(errOut, errSize, "Downloaded file is missing.");
+        return 0;
+    }
+    fseek(fp, 0, SEEK_END);
+    long sz = ftell(fp);
+    fclose(fp);
+    if (sz <= 0) {
+        snprintf(errOut, errSize, "Download produced 0 bytes.");
+        remove(outPath);
+        return 0;
+    }
+    SetProgress(0.85f);
+    PumpAndRepaint();
+    return 1;
+}
+#endif
 
 // Extracts `zipPath` into `destDir` by invoking PowerShell's
 // Expand-Archive. Avoids pulling in a zip dependency for what is a
 // one-shot operation in an installer.
+#ifdef _WIN32
 static int ExtractZip(const char* zipPath, const char* destDir,
                       char* errOut, size_t errSize) {
     // Escape any single quotes (paranoia — unlikely in install paths).
@@ -348,10 +471,26 @@ static int ExtractZip(const char* zipPath, const char* destDir,
     }
     return 1;
 }
+#else
+// POSIX: the SDK ships as a .tar.gz; extract it with tar into destDir.
+static int ExtractZip(const char* zipPath, const char* destDir,
+                      char* errOut, size_t errSize) {
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd),
+             "tar -xzf '%s' -C '%s' >/dev/null 2>&1", zipPath, destDir);
+    int rc = system(cmd);
+    if (rc != 0) {
+        snprintf(errOut, errSize, "Extraction failed (tar exit %d).", rc);
+        return 0;
+    }
+    return 1;
+}
+#endif
 
 // Counts non-directory entries in a directory tree (recursive). Used
 // for the "<N> headers" / "<N> libraries" status messages so the user
 // gets a sense of what landed on disk.
+#ifdef _WIN32
 static int CountFiles(const char* dir) {
     char pattern[MAX_PATH];
     snprintf(pattern, sizeof(pattern), "%s\\*", dir);
@@ -372,12 +511,45 @@ static int CountFiles(const char* dir) {
     FindClose(h);
     return count;
 }
+#else
+static int CountFiles(const char* dir) {
+    DIR* d = opendir(dir);
+    if (!d) return 0;
+    int count = 0;
+    struct dirent* e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        char sub[MAX_PATH];
+        snprintf(sub, sizeof(sub), "%s/%s", dir, e->d_name);
+        struct stat st;
+        if (stat(sub, &st) == 0 && S_ISDIR(st.st_mode)) {
+            count += CountFiles(sub);
+        } else {
+            count++;
+        }
+    }
+    closedir(d);
+    return count;
+}
+#endif
 
+#ifdef _WIN32
 // Returns 1 if the substring `needle` appears (case-insensitive) in
 // `hay`. Used to test whether a directory is already on PATH.
 static int IContains(const char* hay, const char* needle) {
-    return StrStrIA(hay, needle) != NULL;
+    if (!hay || !needle || !*needle) return 0;
+    size_t nl = strlen(needle);
+    for (const char* p = hay; *p; p++) {
+        size_t i = 0;
+        while (i < nl && p[i] &&
+               tolower((unsigned char)p[i]) == tolower((unsigned char)needle[i])) {
+            i++;
+        }
+        if (i == nl) return 1;
+    }
+    return 0;
 }
+#endif
 
 // --------------------------------------------------------------------
 // Persistent environment variables via the registry
@@ -390,6 +562,7 @@ static int IContains(const char* hay, const char* needle) {
 // After mutating values, broadcast WM_SETTINGCHANGE so explorer.exe
 // and newly-spawned shells pick the change up without a reboot.
 
+#ifdef _WIN32
 static LONG OpenEnvKey(int system, REGSAM access, HKEY* out) {
     if (system) {
         return RegOpenKeyExA(HKEY_LOCAL_MACHINE,
@@ -442,6 +615,103 @@ static void BroadcastEnvChange(void) {
                         (LPARAM)"Environment", SMTO_ABORTIFHUNG, 5000,
                         &result);
 }
+#else
+// ---- POSIX env publishing ----
+// MOCIDA_* exports live in ~/.mocida.env; the login shells source it (a
+// guarded line is added to ~/.zshrc / ~/.bashrc / ~/.profile). Reinstalls
+// replace each variable line in place, so the file never accumulates dupes.
+
+static void unix_env_file(char* out, size_t n) {
+    const char* home = getenv("HOME");
+    snprintf(out, n, "%s/.mocida.env", home ? home : ".");
+}
+
+// Read a whole file into a malloc'd NUL-terminated buffer (NULL if absent).
+static char* read_text_file(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    if (sz < 0) { fclose(f); return NULL; }
+    fseek(f, 0, SEEK_SET);
+    char* buf = (char*)malloc((size_t)sz + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t rd = fread(buf, 1, (size_t)sz, f);
+    buf[rd] = 0;
+    fclose(f);
+    return buf;
+}
+
+// Upsert `export NAME="value"` in ~/.mocida.env (replacing any prior line
+// for NAME), then make the login shells source that file. `type`/`system`
+// are accepted for signature parity with the Win32 build and ignored.
+static int SetEnvPersistent(const char* name, const char* value,
+                            DWORD type, int system) {
+    (void)type; (void)system;
+    char envPath[MAX_PATH];
+    unix_env_file(envPath, sizeof(envPath));
+
+    char keyPrefix[128];
+    snprintf(keyPrefix, sizeof(keyPrefix), "export %s=", name);
+    size_t keyLen = strlen(keyPrefix);
+
+    // Rewrite the file: keep every line except the prior one for NAME.
+    char* old = read_text_file(envPath);
+    FILE* f = fopen(envPath, "wb");
+    if (!f) { free(old); return 0; }
+    if (old) {
+        char* save = NULL;
+        for (char* line = strtok_r(old, "\n", &save); line;
+             line = strtok_r(NULL, "\n", &save)) {
+            if (*line && strncmp(line, keyPrefix, keyLen) != 0)
+                fprintf(f, "%s\n", line);
+        }
+        free(old);
+    }
+    fprintf(f, "export %s=\"%s\"\n", name, value);
+    fclose(f);
+
+    // Ensure the shells source ~/.mocida.env (idempotent via a marker).
+    const char* home = getenv("HOME");
+    if (home) {
+        const char* rcs[]  = { ".zshrc", ".bashrc", ".profile" };
+        const char* marker = "# mocida sdk env";
+        const char* srcline =
+            "[ -f \"$HOME/.mocida.env\" ] && . \"$HOME/.mocida.env\"  # mocida sdk env\n";
+        for (size_t i = 0; i < 3; i++) {
+            char rc[MAX_PATH];
+            snprintf(rc, sizeof(rc), "%s/%s", home, rcs[i]);
+            char* cur = read_text_file(rc);
+            int present = cur && strstr(cur, marker);
+            int exists  = (cur != NULL);
+            free(cur);
+            // Touch existing rc files; always create ~/.profile as a baseline.
+            if (!present && (exists || i == 2)) {
+                FILE* rf = fopen(rc, "ab");
+                if (rf) { fputs(srcline, rf); fclose(rf); }
+            }
+        }
+    }
+    return 1;
+}
+
+// Not needed on POSIX (we don't probe an existing PATH); stub for parity.
+static int ReadEnvPersistent(const char* name, char* out, DWORD outSize,
+                             int system) {
+    (void)name; (void)system;
+    if (out && outSize) out[0] = 0;
+    return 0;
+}
+
+// On POSIX, MOCIDA_LIB_DIR is enough for the toolchain to find the libs; we
+// don't mutate PATH. Kept for call-site parity with the Win32 build.
+static int AppendToPath(const char* libDir, int system) {
+    (void)libDir; (void)system;
+    return 1;
+}
+
+static void BroadcastEnvChange(void) { /* no-op on POSIX */ }
+#endif
 
 // --------------------------------------------------------------------
 // Status / preview helpers
@@ -457,11 +727,19 @@ static void SetStatus(const char* msg, UIColor color) {
 static void UpdateEnvPreview(const char* dest) {
     if (!g.envPreview || !g.envPreview->data) return;
     char buf[1024];
+#ifdef _WIN32
     snprintf(buf, sizeof(buf),
         "MOCIDA_INCLUDE_DIR = %s\\include\n"
         "MOCIDA_LIB_DIR     = %s\\lib\n"
         "PATH += %s\\lib",
         dest, dest, dest);
+#else
+    snprintf(buf, sizeof(buf),
+        "MOCIDA_INCLUDE_DIR = %s/include\n"
+        "MOCIDA_LIB_DIR     = %s/lib\n"
+        "(written to ~/.mocida.env, sourced from your shell rc)",
+        dest, dest);
+#endif
     UIText_SetText((UIText*)g.envPreview->data, buf);
 }
 
@@ -545,9 +823,9 @@ static void OnInstall(UIButton* btn, void* ud) {
     ExpandEnv(raw, dest, sizeof(dest));
 
     char destInc[MAX_PATH], destLib[MAX_PATH], destIncUikit[MAX_PATH];
-    snprintf(destInc,      sizeof(destInc),      "%s\\include",        dest);
-    snprintf(destIncUikit, sizeof(destIncUikit), "%s\\include\\uikit", dest);
-    snprintf(destLib,      sizeof(destLib),      "%s\\lib",            dest);
+    snprintf(destInc,      sizeof(destInc),      "%s" MOCIDA_PSEP "include",                     dest);
+    snprintf(destIncUikit, sizeof(destIncUikit), "%s" MOCIDA_PSEP "include" MOCIDA_PSEP "uikit", dest);
+    snprintf(destLib,      sizeof(destLib),      "%s" MOCIDA_PSEP "lib",                          dest);
 
     ShowProgress(1);
     SetProgress(0.0f);
@@ -562,12 +840,21 @@ static void OnInstall(UIButton* btn, void* ud) {
 
     // Stage the download under %TEMP% so we don't pollute the install
     // folder with the raw zip after extraction.
-    char tmpDir[MAX_PATH], tmpZip[MAX_PATH];
+    char tmpZip[MAX_PATH];
+#ifdef _WIN32
+    char tmpDir[MAX_PATH];
     if (!GetTempPathA(MAX_PATH, tmpDir)) {
         SetStatus("Could not resolve %TEMP%.", C_ERR);
         return;
     }
     snprintf(tmpZip, sizeof(tmpZip), "%smocida-sdk.zip", tmpDir);
+#else
+    {
+        const char* td = getenv("TMPDIR");
+        if (!td || !*td) td = "/tmp";
+        snprintf(tmpZip, sizeof(tmpZip), "%s/mocida-sdk.tar.gz", td);
+    }
+#endif
 
     SetStatus("Contacting GitHub...", C_TEXT_DIM);
     UIWindow_Render(g.app->window);
@@ -626,11 +913,19 @@ static void OnInstall(UIButton* btn, void* ud) {
     BroadcastEnvChange();
 
     char done[512];
+#ifdef _WIN32
     snprintf(done, sizeof(done),
         "Done. %d headers, %d libraries -> %s. %s"
         "Open a new shell to inherit the variables.",
         headers, libs, dest,
         pathOk ? "PATH updated. " : "PATH update failed. ");
+#else
+    (void)pathOk;
+    snprintf(done, sizeof(done),
+        "Done. %d headers, %d libraries -> %s. Env written to ~/.mocida.env. "
+        "Open a new shell (or source it) to inherit the variables.",
+        headers, libs, dest);
+#endif
     SetStatus(done, C_OK);
 }
 
