@@ -80,6 +80,10 @@ void UIImage_Destroy(UIImage* image) {
         SDL_DestroyTexture(image->__SDL_texture);
         image->__SDL_texture = NULL;
     }
+    if (image->__roundedCache) {
+        SDL_DestroyTexture(image->__roundedCache);
+        image->__roundedCache = NULL;
+    }
     free(image->source);
     // nineSliceMargins is a borrowed pointer (caller-owned) - don't free it.
     free(image);

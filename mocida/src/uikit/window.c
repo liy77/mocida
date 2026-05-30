@@ -2512,9 +2512,27 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
         const int tw = (int)ceilf(bounds.w);
         const int th = (int)ceilf(bounds.h);
 
-        // Helper closure unavailable in C; we just keep two scratch
-        // textures alive for the duration of this widget. Both are
-        // freed before we return.
+        // Cache check: the rounded composite is expensive (multiple
+        // render-target textures + target switches). Only rebuild it when
+        // a signature input changed; otherwise re-blit the cached result.
+        const int cacheValid =
+            wantRound && img->__roundedCache &&
+            img->__rcW == tw && img->__rcH == th &&
+            img->__rcRadius   == img->radius &&
+            img->__rcBorder   == img->borderWidth &&
+            img->__rcRotation == el->rotation &&
+            img->__rcFillMode == (int)img->fillMode &&
+            img->__rcOp       == op &&
+            img->__rcSrc      == (void*)img->__SDL_texture;
+
+        if (cacheValid) {
+            SDL_RenderTexture(window->sdlRenderer, img->__roundedCache, NULL, &bounds);
+            return;
+        }
+
+        // Rebuild. The composite is rendered into `scratch`, which we KEEP
+        // as the per-image cache (replacing any previous one) instead of
+        // freeing it each frame.
         SDL_Texture* scratch = (wantRound && tw > 0 && th > 0)
             ? SDL_CreateTexture(window->sdlRenderer,
                 SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, tw, th)
@@ -2630,10 +2648,20 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
                 }
             }
 
-            // (5) Blit final scratch to the screen.
+            // (5) Store scratch as the per-image cache and blit it. The old
+            // cache (if any) is replaced; the new one is reused next frame
+            // until a signature input changes.
             SDL_SetRenderTarget(window->sdlRenderer, prevTarget);
-            SDL_RenderTexture(window->sdlRenderer, scratch, NULL, &bounds);
-            SDL_DestroyTexture(scratch);
+            if (img->__roundedCache) SDL_DestroyTexture(img->__roundedCache);
+            img->__roundedCache = scratch;
+            img->__rcW = tw; img->__rcH = th;
+            img->__rcRadius   = img->radius;
+            img->__rcBorder   = img->borderWidth;
+            img->__rcRotation = el->rotation;
+            img->__rcFillMode = (int)img->fillMode;
+            img->__rcOp       = op;
+            img->__rcSrc      = (void*)img->__SDL_texture;
+            SDL_RenderTexture(window->sdlRenderer, img->__roundedCache, NULL, &bounds);
         } else {
             // No rounded clip needed. Render image directly.
             if (useClipForOverflow) {
@@ -3323,8 +3351,11 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
         }
 
         // Lazily regenerate the text texture when the content changed.
-        if (font && (!tf->__SDL_textTexture ||
-                     tf->__cachedTextLen != renderLen)) {
+        // `textChanged` is reused below to gate the (expensive) per-glyph
+        // caret-offset measurement so it doesn't run every frame.
+        const int textChanged = (!tf->__SDL_textTexture ||
+                                 tf->__cachedTextLen != renderLen);
+        if (font && textChanged) {
             if (tf->__SDL_textTexture) {
                 SDL_DestroyTexture(tf->__SDL_textTexture);
                 tf->__SDL_textTexture = NULL;
@@ -3353,6 +3384,7 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
         // visible there is nothing to click into anyway.
         if (font && !showPlaceholder) {
             const int need = tf->textLen + 1;
+            const int offsetsStale = (tf->__charOffsetsLen != need) || textChanged;
             if (tf->__charOffsetsLen != need) {
                 int* p = (int*)realloc(tf->__charOffsets, (size_t)need * sizeof(int));
                 if (p) {
@@ -3360,7 +3392,10 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
                     tf->__charOffsetsLen = need;
                 }
             }
-            if (tf->__charOffsets && tf->__charOffsetsLen == need) {
+            // Only re-measure per-glyph offsets when the text actually
+            // changed — TTF_GetStringSize per character every frame is O(n)
+            // shaping work that dominated focused-field CPU otherwise.
+            if (offsetsStale && tf->__charOffsets && tf->__charOffsetsLen == need) {
                 const char* measureStr = renderStr; // matches glyph rendering
                 tf->__charOffsets[0] = 0;
                 for (int i = 1; i <= tf->textLen; i++) {

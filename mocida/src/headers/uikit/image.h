@@ -59,6 +59,16 @@ typedef struct {
     SDL_Texture* __SDL_texture;/**< Lazily-created GPU texture; NULL until first render. */
     UIFillMode fillMode;       /**< How the texture fills the widget rect. */
     UIColor tintColor;         /**< Tint applied via SDL_SetTextureColorMod (alpha 0 = no tint). */
+
+    /* Cached composite for the rounded/bordered render path. Building the
+     * rounded image (mask + border ring via render-target compositing) is
+     * expensive, so the result is cached here and re-blitted each frame;
+     * it is only recomposited when one of the signature inputs below
+     * changes. NULL until the first rounded render. */
+    SDL_Texture* __roundedCache;
+    int   __rcW, __rcH, __rcFillMode;
+    float __rcRadius, __rcBorder, __rcRotation, __rcOp;
+    void* __rcSrc;             /**< source-texture identity the cache was built from */
 } UIImage;
 
 /**
