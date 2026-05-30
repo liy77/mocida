@@ -28,6 +28,14 @@ set(MOCIDA_IOS OFF)
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set(MOCIDA_IOS ON)
 endif()
+
+# Absolute path to THIS (the mocida library) directory. Used instead of
+# CMAKE_CURRENT_SOURCE_DIR for files the helpers reference (Info.plist
+# template, app-icon set) so the helpers keep working when this tree is
+# add_subdirectory()'d by a standalone example/app project. CACHE INTERNAL
+# so it's visible in the example's scope where mocida_add_executable runs
+# (CMake functions resolve variables in the CALLER's scope).
+set(MOCIDA_DIR "${CMAKE_CURRENT_SOURCE_DIR}" CACHE INTERNAL "mocida library directory")
 # App bundle identifier + display name (overridable; build.py --ios pulls
 # them from app.bundle's "id"/"name").
 set(MOCIDA_BUNDLE_ID "net.liy77.mocida" CACHE STRING "iOS/macOS app bundle identifier")
@@ -657,14 +665,17 @@ function(mocida_add_executable target_name source_file)
     # provides UIApplicationMain and calls our SDL_main. Signing is left
     # OFF so the user can re-sign the produced .ipa with their own cert /
     # provisioning profile afterwards.
-    if(MOCIDA_IOS)
+    # Use CMAKE_SYSTEM_NAME (a global built-in) rather than MOCIDA_IOS here:
+    # this function may be called from a standalone example project whose
+    # scope doesn't see the library tree's MOCIDA_IOS variable.
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
         set(_mocida_disp "${target_name}")
         if(MOCIDA_APP_NAME)
             set(_mocida_disp "${MOCIDA_APP_NAME}")
         endif()
         set_target_properties(${target_name} PROPERTIES
             MACOSX_BUNDLE TRUE
-            MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/cmake/iOSInfo.plist.in"
+            MACOSX_BUNDLE_INFO_PLIST "${MOCIDA_DIR}/cmake/iOSInfo.plist.in"
             MACOSX_BUNDLE_EXECUTABLE_NAME "${target_name}"
             MACOSX_BUNDLE_GUI_IDENTIFIER "${MOCIDA_BUNDLE_ID}"
             MACOSX_BUNDLE_BUNDLE_NAME "${_mocida_disp}"
@@ -679,7 +690,7 @@ function(mocida_add_executable target_name source_file)
         # Launcher icon (the iOS equivalent of UIApp_SetWindowIcon on desktop).
         # Loose icon PNGs at the bundle root, referenced by CFBundleIcons in
         # the Info.plist — deterministic, no asset-catalog/actool dance.
-        file(GLOB _mocida_app_icons "${CMAKE_CURRENT_SOURCE_DIR}/cmake/AppIconFiles/*.png")
+        file(GLOB _mocida_app_icons "${MOCIDA_DIR}/cmake/AppIconFiles/*.png")
         if(_mocida_app_icons)
             # Copy straight into the built .app root after the link — the most
             # reliable way to get loose icons exactly where iOS expects them,
@@ -831,22 +842,10 @@ if(MOCIDA_BUILD_TESTS)
     message(STATUS "Mocida: building tests (${CMAKE_CURRENT_SOURCE_DIR}/tests/test_*.c)")
 endif()
 
-# ----------------------------------------------------------------------
-# Example apps: one executable per examples/*.c. Small, cross-platform
-# (desktop + iOS bundle, via mocida_add_executable) demos of the API.
-# On ON by default; -DMOCIDA_BUILD_EXAMPLES=OFF to skip.
-# ----------------------------------------------------------------------
-option(MOCIDA_BUILD_EXAMPLES "Build the examples/*.c programs" ON)
-if(MOCIDA_BUILD_EXAMPLES AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/examples)
-    file(GLOB MOCIDA_EXAMPLE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/examples/*.c")
-    foreach(ex_src ${MOCIDA_EXAMPLE_SOURCES})
-        get_filename_component(ex_name ${ex_src} NAME_WE)
-        mocida_add_executable(${ex_name} ${ex_src})
-    endforeach()
-    if(MOCIDA_EXAMPLE_SOURCES)
-        message(STATUS "Mocida: building examples (${CMAKE_CURRENT_SOURCE_DIR}/examples/*.c)")
-    endif()
-endif()
+# Note: examples are standalone apps under examples/<name>/ with their own
+# CMakeLists.txt + app.bundle. They are NOT built with the library — build
+# one with `python build.py --example <name>` (which configures from its
+# own directory and add_subdirectory()'s this tree for the lib only).
 
 # ----------------------------------------------------------------------
 # Optional GUI installer (installer/installer.c). The installer is a

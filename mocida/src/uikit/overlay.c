@@ -17,6 +17,7 @@
 #include <uikit/walker.h>
 #include <uikit/profile.h>
 #include <uikit/debug.h>
+#include <uikit/screen.h>
 
 #if defined(MOCIDA_USE_MIMALLOC)
 #  include <mimalloc.h>
@@ -139,10 +140,11 @@ static void draw_stats_hud(SDL_Renderer* r, UIWindow* w) {
     (void)memCurMB; (void)memPeakMB;
 #endif
 
-    /* Background panel */
+    /* Background panel — pushed clear of the notch / Dynamic Island. */
     int rw = w->width, rh = w->height;
     (void)rh;
-    SDL_FRect panel = { 8.0f, 8.0f, 220.0f, 110.0f };
+    UIScreenInsets safe = UIScreen_GetSafeArea();
+    SDL_FRect panel = { 8.0f + (float)safe.left, 8.0f + (float)safe.top, 220.0f, 110.0f };
     SDL_SetRenderDrawColor(r, 0, 0, 0, 180);
     SDL_RenderFillRect(r, &panel);
     SDL_SetRenderDrawColor(r, 80, 200, 255, 220);
@@ -176,10 +178,18 @@ static void draw_stats_hud(SDL_Renderer* r, UIWindow* w) {
     snprintf(buf, sizeof(buf), "win %dx%d", rw, w->height);
     SDL_RenderDebugText(r, panel.x + 6, ty, buf); ty += lh;
 
-    /* Hint line at the bottom of the screen */
+    /* Hint line(s) at the bottom, above the home indicator. The full hint
+     * is too wide for a phone, so split it across two lines when narrow. */
     SDL_SetRenderDrawColor(r, 180, 180, 180, 200);
-    SDL_RenderDebugText(r, 8, (float)w->height - 16,
-                        "F9 bounds  F10 stats  F8 heatmap  F12 toggle-all");
+    const float hx = 8.0f + (float)safe.left;
+    const float by = (float)w->height - 16.0f - (float)safe.bottom;
+    if (rw < 520) {
+        SDL_RenderDebugText(r, hx, by - lh, "F9 bounds  F10 stats");
+        SDL_RenderDebugText(r, hx, by,      "F8 heatmap  F12 toggle-all");
+    } else {
+        SDL_RenderDebugText(r, hx, by,
+                            "F9 bounds  F10 stats  F8 heatmap  F12 toggle-all");
+    }
 }
 
 void UIDebugOverlay_Draw(UIWindow* window) {

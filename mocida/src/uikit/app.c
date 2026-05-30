@@ -114,6 +114,12 @@ static bool LiveResizeWatch(void* userdata, SDL_Event* event) {
 
     int w = event->window.data1;
     int h = event->window.data2;
+#if defined(MOCIDA_IOS)
+    // On iOS the resize event during an orientation change can carry stale
+    // / pre-rotation dimensions; SDL_GetWindowSize is authoritative for the
+    // settled orientation, so always trust it here.
+    SDL_GetWindowSize(app->window->sdlWindow, &w, &h);
+#endif
     if (w <= 0 || h <= 0) {
         SDL_GetWindowSize(app->window->sdlWindow, &w, &h);
     }

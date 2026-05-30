@@ -337,6 +337,9 @@ def parse_args(argv):
     p.add_argument("--simulator", action="store_true",
                    help="with --ios: build for the iOS Simulator (no signing) "
                         "and install + launch on a booted simulator")
+    p.add_argument("--example", metavar="NAME",
+                   help="build a standalone app from examples/<NAME>/ (its own "
+                        "CMakeLists + app.bundle) instead of the demo/library")
     return p.parse_args(argv)
 
 
@@ -373,10 +376,17 @@ def build_ios(args):
     sim = args.simulator
     sysroot = "iphonesimulator" if sim else "iphoneos"
 
-    # app.bundle manifest drives the bundle id / display name / bundled
-    # assets on iOS (mirrors what UIApp_Create reads at runtime).
+    # Standalone example or the library demo.
+    proj_dir = (ROOT / "examples" / args.example) if args.example else ROOT
+    target   = args.example or "demo"
+    if args.example and not (proj_dir / "CMakeLists.txt").exists():
+        err(f"no example '{args.example}' under examples/")
+        return 1
+
+    # app.bundle manifest (next to the project) drives bundle id / display
+    # name / bundled assets on iOS (mirrors what UIApp_Create reads).
     manifest = {}
-    manifest_path = ROOT / "app.bundle"
+    manifest_path = proj_dir / "app.bundle"
     if manifest_path.exists():
         try:
             import json as _json
@@ -386,12 +396,12 @@ def build_ios(args):
     bundle_id = manifest.get("id") or args.bundle_id
     app_name  = manifest.get("name") or ""
     sdk_suffix = "iphonesimulator" if sim else "iphoneos"
-    sub = ("sim-" if sim else "") + config.lower()
+    sub = ("sim-" if sim else "") + (f"{args.example}-" if args.example else "") + config.lower()
     build_dir = ROOT / "build" / "ios" / sub
 
     print(_c("Mocida Build (iOS, unsigned)", "35;1"))
     target_desc = "arm64 simulator" if sim else "arm64 device"
-    print(_c(f"  ios/{sub}  (Xcode, {target_desc})  bundle={args.bundle_id}", "90"))
+    print(_c(f"  ios/{sub}  (Xcode, {target_desc})  bundle={bundle_id}", "90"))
 
     if not check_dependencies():
         return 1
@@ -404,7 +414,7 @@ def build_ios(args):
     needs_configure = not (build_dir / "CMakeCache.txt").exists()
     if needs_configure:
         cfg = [
-            "cmake", "-G", "Xcode", "-S", str(ROOT), "-B", str(build_dir),
+            "cmake", "-G", "Xcode", "-S", str(proj_dir), "-B", str(build_dir),
             "-DCMAKE_SYSTEM_NAME=iOS",
             "-DCMAKE_OSX_ARCHITECTURES=arm64",
             "-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0",
@@ -429,10 +439,10 @@ def build_ios(args):
             return r.returncode
         good("Configured.")
 
-    step("Building: demo.app  (xcodebuild, code signing OFF)")
+    step(f"Building: {target}.app  (xcodebuild, code signing OFF)")
     build_cmd = [
         "cmake", "--build", str(build_dir), "--config", config,
-        "--target", "demo", "--",
+        "--target", target, "--",
         "-sdk", sysroot,
         "CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_REQUIRED=NO",
     ]
@@ -443,12 +453,12 @@ def build_ios(args):
         return code
     good(f"Built in {time.perf_counter() - t0:.1f}s.")
 
-    app_dir = build_dir / f"{config}-{sdk_suffix}" / "demo.app"
+    app_dir = build_dir / f"{config}-{sdk_suffix}" / f"{target}.app"
     if not app_dir.exists():
-        found = list(build_dir.rglob("demo.app"))
+        found = list(build_dir.rglob(f"{target}.app"))
         app_dir = found[0] if found else app_dir
     if not app_dir.exists():
-        err(f"could not locate demo.app under {build_dir.relative_to(ROOT)}")
+        err(f"could not locate {target}.app under {build_dir.relative_to(ROOT)}")
         return 1
 
     # Bundle app.bundle + its assets into the .app, so the runtime finds the
@@ -460,7 +470,7 @@ def build_ios(args):
             adir = app_dir / "assets"
             adir.mkdir(exist_ok=True)
             for key, src in assets.items():
-                sp = Path(src) if os.path.isabs(src) else (ROOT / src)
+                sp = Path(src) if os.path.isabs(src) else (proj_dir / src)
                 if sp.exists():
                     shutil.copy2(sp, adir / key)
                 else:
@@ -470,7 +480,7 @@ def build_ios(args):
     if sim:
         return run_ios_simulator(app_dir, bundle_id, build_dir)
 
-    ipa_path = build_dir / "mocida-demo.ipa"
+    ipa_path = build_dir / f"mocida-{target}.ipa"
     step("Packaging unsigned .ipa")
     if not package_ipa(app_dir, ipa_path):
         err("failed to package .ipa")
@@ -552,10 +562,23 @@ def main(argv=None):
 
     config = args.config
     config_lc = config.lower()
-    build_dir = ROOT / "build" / PLATFORM / config_lc
     sanitize = "address,undefined" if args.asan else ""
 
-    print(_c("Mocida Build" + (" (installer)" if args.installer else ""), "35;1"))
+    # Standalone example: configure from examples/<name>/ (its own project +
+    # app.bundle), into its own build dir, building just that example target.
+    if args.example:
+        src_dir = ROOT / "examples" / args.example
+        if not (src_dir / "CMakeLists.txt").exists():
+            err(f"no example '{args.example}' under examples/ "
+                f"(missing {src_dir.relative_to(ROOT)}/CMakeLists.txt)")
+            return 1
+        build_dir = ROOT / "build" / PLATFORM / f"example-{args.example}-{config_lc}"
+    else:
+        src_dir = ROOT
+        build_dir = ROOT / "build" / PLATFORM / config_lc
+
+    label = f"example {args.example}" if args.example else "Build"
+    print(_c(f"Mocida {label}" + (" (installer)" if args.installer else ""), "35;1"))
 
     # --- dependency pre-flight -----------------------------------------
     # Catch the fresh-clone case (empty SDL / SDL_image / SDL_ttf / mimalloc)
@@ -635,7 +658,7 @@ def main(argv=None):
     if needs_configure:
         cmake_cfg = [
             "cmake", "-G", generator,
-            "-S", str(ROOT), "-B", str(build_dir),
+            "-S", str(src_dir), "-B", str(build_dir),
             *configure_args,
             f"-DCMAKE_BUILD_TYPE={config}",
             f"-DCMAKE_C_COMPILER={os.environ['CC']}",
@@ -663,7 +686,9 @@ def main(argv=None):
         good("Configured.")
 
     # --- targets --------------------------------------------------------
-    if args.installer:
+    if args.example:
+        targets = [args.example]
+    elif args.installer:
         targets = ["mocida_installer"]
     else:
         targets = ["mocida"]

@@ -142,13 +142,18 @@ static void OnResize(int win_w, int win_h, void* userdata) {
     // it fills the screen on mobile (not a shrunk-down desktop layout).
     // `compact` switches to a phone-friendly arrangement (stacked header,
     // tighter padding) while keeping readable, fixed font sizes.
-    const int   compact = (win_w < 700);
+    // Compact (phone) layout when either dimension is small — covers both
+    // portrait phones and landscape phones (short height).
+    const int   compact = (win_w < 700) || (win_h < 600);
     const float pad     = compact ? 14.0f : 24.0f;
     // Keep clear of the notch / Dynamic Island / home indicator: inset the
     // panel by the device safe area so no content hides behind a cutout.
     const UIScreenInsets safe = UIScreen_GetSafeArea();
+    // The safe-area top already clears the notch, so add only a small extra
+    // margin there (a full `pad` on top of it looked too gappy on a phone).
+    const float topGap  = (safe.top > 0) ? 4.0f : pad;
     const float panelX  = pad + (float)safe.left;
-    const float panelY  = pad + (float)safe.top;
+    const float panelY  = topGap + (float)safe.top;
     const float panelW  = (float)win_w - panelX - pad - (float)safe.right;
     const float panelH  = (float)win_h - panelY - pad - (float)safe.bottom;
     if (panelW <= 0.0f || panelH <= 0.0f) return;
@@ -239,26 +244,48 @@ static void OnResize(int win_w, int win_h, void* userdata) {
         cursorX += fixedW[i] + gap;
     }
 
-    // Button row below the cards: three equal columns filling the width.
+    // Buttons. On compact (phone) the labels ("AA Mode: COVERAGE", …) don't
+    // fit three-across, and buttons can't wrap text — so STACK them
+    // full-width, one per row. On desktop keep the three-column row.
     const float btnRowY = cardsRowY + cardsRowH + (compact ? 18.0f : 50.0f);
     const float btnH    = compact ? 46.0f : 52.0f;
-    const float btnW    = (panelW - 2.0f * inset - 2.0f * gap) / 3.0f;
-    if (g_state.fpsBtn) {
-        UIWidget_SetPosition(g_state.fpsBtn, hx, btnRowY);
-        UIWidget_SetSize    (g_state.fpsBtn, btnW, btnH);
-    }
-    if (g_state.aaBtn) {
-        UIWidget_SetPosition(g_state.aaBtn, hx + btnW + gap, btnRowY);
-        UIWidget_SetSize    (g_state.aaBtn, btnW, btnH);
-    }
-    if (g_state.trimBtn) {
-        UIWidget_SetPosition(g_state.trimBtn, hx + 2.0f * (btnW + gap), btnRowY);
-        UIWidget_SetSize    (g_state.trimBtn, btnW, btnH);
+    const float fullW   = panelW - 2.0f * inset;
+    if (compact) {
+        if (g_state.fpsBtn) {
+            UIWidget_SetPosition(g_state.fpsBtn, hx, btnRowY);
+            UIWidget_SetSize    (g_state.fpsBtn, fullW, btnH);
+        }
+        if (g_state.aaBtn) {
+            UIWidget_SetPosition(g_state.aaBtn, hx, btnRowY + (btnH + gap));
+            UIWidget_SetSize    (g_state.aaBtn, fullW, btnH);
+        }
+        if (g_state.trimBtn) {
+            UIWidget_SetPosition(g_state.trimBtn, hx, btnRowY + 2.0f * (btnH + gap));
+            UIWidget_SetSize    (g_state.trimBtn, fullW, btnH);
+        }
+    } else {
+        const float btnW = (fullW - 2.0f * gap) / 3.0f;
+        if (g_state.fpsBtn) {
+            UIWidget_SetPosition(g_state.fpsBtn, hx, btnRowY);
+            UIWidget_SetSize    (g_state.fpsBtn, btnW, btnH);
+        }
+        if (g_state.aaBtn) {
+            UIWidget_SetPosition(g_state.aaBtn, hx + btnW + gap, btnRowY);
+            UIWidget_SetSize    (g_state.aaBtn, btnW, btnH);
+        }
+        if (g_state.trimBtn) {
+            UIWidget_SetPosition(g_state.trimBtn, hx + 2.0f * (btnW + gap), btnRowY);
+            UIWidget_SetSize    (g_state.trimBtn, btnW, btnH);
+        }
     }
 
-    // Footer anchored to the bottom-left of the panel
+    // Footer: wrap the hint to the panel width (it's a full sentence) and
+    // anchor it near the bottom, leaving room for the wrapped second line.
     if (g_state.footerLabel) {
-        UIWidget_SetPosition(g_state.footerLabel, hx, panelY + panelH - (compact ? 26.0f : 36.0f));
+        if (g_state.footerLabel->data)
+            UIText_SetWrapWidth((UIText*)g_state.footerLabel->data, (int)fullW);
+        UIWidget_SetPosition(g_state.footerLabel, hx,
+                             panelY + panelH - (compact ? 56.0f : 40.0f));
     }
 }
 
