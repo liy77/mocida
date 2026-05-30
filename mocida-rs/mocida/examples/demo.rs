@@ -17,7 +17,8 @@ use std::rc::Rc;
 use mocida::mouse_area::MouseAreaEvent;
 use mocida::text::{get_font, search_fonts};
 use mocida::{
-    AAMode, App, Button, Children, Color, Event, MouseArea, Rectangle, RenderQuality, Shadow, Text,
+    AAMode, App, Button, Children, Color, Event, MouseArea, Rectangle, RenderQuality, Screen,
+    Shadow, Text,
 };
 
 const WIN_W: i32 = 1024;
@@ -131,22 +132,32 @@ where
     Ok(raw)
 }
 
-// Layout. Mirrors C `OnResize` exactly — keeps the panel inset by 24 px,
-// spreads four cards across the panel, lines up the buttons, anchors
-// the title / FPS labels to the top-left, and docks the footer to the
-// bottom-left.
+// Layout. Mirrors C `OnResize`: proportional and fills the window, insets
+// for the device safe area (notch / Dynamic Island), and uses a width-based
+// `narrow` arrangement — a portrait phone stacks the header labels + the
+// three buttons full-width, while a wide panel (desktop OR landscape phone)
+// lays them out in rows so the buttons never run off a short screen.
 fn relayout(state: &mut State, win_w: i32, win_h: i32) {
     if win_w <= 0 || win_h <= 0 {
         return;
     }
-    let pad = 24.0;
-    let panel_x = pad;
-    let panel_y = pad;
-    let panel_w = win_w as f32 - 2.0 * pad;
-    let panel_h = win_h as f32 - 2.0 * pad;
+    // `compact` only shrinks fonts/padding on small screens.
+    let compact = win_w < 700 || win_h < 600;
+    let pad = if compact { 14.0 } else { 24.0 };
+    // Keep clear of the notch / Dynamic Island / home indicator.
+    let safe = Screen::safe_area();
+    // The safe-area top already clears the notch, so add only a small extra
+    // margin there (a full `pad` on top looked too gappy on a phone).
+    let top_gap = if safe.top > 0 { 4.0 } else { pad };
+    let panel_x = pad + safe.left as f32;
+    let panel_y = top_gap + safe.top as f32;
+    let panel_w = win_w as f32 - panel_x - pad - safe.right as f32;
+    let panel_h = win_h as f32 - panel_y - pad - safe.bottom as f32;
     if panel_w <= 0.0 || panel_h <= 0.0 {
         return;
     }
+    // Width-based arrangement, independent of `compact`.
+    let narrow = panel_w < 520.0;
 
     let set_pos = |w: *mut mocida::sys::UIWidget, x: f32, y: f32| unsafe {
         if !w.is_null() {
@@ -158,23 +169,70 @@ fn relayout(state: &mut State, win_w: i32, win_h: i32) {
             mocida::sys::UIWidget_SetSize(w, x, y);
         }
     };
+    let set_text_font = |w: *mut mocida::sys::UIWidget, sz: f32| unsafe {
+        if !w.is_null() {
+            let t = (*w).data as *mut mocida::sys::UIText;
+            if !t.is_null() {
+                mocida::sys::UIText_SetFontSize(t, sz);
+            }
+        }
+    };
+    let set_btn_font = |w: *mut mocida::sys::UIWidget, sz: f32| unsafe {
+        if !w.is_null() {
+            let b = (*w).data as *mut mocida::sys::UIButton;
+            if !b.is_null() {
+                mocida::sys::UIButton_SetFontSize(b, sz);
+            }
+        }
+    };
 
+    // Readable, responsive font sizes (smaller on compact, never unreadable).
+    set_text_font(state.title, if compact { 22.0 } else { 28.0 });
+    set_text_font(state.fps_label_w, if compact { 15.0 } else { 18.0 });
+    set_text_font(state.target_label_w, if compact { 15.0 } else { 18.0 });
+    set_text_font(state.aa_label_w, if compact { 15.0 } else { 18.0 });
+    set_text_font(state.footer, if compact { 12.0 } else { 14.0 });
+    set_btn_font(state.fps_btn, if compact { 15.0 } else { 18.0 });
+    set_btn_font(state.aa_btn, if compact { 15.0 } else { 18.0 });
+    set_btn_font(state.trim_btn, if compact { 15.0 } else { 18.0 });
+
+    // White background card.
     set_pos(state.panel, panel_x, panel_y);
     set_size(state.panel, panel_w, panel_h);
 
-    set_pos(state.title, panel_x + 24.0, panel_y + 20.0);
+    let inset = if compact { 14.0 } else { 24.0 };
+    let hx = panel_x + inset;
 
-    let label_y = panel_y + 66.0;
-    set_pos(state.fps_label_w, panel_x + 24.0, label_y);
-    set_pos(state.target_label_w, panel_x + 156.0, label_y);
-    set_pos(state.aa_label_w, panel_x + 336.0, label_y);
+    // Header: stack the three stat labels on a narrow panel, row otherwise.
+    set_pos(state.title, hx, panel_y + if compact { 12.0 } else { 20.0 });
+    let stat_y = panel_y + if compact { 44.0 } else { 66.0 };
+    let header_bottom;
+    if narrow {
+        set_pos(state.fps_label_w, hx, stat_y);
+        set_pos(state.target_label_w, hx, stat_y + 22.0);
+        set_pos(state.aa_label_w, hx, stat_y + 44.0);
+        header_bottom = stat_y + 66.0;
+    } else {
+        set_pos(state.fps_label_w, hx, stat_y);
+        set_pos(state.target_label_w, hx + 132.0, stat_y);
+        set_pos(state.aa_label_w, hx + 300.0, stat_y);
+        header_bottom = stat_y + 34.0;
+    }
 
-    // Cards row.
-    let cards_row_y = panel_y + 136.0;
-    let cards_row_h = 160.0;
-    let gap = 16.0;
-    let fixed_w = [240.0, 240.0, 240.0, 140.0];
-    let mut cursor_x = panel_x + 24.0;
+    // Cards: a row that FILLS the panel width — four equal columns. Height
+    // tracks width (3:2-ish), capped so it never dominates a tall phone.
+    let gap = if compact { 10.0 } else { 16.0 };
+    let cards_row_y = header_bottom + if compact { 12.0 } else { 24.0 };
+    let mut card_w = (panel_w - 2.0 * inset - 3.0 * gap) / 4.0;
+    if card_w < 1.0 {
+        card_w = 1.0;
+    }
+    let mut cards_row_h = card_w * 0.66;
+    if cards_row_h > 180.0 {
+        cards_row_h = 180.0;
+    }
+    let fixed_w = [card_w, card_w, card_w, card_w];
+    let mut cursor_x = hx;
     for (i, w) in fixed_w.iter().enumerate() {
         let is_orange = i == 3;
         let card = state.cards[i];
@@ -231,17 +289,41 @@ fn relayout(state: &mut State, win_w: i32, win_h: i32) {
         cursor_x += w + gap;
     }
 
-    // Button row.
-    let btn_row_y = cards_row_y + cards_row_h + 50.0;
-    set_pos(state.fps_btn, panel_x + 24.0, btn_row_y);
-    set_size(state.fps_btn, 220.0, 52.0);
-    set_pos(state.aa_btn, panel_x + 264.0, btn_row_y);
-    set_size(state.aa_btn, 240.0, 52.0);
-    set_pos(state.trim_btn, panel_x + 524.0, btn_row_y);
-    set_size(state.trim_btn, 180.0, 52.0);
+    // Buttons: stack full-width on a narrow panel, three-across otherwise.
+    let btn_row_y = cards_row_y + cards_row_h + if compact { 18.0 } else { 50.0 };
+    let btn_h = if compact { 46.0 } else { 52.0 };
+    let full_w = panel_w - 2.0 * inset;
+    if narrow {
+        set_pos(state.fps_btn, hx, btn_row_y);
+        set_size(state.fps_btn, full_w, btn_h);
+        set_pos(state.aa_btn, hx, btn_row_y + (btn_h + gap));
+        set_size(state.aa_btn, full_w, btn_h);
+        set_pos(state.trim_btn, hx, btn_row_y + 2.0 * (btn_h + gap));
+        set_size(state.trim_btn, full_w, btn_h);
+    } else {
+        let btn_w = (full_w - 2.0 * gap) / 3.0;
+        set_pos(state.fps_btn, hx, btn_row_y);
+        set_size(state.fps_btn, btn_w, btn_h);
+        set_pos(state.aa_btn, hx + btn_w + gap, btn_row_y);
+        set_size(state.aa_btn, btn_w, btn_h);
+        set_pos(state.trim_btn, hx + 2.0 * (btn_w + gap), btn_row_y);
+        set_size(state.trim_btn, btn_w, btn_h);
+    }
 
-    // Footer.
-    set_pos(state.footer, panel_x + 24.0, panel_y + panel_h - 36.0);
+    // Footer: wrap the hint to the panel width and anchor near the bottom.
+    unsafe {
+        if !state.footer.is_null() {
+            let t = (*state.footer).data as *mut mocida::sys::UIText;
+            if !t.is_null() {
+                mocida::sys::UIText_SetWrapWidth(t, full_w as i32);
+            }
+        }
+    }
+    set_pos(
+        state.footer,
+        hx,
+        panel_y + panel_h - if compact { 56.0 } else { 40.0 },
+    );
 }
 
 fn set_label_text(label: *mut mocida::sys::UIText, text: &str) {
@@ -393,7 +475,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             s.aa_idx = (s.aa_idx + 1) % AA_MODES.len();
             let (mode, label) = AA_MODES[s.aa_idx];
             unsafe {
-                mocida::sys::UIApp_SetAAMode(aa_app_ptr, mocida::sys::UIAAMode(mode as i32))
+                mocida::sys::UIApp_SetAAMode(aa_app_ptr, mocida::sys::UIAAMode(mode as u32))
             };
             set_label_text(s.aa_label, &format!("AA: {}", label));
             let _ = btn.set_text(&format!("AA Mode: {}", label));

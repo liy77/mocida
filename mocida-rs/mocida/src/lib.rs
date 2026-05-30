@@ -93,7 +93,7 @@ pub use bind::Binding;
 pub use button::{Button, ButtonState, ButtonStyle};
 pub use children::Children;
 pub use color::Color;
-pub use screen::Screen;
+pub use screen::{Insets, Screen};
 pub use container::{Grid, GridView, ListView, Scroll};
 pub use controls::{Checkbox, ProgressBar, RadioButton, Slider, Spinner, Switch};
 pub use cursor::Cursor;
