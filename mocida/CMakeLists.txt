@@ -327,6 +327,12 @@ else()
     message(STATUS "Mocida: building as static library")
 endif()
 
+# Mark the library's own translation units so the public header (app.h)
+# does NOT auto-include <SDL3/SDL_main.h> (and its `#define main SDL_main`)
+# when compiling mocida itself. Consumer apps don't get this PRIVATE define,
+# so on iOS they pick up SDL_main automatically.
+target_compile_definitions(mocida PRIVATE MOCIDA_BUILDING_LIBRARY)
+
 target_include_directories(mocida PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/headers
 )

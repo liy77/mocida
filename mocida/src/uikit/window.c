@@ -4291,6 +4291,17 @@ int UIWindow_Render(UIWindow* window) {
     int rw = 0, rh = 0;
     SDL_GetWindowSize(window->sdlWindow, &rw, &rh);
 
+    // Keep the renderer's logical presentation locked to the live window
+    // size every frame. On rotation (iOS) the resize event can settle a
+    // frame or two after ApplyResize ran with stale dimensions, leaving the
+    // logical presentation out of sync — which letterboxed/clipped the
+    // whole scene (the "container breaks on rotate-back" bug). Re-applying
+    // here is idempotent and self-heals regardless of resize-event timing.
+    if (rw > 0 && rh > 0) {
+        SDL_SetRenderLogicalPresentation(window->sdlRenderer, rw, rh,
+                                         SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    }
+
     // Initialize TTF once
     static int ttfInited = 0;
     if (!ttfInited) {

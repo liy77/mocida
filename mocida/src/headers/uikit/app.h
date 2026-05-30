@@ -36,6 +36,16 @@
 #include <uikit/crash.h>
 #include <uikit/walker.h>
 
+// On iOS the app is launched by SDL's UIKit app delegate
+// (UIApplicationMain), which calls SDL_main. Including SDL_main.h renames
+// the app's main() to SDL_main and pulls in that bootstrap. We do it here
+// automatically so app authors never have to write the boilerplate.
+// Guarded so the library's OWN translation units (which define
+// MOCIDA_BUILDING_LIBRARY) never pull in SDL_main.h / the `main` macro.
+#if defined(MOCIDA_IOS) && !defined(MOCIDA_BUILDING_LIBRARY)
+#include <SDL3/SDL_main.h>
+#endif
+
 typedef int UIRenderDriver;
 
 #define UI_RENDER_SOFTWARE (UIRenderDriver)0
@@ -53,6 +63,30 @@ typedef int UIRenderDriver;
 #endif
 
 #define UI_RENDER_GPU (UIRenderDriver)7
+
+/**
+ * Screen-orientation bit flags for the iOS rotation lock. Combine with
+ * bitwise-OR and pass to UIApp_SetOrientation to restrict which
+ * orientations the device may rotate into. Default is UI_ORIENTATION_ALL
+ * (every orientation allowed - the current behavior).
+ *
+ * No-op on desktop (SDL ignores the orientation hint off-device).
+ */
+typedef enum {
+    UI_ORIENTATION_PORTRAIT             = (1 << 0), /**< Portrait, upright. */
+    UI_ORIENTATION_PORTRAIT_UPSIDE_DOWN = (1 << 1), /**< Portrait, upside-down. */
+    UI_ORIENTATION_LANDSCAPE_LEFT       = (1 << 2), /**< Landscape, home left. */
+    UI_ORIENTATION_LANDSCAPE_RIGHT      = (1 << 3)  /**< Landscape, home right. */
+} UIOrientation;
+
+/** Both landscape orientations. */
+#define UI_ORIENTATION_LANDSCAPE \
+    (UI_ORIENTATION_LANDSCAPE_LEFT | UI_ORIENTATION_LANDSCAPE_RIGHT)
+
+/** Every orientation (the default). */
+#define UI_ORIENTATION_ALL \
+    (UI_ORIENTATION_PORTRAIT | UI_ORIENTATION_PORTRAIT_UPSIDE_DOWN | \
+     UI_ORIENTATION_LANDSCAPE_LEFT | UI_ORIENTATION_LANDSCAPE_RIGHT)
 
 // Pass this value (or any <= 0) to UIApp_SetTargetFPS to unlock the
 // frame rate (renders as fast as possible).
@@ -134,6 +168,8 @@ typedef struct {
 
     int   runInBackground;     /**< 1 = keep the run loop alive when the window is hidden (e.g. minimized to tray). */
     void* tray;                /**< SDL_Tray* for the desktop tray icon, or NULL. */
+    unsigned orientations;     /**< iOS: allowed UIOrientation bitmask. Default UI_ORIENTATION_ALL. */
+    int   statusBarHidden;     /**< iOS: 0 = status bar visible (default), 1 = hidden. */
 } UIApp;
 
 /**
@@ -382,6 +418,26 @@ int  UIApp_IsConsoleVisible(void);
 void UIApp_SetAppId(UIApp* app, const char* aumid);
 
 /**
+ * Restricts the device orientations the app may rotate into. Pass a
+ * bitmask of UIOrientation flags, e.g.:
+ *   UIApp_SetOrientation(app, UI_ORIENTATION_PORTRAIT);  // portrait only
+ *   UIApp_SetOrientation(app, UI_ORIENTATION_LANDSCAPE); // landscape only
+ *   UIApp_SetOrientation(app, UI_ORIENTATION_ALL);       // all (default)
+ *
+ * On iOS this is honored live: rotation into a disallowed orientation is
+ * blocked. Call it any time (typically right after UIApp_Create). The
+ * Info.plist lists all four orientations so this runtime mask is the real
+ * gate. No-op on desktop (SDL ignores the orientation hint there).
+ */
+void UIApp_SetOrientation(UIApp* app, unsigned orientations);
+
+/**
+ * Returns the currently configured orientation bitmask, or
+ * UI_ORIENTATION_ALL if never set.
+ */
+unsigned UIApp_GetOrientation(UIApp* app);
+
+/**
  * Destroys the UIApp object and frees its resources.
  * @param app Pointer to the UIApp object to be destroyed.
  * @return None.
@@ -470,6 +526,16 @@ typedef struct {
 } UIMemoryStats;
 
 void UIApp_GetMemoryStats(UIApp* app, UIMemoryStats* out);
+
+/**
+ * Controls iOS system status bar (clock / battery / signal) visibility.
+ * The status bar is VISIBLE by default (hidden = 0); pass 1 to hide it.
+ * Honored live - call before or after the window exists. No-op on desktop.
+ *
+ * @param app    Pointer to the UIApp object.
+ * @param hidden 0 = status bar visible (default), 1 = status bar hidden.
+ */
+void UIApp_SetStatusBarHidden(UIApp* app, int hidden);
 
 /**
  * Runs the main loop of the application.

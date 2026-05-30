@@ -87,7 +87,7 @@ pub mod window;
 
 pub use alignment::{Align, Alignment, HorizontalAlign, VerticalAlign};
 pub use anim::{clear_all as anim_clear_all, Ease};
-pub use app::{AAMode, App, RenderDriver, RenderQuality};
+pub use app::{AAMode, App, Orientation, RenderDriver, RenderQuality};
 pub use arena::Arena;
 pub use bind::Binding;
 pub use button::{Button, ButtonState, ButtonStyle};

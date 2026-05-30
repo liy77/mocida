@@ -21,10 +21,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#ifdef MOCIDA_IOS
-#include <SDL3/SDL_main.h>   // iOS: UIKit app delegate boots SDL_main
-#endif
-
 // ---- Layout constants ----------------------------------------------
 #define TOOLBAR_H        48
 #define OUTER_MARGIN     20

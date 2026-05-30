@@ -35,6 +35,33 @@ pub enum RenderDriver {
     Gpu = 7,
 }
 
+/// Device-orientation flags for the iOS rotation lock. Combine with
+/// bitwise-OR and pass to [`App::set_orientation`]. Default is
+/// [`Orientation::ALL`] (every orientation allowed). No-op on desktop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum Orientation {
+    /// Portrait, upright.
+    Portrait = 1 << 0,
+    /// Portrait, upside-down.
+    PortraitUpsideDown = 1 << 1,
+    /// Landscape, home button on the left.
+    LandscapeLeft = 1 << 2,
+    /// Landscape, home button on the right.
+    LandscapeRight = 1 << 3,
+}
+
+impl Orientation {
+    /// Both landscape orientations.
+    pub const LANDSCAPE: u32 =
+        (Orientation::LandscapeLeft as u32) | (Orientation::LandscapeRight as u32);
+    /// Every orientation (the default).
+    pub const ALL: u32 = (Orientation::Portrait as u32)
+        | (Orientation::PortraitUpsideDown as u32)
+        | (Orientation::LandscapeLeft as u32)
+        | (Orientation::LandscapeRight as u32);
+}
+
 /// Analytic-coverage AA quality preset (samples-per-side).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
@@ -288,6 +315,24 @@ impl App {
         Ok(self)
     }
 
+    /// Restricts the device orientations the app may rotate into. Pass a
+    /// bitmask of [`Orientation`] flags, e.g.:
+    /// - `Orientation::Portrait as u32` — portrait only
+    /// - `Orientation::LANDSCAPE` — landscape only
+    /// - `Orientation::ALL` — all (default)
+    ///
+    /// Honored live on iOS; no-op on desktop.
+    pub fn set_orientation(&mut self, orientations: u32) -> &mut Self {
+        unsafe { sys::UIApp_SetOrientation(self.ptr, orientations) };
+        self
+    }
+
+    /// Returns the currently configured orientation bitmask, or
+    /// [`Orientation::ALL`] if never set.
+    pub fn orientation(&self) -> u32 {
+        unsafe { sys::UIApp_GetOrientation(self.ptr) }
+    }
+
     /// Hands the root widget tree to the app. Subsequent calls
     /// replace it (the previous tree is destroyed by mocida).
     pub fn set_children(&mut self, children: Children) -> &mut Self {
@@ -368,6 +413,15 @@ impl App {
     pub fn hide(&mut self) -> &mut Self {
         unsafe {
             sys::UIApp_HideWindow(self.ptr);
+        }
+        self
+    }
+
+    /// Controls iOS status bar (clock / battery / signal) visibility. The
+    /// status bar is visible by default (`hidden = false`). No-op on desktop.
+    pub fn set_status_bar_hidden(&mut self, hidden: bool) -> &mut Self {
+        unsafe {
+            sys::UIApp_SetStatusBarHidden(self.ptr, hidden as c_int);
         }
         self
     }

@@ -82,6 +82,22 @@ static void ApplyResize(UIApp* app, int new_width, int new_height) {
     app->window->width  = new_width;
     app->window->height = new_height;
 
+#if defined(MOCIDA_IOS)
+    // The resize event during an orientation change can carry stale /
+    // pre-rotation dimensions. SDL_GetWindowSize is authoritative for the
+    // settled orientation, so trust it for the layout + presentation size.
+    {
+        int aw = 0, ah = 0;
+        SDL_GetWindowSize(app->window->sdlWindow, &aw, &ah);
+        if (aw > 0 && ah > 0) {
+            new_width  = aw;
+            new_height = ah;
+            app->window->width  = aw;
+            app->window->height = ah;
+        }
+    }
+#endif
+
     if (app->mainWidget) {
         UIWidget_SetSize(app->mainWidget, (float)new_width, (float)new_height);
     }
@@ -485,6 +501,8 @@ UIApp* UIApp_Create(const char* title, int width, int height) {
     app->taaBlend = 0.5f;
     app->onResize = NULL;                      // User callback; opt-in via UIApp_SetResizeCallback.
     app->onResizeUserdata = NULL;
+    app->orientations = UI_ORIENTATION_ALL;    // iOS: every orientation allowed by default.
+    app->statusBarHidden = 0;                  // iOS: status bar visible by default.
 
     // Mirror the value into the window's global state before the
     // window is created so the OpenGL MSAA hint picks up the right N.
@@ -699,6 +717,50 @@ void UIApp_OnResize(UIApp* app, UIAppResizeCallback cb, void* userdata) {
     if (!app) return;
     app->onResize = cb;
     app->onResizeUserdata = userdata;
+}
+
+// Maps a UIOrientation bitmask to SDL's space-separated
+// SDL_HINT_ORIENTATIONS string and applies it. SDL's iOS backend reads
+// this hint live (each time iOS asks the view controller for its supported
+// orientations), so it takes effect whether or not the window already
+// exists. Off-device SDL ignores the hint, so this is a no-op on desktop.
+static void UIApp_ApplyOrientationHint(unsigned orientations) {
+    char buf[96];
+    int n = 0;
+    buf[0] = '\0';
+    if (orientations & UI_ORIENTATION_PORTRAIT)
+        n += SDL_snprintf(buf + n, sizeof(buf) - n, "%sPortrait", n ? " " : "");
+    if (orientations & UI_ORIENTATION_PORTRAIT_UPSIDE_DOWN)
+        n += SDL_snprintf(buf + n, sizeof(buf) - n, "%sPortraitUpsideDown", n ? " " : "");
+    if (orientations & UI_ORIENTATION_LANDSCAPE_LEFT)
+        n += SDL_snprintf(buf + n, sizeof(buf) - n, "%sLandscapeLeft", n ? " " : "");
+    if (orientations & UI_ORIENTATION_LANDSCAPE_RIGHT)
+        n += SDL_snprintf(buf + n, sizeof(buf) - n, "%sLandscapeRight", n ? " " : "");
+    if (n > 0) SDL_SetHint(SDL_HINT_ORIENTATIONS, buf);
+}
+
+void UIApp_SetOrientation(UIApp* app, unsigned orientations) {
+    if (!app) return;
+    if (orientations == 0u) orientations = (unsigned)UI_ORIENTATION_ALL; // empty mask = unlock
+    app->orientations = orientations;
+    UIApp_ApplyOrientationHint(orientations);
+}
+
+unsigned UIApp_GetOrientation(UIApp* app) {
+    return app ? app->orientations : (unsigned)UI_ORIENTATION_ALL;
+}
+
+void UIApp_SetStatusBarHidden(UIApp* app, int hidden) {
+    if (!app) return;
+    app->statusBarHidden = hidden ? 1 : 0;
+#ifdef MOCIDA_IOS
+    // SDL hides the iOS status bar when the window is fullscreen. Mocida
+    // creates the window non-fullscreen (status bar visible by default), so
+    // toggle fullscreen here to drive the status bar on demand.
+    if (app->window && app->window->sdlWindow) {
+        SDL_SetWindowFullscreen(app->window->sdlWindow, app->statusBarHidden != 0);
+    }
+#endif
 }
 
 void UIApp_SetAppId(UIApp* app, const char* aumid) {

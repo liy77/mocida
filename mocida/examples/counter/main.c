@@ -7,10 +7,6 @@
 #include <uikit/app.h>
 #include <stdio.h>
 
-#ifdef MOCIDA_IOS
-#include <SDL3/SDL_main.h>
-#endif
-
 static UIApp*    g_app   = NULL;
 static UIWidget* g_value = NULL;   // the number label
 static UIWidget* g_minus = NULL;

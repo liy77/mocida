@@ -37,9 +37,13 @@
 	     (no black letterbox) without shipping a storyboard. -->
 	<key>UILaunchScreen</key>
 	<dict/>
+	<!-- List every orientation here so the runtime is free to allow any of
+	     them; the real per-app restriction is applied at runtime via
+	     UIApp_SetOrientation (SDL_HINT_ORIENTATIONS). -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
@@ -47,8 +51,11 @@
 	<array>
 		<string>arm64</string>
 	</array>
-	<!-- Keep the system status bar (clock / battery / signal) visible; the
-	     safe-area insets push our content below it. -->
+	<!-- System status bar (clock / battery / signal) is VISIBLE by default;
+	     the safe-area insets push our content below it. No UIStatusBarHidden
+	     key here, so it stays visible unless the app calls
+	     UIApp_SetStatusBarHidden(app, 1) at runtime (SDL toggles fullscreen
+	     to hide it). -->
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
 	<!-- Launcher icon: loose PNGs (AppIcon60x60@2x/@3x, AppIcon76x76@2x …)
@@ -78,5 +85,13 @@
 			<string>AppIcon</string>
 		</dict>
 	</dict>
+	<!-- iPad: allow all four orientations; runtime gate via SDL hint. -->
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
 </dict>
 </plist>

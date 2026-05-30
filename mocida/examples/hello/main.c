@@ -11,10 +11,6 @@
 #include <uikit/app.h>
 #include <stdio.h>
 
-#ifdef MOCIDA_IOS
-#include <SDL3/SDL_main.h>   // iOS: UIKit app delegate boots SDL_main
-#endif
-
 static UIApp*    g_app   = NULL;
 static UIWidget* g_label = NULL;
 static UIWidget* g_btnW  = NULL;
