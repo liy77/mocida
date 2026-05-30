@@ -31,6 +31,7 @@
 #include <uikit/debug.h>
 #include <uikit/profile.h>
 #include <uikit/screen.h>
+#include <uikit/bundle.h>
 #include <uikit/overlay.h>
 #include <uikit/crash.h>
 #include <uikit/walker.h>
@@ -130,6 +131,9 @@ typedef struct {
 
     UIAppResizeCallback onResize; /**< Fires on every window resize (incl. live-drag). */
     void*               onResizeUserdata; /**< Opaque pointer forwarded to onResize. */
+
+    int   runInBackground;     /**< 1 = keep the run loop alive when the window is hidden (e.g. minimized to tray). */
+    void* tray;                /**< SDL_Tray* for the desktop tray icon, or NULL. */
 } UIApp;
 
 /**
@@ -197,6 +201,40 @@ void UIApp_SetBackgroundColor(UIApp* app, UIColor color);
  * @return None.
  */
 void UIApp_SetWindowTitle(UIApp* app, const char* title);
+
+/**
+ * Sets the app's display name: updates the bundle name (the name shown on
+ * iOS / in the manifest, see UIApp_SetBundleName) AND the desktop window
+ * title in one call. On iOS the home-screen name itself is fixed at build
+ * time (from app.bundle); this still updates the in-app title state.
+ */
+void UIApp_SetName(UIApp* app, const char* name);
+
+/**
+ * Keep the run loop alive while the window is hidden (e.g. after minimizing
+ * to the tray) instead of exiting when it stops being visible. Events still
+ * pump (so the tray menu works); rendering is skipped while hidden. Desktop
+ * feature — iOS controls background execution itself.
+ */
+void UIApp_SetRunInBackground(UIApp* app, int enabled);
+
+/** Tray menu item click callback. */
+typedef void (*UITrayCallback)(void* userdata);
+
+/**
+ * Installs a desktop system-tray (menu-bar / notification-area) icon from
+ * an image path (a mocida:// URI works). `tooltip` may be NULL. Returns 1
+ * on success. No-op (returns 0) on iOS. Add menu items with
+ * UIApp_AddTrayMenuItem; without any items the icon is still shown.
+ */
+int UIApp_SetTrayIcon(UIApp* app, const char* iconPath, const char* tooltip);
+
+/**
+ * Appends a clickable item to the tray icon's menu. `cb(userdata)` fires
+ * when the user selects it. Requires UIApp_SetTrayIcon first. No-op on iOS.
+ */
+void UIApp_AddTrayMenuItem(UIApp* app, const char* label,
+                           UITrayCallback cb, void* userdata);
 
 /**
  * Sets the window icon from an image file (PNG, JPG, BMP, ICO - any

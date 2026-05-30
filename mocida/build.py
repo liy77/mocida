@@ -372,6 +372,19 @@ def build_ios(args):
     config = args.config
     sim = args.simulator
     sysroot = "iphonesimulator" if sim else "iphoneos"
+
+    # app.bundle manifest drives the bundle id / display name / bundled
+    # assets on iOS (mirrors what UIApp_Create reads at runtime).
+    manifest = {}
+    manifest_path = ROOT / "app.bundle"
+    if manifest_path.exists():
+        try:
+            import json as _json
+            manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            warn(f"app.bundle parse failed ({e}); ignoring it")
+    bundle_id = manifest.get("id") or args.bundle_id
+    app_name  = manifest.get("name") or ""
     sdk_suffix = "iphonesimulator" if sim else "iphoneos"
     sub = ("sim-" if sim else "") + config.lower()
     build_dir = ROOT / "build" / "ios" / sub
@@ -401,7 +414,8 @@ def build_ios(args):
             "-DMOCIDA_BUILD_DEMO=ON",
             "-DMOCIDA_BUILD_TESTS=OFF",
             "-DMOCIDA_USE_PCH=OFF",     # PCH + multi-config Xcode is fragile
-            f"-DMOCIDA_BUNDLE_ID={args.bundle_id}",
+            f"-DMOCIDA_BUNDLE_ID={bundle_id}",
+            f"-DMOCIDA_APP_NAME={app_name}",
             "-Wno-dev", "--log-level=NOTICE",
         ]
         step(f"Configuring CMake (iOS {sysroot})")
@@ -437,8 +451,24 @@ def build_ios(args):
         err(f"could not locate demo.app under {build_dir.relative_to(ROOT)}")
         return 1
 
+    # Bundle app.bundle + its assets into the .app, so the runtime finds the
+    # manifest at <bundle>/app.bundle and mocida:// assets at <bundle>/assets.
+    if manifest_path.exists():
+        shutil.copy2(manifest_path, app_dir / "app.bundle")
+        assets = manifest.get("assets", {})
+        if assets:
+            adir = app_dir / "assets"
+            adir.mkdir(exist_ok=True)
+            for key, src in assets.items():
+                sp = Path(src) if os.path.isabs(src) else (ROOT / src)
+                if sp.exists():
+                    shutil.copy2(sp, adir / key)
+                else:
+                    warn(f"app.bundle asset not found, skipped: {src}")
+            good(f"Bundled {len(assets)} asset(s) into the app.")
+
     if sim:
-        return run_ios_simulator(app_dir, args.bundle_id, build_dir)
+        return run_ios_simulator(app_dir, bundle_id, build_dir)
 
     ipa_path = build_dir / "mocida-demo.ipa"
     step("Packaging unsigned .ipa")

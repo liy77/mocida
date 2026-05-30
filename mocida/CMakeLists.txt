@@ -28,8 +28,10 @@ set(MOCIDA_IOS OFF)
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set(MOCIDA_IOS ON)
 endif()
-# App bundle identifier (override with -DMOCIDA_BUNDLE_ID=...).
+# App bundle identifier + display name (overridable; build.py --ios pulls
+# them from app.bundle's "id"/"name").
 set(MOCIDA_BUNDLE_ID "net.liy77.mocida" CACHE STRING "iOS/macOS app bundle identifier")
+set(MOCIDA_APP_NAME  ""                 CACHE STRING "iOS app display name (CFBundleDisplayName); empty = target name")
 
 # Release optimisations. We APPEND to CMake's defaults rather than
 # overwrite them — overwriting strips out the runtime-library flags
@@ -656,12 +658,16 @@ function(mocida_add_executable target_name source_file)
     # OFF so the user can re-sign the produced .ipa with their own cert /
     # provisioning profile afterwards.
     if(MOCIDA_IOS)
+        set(_mocida_disp "${target_name}")
+        if(MOCIDA_APP_NAME)
+            set(_mocida_disp "${MOCIDA_APP_NAME}")
+        endif()
         set_target_properties(${target_name} PROPERTIES
             MACOSX_BUNDLE TRUE
             MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/cmake/iOSInfo.plist.in"
             MACOSX_BUNDLE_EXECUTABLE_NAME "${target_name}"
             MACOSX_BUNDLE_GUI_IDENTIFIER "${MOCIDA_BUNDLE_ID}"
-            MACOSX_BUNDLE_BUNDLE_NAME "${target_name}"
+            MACOSX_BUNDLE_BUNDLE_NAME "${_mocida_disp}"
             MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1.0"
             MACOSX_BUNDLE_BUNDLE_VERSION "1"
             XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${MOCIDA_BUNDLE_ID}"

@@ -1,5 +1,6 @@
 #include <uikit/asset.h>
 #include <uikit/debug.h>
+#include <uikit/bundle.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -13,6 +14,10 @@ static int BuildCandidates(const char* path,
                            char buf2[ASSET_PATH_BUF],
                            char buf3[ASSET_PATH_BUF],
                            const char* out[3]) {
+    if (!path) return 0;
+    // Resolve a mocida:// virtual path to its real file first; non-virtual
+    // paths pass straight through.
+    path = UIApp_ResolveBundle(path);
     if (!path) return 0;
     int n = 0;
 

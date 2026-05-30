@@ -16,6 +16,7 @@
 #include <uikit/overlay.h>
 #include <uikit/debug.h>
 #include <uikit/perf.h>
+#include <uikit/bundle.h>
 #ifndef MOCIDA_IOS
 #include <curl/curl.h>   /* vestigial; not linked on iOS */
 #endif
@@ -236,6 +237,11 @@ UI_FORCE_INLINE void BatchRect(SDL_Renderer* renderer, const SDL_FRect* rect, SD
 #define MAX_FONT_CACHE 32
 
 static TTF_Font* GetFont(const char *path, float size) {
+    if (!path) return NULL;
+    // Resolve a mocida:// virtual font path to its real file (pass-through
+    // for ordinary paths). Cached entries below key on the resolved path.
+    path = UIApp_ResolveBundle(path);
+    if (!path) return NULL;
     // Find + move to front. If hit, we leave the entry at the front
     // (since g_fontCache is the head) so it survives eviction longer.
     FontCacheEntry *prev = NULL;

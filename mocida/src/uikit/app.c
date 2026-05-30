@@ -10,6 +10,7 @@
 #include <uikit/app.h>
 #include <uikit/color.h>
 #include <uikit/rect.h>
+#include <uikit/asset.h>
 #include <uikit/window.h>
 #include <uikit/widget.h>
 #include <uikit/button.h>
@@ -494,7 +495,14 @@ UIApp* UIApp_Create(const char* title, int width, int height) {
     UIWidget_SetSize(mainWidget, (float)width, (float)height);
     app->mainWidget = mainWidget;
 
-    app->window = UIWindow_Create(title, width, height);
+    // Auto-load an app.bundle manifest (registers mocida:// assets + sets
+    // the app name/id). Try the CWD now so a manifest "name" can become the
+    // window title; the in-bundle copy (iOS) is retried after SDL init.
+    int bundleLoaded = UIApp_LoadBundleManifest("app.bundle");
+    const char* effectiveTitle = (UIApp_GetBundleName() && *UIApp_GetBundleName())
+                                 ? UIApp_GetBundleName() : title;
+
+    app->window = UIWindow_Create(effectiveTitle, width, height);
     if (app->window == NULL) {
         UI_ERROR(UI_CAT_WINDOW, "UIWindow_Create returned NULL");
         UIWidget_Destroy(mainWidget);
@@ -503,6 +511,20 @@ UIApp* UIApp_Create(const char* title, int width, int height) {
     }
 
     UIApp_SetBackgroundColor(app, UI_COLOR_WHITE);
+
+    // iOS (and any case where app.bundle wasn't in the CWD): retry from the
+    // app bundle dir now that SDL is initialised and SDL_GetBasePath works.
+    if (!bundleLoaded) {
+        const char* base = SDL_GetBasePath();
+        if (base) {
+            char mp[1024];
+            snprintf(mp, sizeof(mp), "%sapp.bundle", base);
+            if (UIApp_LoadBundleManifest(mp) &&
+                UIApp_GetBundleName() && *UIApp_GetBundleName()) {
+                UIApp_SetWindowTitle(app, UIApp_GetBundleName());
+            }
+        }
+    }
 
     /* Register tree dumper so a crash report includes the widget tree. */
     UICrash_SetTreeDumper(mocida_crash_tree_dump, app);
@@ -547,6 +569,70 @@ void UIApp_SetBackgroundColor(UIApp* app, UIColor color) {
 void UIApp_SetWindowTitle(UIApp* app, const char* title) {
     if (!app || !app->window || !app->window->sdlWindow || !title) return;
     SDL_SetWindowTitle(app->window->sdlWindow, title);
+}
+
+void UIApp_SetName(UIApp* app, const char* name) {
+    if (!name) return;
+    UIApp_SetBundleName(name);            // app/bundle display name
+    UIApp_SetWindowTitle(app, name);      // desktop window title
+}
+
+void UIApp_SetRunInBackground(UIApp* app, int enabled) {
+    if (app) app->runInBackground = enabled ? 1 : 0;
+}
+
+// --------------------------------------------------------------------
+// Desktop system-tray icon (SDL3 SDL_Tray). No-op on iOS.
+// --------------------------------------------------------------------
+#ifndef MOCIDA_IOS
+typedef struct { UITrayCallback cb; void* ud; } MocidaTrayCb;
+static void mocida_tray_trampoline(void* userdata, SDL_TrayEntry* entry) {
+    (void)entry;
+    MocidaTrayCb* c = (MocidaTrayCb*)userdata;
+    if (c && c->cb) c->cb(c->ud);
+}
+#endif
+
+int UIApp_SetTrayIcon(UIApp* app, const char* iconPath, const char* tooltip) {
+#ifdef MOCIDA_IOS
+    (void)app; (void)iconPath; (void)tooltip;
+    return 0;   // no system tray on iOS
+#else
+    if (!app) return 0;
+    SDL_Surface* icon = iconPath ? UIAsset_LoadSurface(iconPath) : NULL;
+    SDL_Tray* tray = SDL_CreateTray(icon, tooltip);
+    if (icon) SDL_DestroySurface(icon);   // SDL_CreateTray takes its own copy
+    if (!tray) {
+        UI_WARN(UI_CAT_CORE, "SDL_CreateTray failed: %s", SDL_GetError());
+        return 0;
+    }
+    if (app->tray) SDL_DestroyTray((SDL_Tray*)app->tray);
+    app->tray = tray;
+    SDL_CreateTrayMenu(tray);             // empty menu, ready for items
+    return 1;
+#endif
+}
+
+void UIApp_AddTrayMenuItem(UIApp* app, const char* label,
+                           UITrayCallback cb, void* userdata) {
+#ifdef MOCIDA_IOS
+    (void)app; (void)label; (void)cb; (void)userdata;
+#else
+    if (!app || !app->tray || !label) return;
+    SDL_TrayMenu* menu = SDL_GetTrayMenu((SDL_Tray*)app->tray);
+    if (!menu) menu = SDL_CreateTrayMenu((SDL_Tray*)app->tray);
+    if (!menu) return;
+    SDL_TrayEntry* e = SDL_InsertTrayEntryAt(menu, -1, label, SDL_TRAYENTRY_BUTTON);
+    if (!e) return;
+    if (cb) {
+        // App-lifetime context (freed when the process exits / tray dies).
+        MocidaTrayCb* ctx = (MocidaTrayCb*)malloc(sizeof(*ctx));
+        if (ctx) {
+            ctx->cb = cb; ctx->ud = userdata;
+            SDL_SetTrayEntryCallback(e, mocida_tray_trampoline, ctx);
+        }
+    }
+#endif
 }
 
 int UIApp_SetWindowIconFromSurface(UIApp* app, SDL_Surface* surface) {
@@ -790,6 +876,13 @@ void UIApp_Destroy(UIApp* app) {
     // plus its family_name + file_path strings).
     UIFonts_Destroy();
 
+    // Tear down the desktop tray icon (if any) and the bundle registry.
+    if (app->tray) {
+        SDL_DestroyTray((SDL_Tray*)app->tray);
+        app->tray = NULL;
+    }
+    UIApp_BundleShutdown();
+
     UICursor_Shutdown();
     SDL_Quit();
     UI_TRACK_FREE(UI_CAT_CORE);
@@ -923,7 +1016,10 @@ void UIApp_Run(UIApp* app) {
 
     Uint64 lastTickPC = SDL_GetPerformanceCounter();
 
-    while (app->window->visible) {
+    // Keep looping while the window is visible OR background mode is on
+    // (e.g. minimized to the tray). In background we still pump events so
+    // the tray menu / "show window" works, but skip rendering.
+    while (app->window->visible || app->runInBackground) {
         UIProfile_FrameBegin();
 
         {
@@ -931,6 +1027,7 @@ void UIApp_Run(UIApp* app) {
             while (SDL_PollEvent(&e)) {
                 if (e.type == SDL_EVENT_QUIT) {
                     app->window->visible = 0;
+                    app->runInBackground = 0;   // QUIT overrides background
                 }
                 HandleEvent(app, &e);
             }
@@ -945,7 +1042,9 @@ void UIApp_Run(UIApp* app) {
             UIAnim_Tick(dtMs);
         }
 
-        {
+        // Render only when the window is actually visible; in background
+        // mode (hidden / minimized to tray) we skip the GPU work.
+        if (app->window->visible) {
             UI_SCOPEC("render", UI_PROF_RENDER);
             UIWindow_Render(app->window);
         }
