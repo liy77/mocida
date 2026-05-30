@@ -1,0 +1,149 @@
+name: Release (win / linux / macos)
+
+# Builds the Mocida SDK + installer for every platform on its native runner and
+# attaches all assets to ONE GitHub release (the pushed tag).
+#
+# How it works:
+#   * create-release runs first and ALONE — it creates the (draft) release for
+#     the tag. Doing this up front means the per-OS build jobs never race to
+#     `gh release create` the same tag; they all take the idempotent
+#     `gh release upload --clobber` path inside mocida/release.py.
+#   * Each build job runs mocida/release.py, which detects its OS, packages the
+#     native assets, and uploads them to the tag.
+#   * The release is created as a DRAFT — review it and publish manually once
+#     all three platforms' assets are attached.
+#
+# Triggered by pushing a tag (git push origin v0.4.0) or manually via the
+# Actions tab (workflow_dispatch with a tag input).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build & publish (e.g. v0.4.0). Created if it doesn't exist."
+        required: true
+        type: string
+
+permissions:
+  contents: write   # required for gh to create the release and upload assets
+
+concurrency:
+  # Serialize runs for the same tag; don't cancel an in-flight publish.
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Resolve the tag once and create the (draft) release shell before any build
+  # uploads. This is the ONLY job allowed to `gh release create`, which removes
+  # the race where two concurrent build jobs both try to create the same tag.
+  # ---------------------------------------------------------------------------
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Resolve tag
+        id: resolve
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create draft release if missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — build jobs will clobber assets."
+          else
+            echo "Creating draft release $TAG ..."
+            if [ -f CHANGELOG.md ]; then
+              gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+                --title "Mocida $TAG" --draft --notes-file CHANGELOG.md
+            else
+              gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+                --title "Mocida $TAG" --draft --generate-notes
+            fi
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Per-OS build matrix. Each job clones the SDL pins (setup.py), builds the
+  # release artifacts for its OS, and uploads them to the tag via release.py.
+  #   windows-latest -> mocida-{sdk,installer}-windows-x64.{zip,exe}
+  #   ubuntu-latest  -> mocida-{sdk,installer}-linux-x64.{tar.gz,}
+  #   macos-latest   -> mocida-{sdk,installer}-macos-arm64.{tar.gz,}  (Apple Silicon)
+  # ---------------------------------------------------------------------------
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+          - os: ubuntu-latest
+            name: linux-x64
+          - os: macos-latest      # Apple Silicon (arm64)
+            name: macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      # gitlinks for SDL/SDL_image/SDL_ttf are dead placeholders (no .gitmodules);
+      # setup.py clones the real trees, so do NOT init submodules here.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      # --- Linux system deps (setup.py only VERIFIES tools; it never installs
+      # the system -dev libs the C build needs). SDL3 + the WebKitGTK webview
+      # backend require GTK/WebKit/X11/Wayland/GStreamer headers. ------------
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang ninja-build cmake pkg-config \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxfixes-dev libxss-dev libwayland-dev wayland-protocols \
+            libxkbcommon-dev libdrm-dev libgbm-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libasound2-dev libpulse-dev libudev-dev \
+            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libfreetype6-dev libharfbuzz-dev
+
+      # --- macOS deps (Xcode CLT preinstalled; setup.py only verifies these) -
+      - name: Install macOS deps
+        if: runner.os == 'macOS'
+        run: |
+          brew install ninja || true
+          brew install llvm || true
+
+      # --- Windows deps (windows-latest ships MSVC Build Tools + Windows SDK +
+      # LLVM/clang; just make sure Ninja is present rather than trusting the
+      # winget path in setup.py, which is flaky/off-PATH in CI). -------------
+      - name: Install Windows deps
+        if: runner.os == 'Windows'
+        run: choco install ninja -y --no-progress
+
+      # --- Bootstrap: clone the pinned SDL/SDL_image/SDL_ttf + mimalloc and
+      # bootstrap vcpkg + libcurl. (build.py setup -> mocida/setup.py.) ------
+      - name: Bootstrap dependencies (setup.py)
+        run: python build.py setup
+
+      # --- Build + upload the native assets to the tag. release.py detects the
+      # OS, runs the two CMake passes, packages SDK + installer, and does
+      # `gh release upload --clobber` against the release create-release made. -
+      - name: Build & publish assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python mocida/release.py --upload "${{ needs.create-release.outputs.tag }}"
