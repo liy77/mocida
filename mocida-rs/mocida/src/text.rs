@@ -134,6 +134,16 @@ impl Text {
         Ok(self)
     }
 
+    /// Sets the font size in points. Invalidates the cached glyph texture
+    /// so it re-rasterizes — useful for responsive sizing against
+    /// [`crate::Screen`].
+    pub fn font_size(self, size: f32) -> Self {
+        unsafe {
+            sys::UIText_SetFontSize(self.ptr, size);
+        }
+        self
+    }
+
     /// Sets the glyph color.
     pub fn color(self, color: Color) -> Self {
         unsafe {
@@ -169,7 +179,7 @@ impl Text {
     /// Selects the wrap strategy.
     pub fn wrap_mode(self, mode: WrapMode) -> Self {
         unsafe {
-            sys::UIText_SetWrapMode(self.ptr, sys::UIWrapMode(mode as i32));
+            sys::UIText_SetWrapMode(self.ptr, sys::UIWrapMode(mode as u32));
         }
         self
     }
@@ -185,7 +195,7 @@ impl Text {
     /// Sets horizontal alignment within the widget bounds.
     pub fn h_align(self, align: TextHAlign) -> Self {
         unsafe {
-            sys::UIText_SetHAlign(self.ptr, sys::UITextHAlign(align as i32));
+            sys::UIText_SetHAlign(self.ptr, sys::UITextHAlign(align as u32));
         }
         self
     }
@@ -193,7 +203,7 @@ impl Text {
     /// Sets vertical alignment within the widget bounds.
     pub fn v_align(self, align: TextVAlign) -> Self {
         unsafe {
-            sys::UIText_SetVAlign(self.ptr, sys::UITextVAlign(align as i32));
+            sys::UIText_SetVAlign(self.ptr, sys::UITextVAlign(align as u32));
         }
         self
     }

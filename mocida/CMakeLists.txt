@@ -832,6 +832,23 @@ if(MOCIDA_BUILD_TESTS)
 endif()
 
 # ----------------------------------------------------------------------
+# Example apps: one executable per examples/*.c. Small, cross-platform
+# (desktop + iOS bundle, via mocida_add_executable) demos of the API.
+# On ON by default; -DMOCIDA_BUILD_EXAMPLES=OFF to skip.
+# ----------------------------------------------------------------------
+option(MOCIDA_BUILD_EXAMPLES "Build the examples/*.c programs" ON)
+if(MOCIDA_BUILD_EXAMPLES AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/examples)
+    file(GLOB MOCIDA_EXAMPLE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/examples/*.c")
+    foreach(ex_src ${MOCIDA_EXAMPLE_SOURCES})
+        get_filename_component(ex_name ${ex_src} NAME_WE)
+        mocida_add_executable(${ex_name} ${ex_src})
+    endforeach()
+    if(MOCIDA_EXAMPLE_SOURCES)
+        message(STATUS "Mocida: building examples (${CMAKE_CURRENT_SOURCE_DIR}/examples/*.c)")
+    endif()
+endif()
+
+# ----------------------------------------------------------------------
 # Optional GUI installer (installer/installer.c). The installer is a
 # Mocida app that downloads the SDK (mocida.dll + headers + SDL DLLs)
 # from a GitHub release at install time and publishes MOCIDA_INCLUDE_DIR

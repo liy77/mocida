@@ -31,6 +31,26 @@ UIScreenSize UIScreen_GetSize(void);
 int UIScreen_GetWidth(void);
 int UIScreen_GetHeight(void);
 
+/**
+ * Safe-area insets (in logical points) — the margins to keep clear of the
+ * notch / Dynamic Island / status bar / home indicator / rounded corners.
+ * On iOS `top` is typically the status-bar or notch height; on a desktop
+ * window everything is 0. Lay your top-level content out inside these so it
+ * isn't hidden behind device cutouts:
+ *
+ *     UIScreenInsets safe = UIScreen_GetSafeArea();
+ *     float topY = safe.top + 16.0f;   // 16pt below the notch
+ */
+typedef struct {
+    int top;     /**< Inset from the top edge (notch / status bar). */
+    int left;    /**< Inset from the left edge. */
+    int bottom;  /**< Inset from the bottom edge (home indicator). */
+    int right;   /**< Inset from the right edge. */
+} UIScreenInsets;
+
+/** Safe-area insets of the active window (all 0 on desktop / if unknown). */
+UIScreenInsets UIScreen_GetSafeArea(void);
+
 #ifdef __cplusplus
 }
 #endif

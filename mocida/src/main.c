@@ -144,10 +144,13 @@ static void OnResize(int win_w, int win_h, void* userdata) {
     // tighter padding) while keeping readable, fixed font sizes.
     const int   compact = (win_w < 700);
     const float pad     = compact ? 14.0f : 24.0f;
-    const float panelX  = pad;
-    const float panelY  = pad;
-    const float panelW  = (float)win_w - 2.0f * pad;
-    const float panelH  = (float)win_h - 2.0f * pad;
+    // Keep clear of the notch / Dynamic Island / home indicator: inset the
+    // panel by the device safe area so no content hides behind a cutout.
+    const UIScreenInsets safe = UIScreen_GetSafeArea();
+    const float panelX  = pad + (float)safe.left;
+    const float panelY  = pad + (float)safe.top;
+    const float panelW  = (float)win_w - panelX - pad - (float)safe.right;
+    const float panelH  = (float)win_h - panelY - pad - (float)safe.bottom;
     if (panelW <= 0.0f || panelH <= 0.0f) return;
 
     // Readable fixed font sizes (slightly smaller on compact, never shrunk

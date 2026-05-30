@@ -46,6 +46,7 @@ static UIWidget* g_wvW          = NULL;
 static UIWidget* g_urlW         = NULL;
 static UIWidget* g_goBtnW       = NULL;
 static UIWidget* g_loadingW     = NULL;   // progress bar widget
+static UIWidget* g_navW[3]      = { NULL, NULL, NULL }; // back / fwd / reload
 static UIWidget* g_overlayW     = NULL;  // legacy SDL overlay (not used in comp mode)
 static UIWidget* g_overlayMsgW  = NULL;
 static int       g_d2dOverlay   = -1;    // D2D overlay handle (comp mode)
@@ -171,41 +172,54 @@ static void on_resize(int w, int h, void* ud) {
     (void)ud;
     g_winW = w; g_winH = h;
 
-    const float content_w = (float)w - 2.0f * OUTER_MARGIN;
+    // Inset by the device safe area so the toolbar isn't under the notch /
+    // Dynamic Island and the webview clears the home indicator.
+    UIScreenInsets safe = UIScreen_GetSafeArea();
+    const float sl = (float)safe.left;
+    const float st = (float)safe.top;
+    const float left = OUTER_MARGIN + sl;
+    const float top  = OUTER_MARGIN + st;
+    const float content_w = (float)w - left - OUTER_MARGIN - (float)safe.right;
+
+    // Toolbar nav buttons (back/fwd/reload), shifted into the safe area.
+    for (int i = 0; i < 3; i++) {
+        if (g_navW[i]) {
+            UIWidget_SetPosition(g_navW[i],
+                left + i * (NAV_BTN_W + NAV_BTN_GAP), top - 4.0f);
+        }
+    }
 
     // URL textfield: stretches between the 3 nav buttons (left) and Go.
-    const float urlX = OUTER_MARGIN + 3.0f * NAV_BTN_W + 2.0f * NAV_BTN_GAP + 10.0f;
-    const float urlRightInset = OUTER_MARGIN + GO_BTN_W + 10.0f;
+    const float urlX = left + 3.0f * NAV_BTN_W + 2.0f * NAV_BTN_GAP + 10.0f;
+    const float urlRightInset = OUTER_MARGIN + (float)safe.right + GO_BTN_W + 10.0f;
     const float urlW = (float)w - urlX - urlRightInset;
     if (g_urlW) {
         UIWidget_SetSize(g_urlW, urlW > 60.0f ? urlW : 60.0f, 32.0f);
-        UIWidget_SetPosition(g_urlW, urlX, OUTER_MARGIN - 4.0f);
+        UIWidget_SetPosition(g_urlW, urlX, top - 4.0f);
     }
 
     // Go button (right edge).
     if (g_goBtnW) {
         UIWidget_SetPosition(g_goBtnW,
-                             (float)w - OUTER_MARGIN - GO_BTN_W,
-                             OUTER_MARGIN - 4.0f);
+                             (float)w - OUTER_MARGIN - (float)safe.right - GO_BTN_W,
+                             top - 4.0f);
     }
 
     // Loading bar: thin strip below the toolbar, full width.
     if (g_loadingW) {
         UIWidget_SetSize(g_loadingW, content_w, (float)LOADING_BAR_H);
-        UIWidget_SetPosition(g_loadingW,
-                             (float)OUTER_MARGIN,
-                             (float)(OUTER_MARGIN + TOOLBAR_H - LOADING_BAR_H));
+        UIWidget_SetPosition(g_loadingW, left,
+                             top + TOOLBAR_H - LOADING_BAR_H);
     }
 
-    // Webview fills the full area below the toolbar.
-    const float wvH = (float)h - OUTER_MARGIN - TOOLBAR_H - OUTER_MARGIN;
+    // Webview fills the full area below the toolbar (down to the bottom
+    // safe inset).
+    const float wvH = (float)h - top - TOOLBAR_H - OUTER_MARGIN - (float)safe.bottom;
     if (g_wvW) {
         UIWidget_SetSize(g_wvW,
                          content_w > 0 ? content_w : 1.0f,
                          wvH > 0 ? wvH : 1.0f);
-        UIWidget_SetPosition(g_wvW,
-                             (float)OUTER_MARGIN,
-                             (float)(OUTER_MARGIN + TOOLBAR_H));
+        UIWidget_SetPosition(g_wvW, left, top + TOOLBAR_H);
     }
 
     // D2D overlay (composition mode) reposition.
@@ -248,9 +262,9 @@ int main(int argc, char** argv) {
     UIChildren* children = UIChildren_Create(16);
 
     // ---- Toolbar nav buttons --------------------------------------
-    make_nav_btn(children, "\xE2\x86\x90", on_back,   (float)OUTER_MARGIN);
-    make_nav_btn(children, "\xE2\x86\x92", on_fwd,    (float)(OUTER_MARGIN + NAV_BTN_W + NAV_BTN_GAP));
-    make_nav_btn(children, "\xE2\x86\xBB", on_reload, (float)(OUTER_MARGIN + 2 * (NAV_BTN_W + NAV_BTN_GAP)));
+    g_navW[0] = make_nav_btn(children, "\xE2\x86\x90", on_back,   (float)OUTER_MARGIN);
+    g_navW[1] = make_nav_btn(children, "\xE2\x86\x92", on_fwd,    (float)(OUTER_MARGIN + NAV_BTN_W + NAV_BTN_GAP));
+    g_navW[2] = make_nav_btn(children, "\xE2\x86\xBB", on_reload, (float)(OUTER_MARGIN + 2 * (NAV_BTN_W + NAV_BTN_GAP)));
 
     // ---- URL textfield --------------------------------------------
     g_url = UITextField_Create("https://example.com", 14.0f);

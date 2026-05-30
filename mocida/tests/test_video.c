@@ -65,7 +65,12 @@ static void OnVideoResize(int win_w, int win_h, void* ud) {
     const int compact = (win_w < 700);     // phone-ish
     const float m   = compact ? 14.0f : 40.0f;
     const float gap = 10.0f;
-    const float W   = (float)win_w - 2.0f * m;
+    // Inset by the device safe area (notch / Dynamic Island / home indicator).
+    const UIScreenInsets safe = UIScreen_GetSafeArea();
+    const float mL  = m + (float)safe.left;
+    const float mT  = m + (float)safe.top;
+    const float mB  = m + (float)safe.bottom;
+    const float W   = (float)win_w - mL - m - (float)safe.right;
 
     // --- Controls live in a block anchored to the BOTTOM; the video fills
     //     ALL the space above it, so the whole screen is used (no big empty
@@ -80,9 +85,9 @@ static void OnVideoResize(int win_w, int win_h, void* ud) {
         { g_loopW, compact ? 104.0f : 120.0f },
     };
     float bxs[5]; int brow[5]; int nrows = 1;
-    { float bx = m; int row = 0;
+    { float bx = mL; int row = 0;
       for (int i = 0; i < 5; i++) {
-          if (bx > m && bx + btns[i].bw > m + W) { row++; bx = m; }
+          if (bx > mL && bx + btns[i].bw > mL + W) { row++; bx = mL; }
           bxs[i] = bx; brow[i] = row; bx += btns[i].bw + gap;
       }
       nrows = row + 1; }
@@ -92,17 +97,17 @@ static void OnVideoResize(int win_w, int win_h, void* ud) {
     const float controlsH = sliderH + 6.0f + lblH + gap + btnBlockH + gap
                           + volH + gap + statusH;
 
-    float vh = (float)win_h - 2.0f * m - controlsH - gap;
+    float vh = (float)win_h - mT - mB - controlsH - gap;
     if (vh < 80.0f) vh = 80.0f;
-    place(g_dropZone,    m, m, W, vh);
-    place(g_videoSlot,   m, m, W, vh);
-    place(g_placeholder, m, m, W, vh);
+    place(g_dropZone,    mL, mT, W, vh);
+    place(g_videoSlot,   mL, mT, W, vh);
+    place(g_placeholder, mL, mT, W, vh);
 
-    float y = m + vh + gap;
+    float y = mT + vh + gap;
 
     // Position slider (full width) + time label.
-    place(g_posW, m, y, W, sliderH); y += sliderH + 6.0f;
-    place(g_timeLbl, m, y, 0, 0);    y += lblH + gap;
+    place(g_posW, mL, y, W, sliderH); y += sliderH + 6.0f;
+    place(g_timeLbl, mL, y, 0, 0);    y += lblH + gap;
 
     // Transport buttons (pre-flowed above).
     for (int i = 0; i < 5; i++)
@@ -110,11 +115,11 @@ static void OnVideoResize(int win_w, int win_h, void* ud) {
     y += btnBlockH + gap;
 
     // Volume: label then a slider filling the rest of the width.
-    place(g_vLblW, m, y + 4.0f, 0, 0);
-    place(g_volW,  m + 64.0f, y, W - 64.0f, volH);
+    place(g_vLblW, mL, y + 4.0f, 0, 0);
+    place(g_volW,  mL + 64.0f, y, W - 64.0f, volH);
     y += volH + gap;
 
-    place(g_statusLbl, m, y, 0, 0);
+    place(g_statusLbl, mL, y, 0, 0);
 
     // Readable, fixed font sizes (no shrinking).
     const float lblF = 14.0f, btnF = 16.0f;

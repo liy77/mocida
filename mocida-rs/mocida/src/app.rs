@@ -82,10 +82,16 @@ pub struct App {
     /// Children handed off via [`App::set_children`]; we keep no
     /// extra Rust handle, the app owns them.
     has_children: bool,
+    /// Heap-stored tray menu-item callbacks, kept alive for the app's life.
+    tray_cbs: Vec<Box<TrayState>>,
 }
 
 struct ResizeState {
     handler: Box<dyn FnMut(i32, i32) + 'static>,
+}
+
+struct TrayState {
+    handler: Box<dyn FnMut() + 'static>,
 }
 
 struct EventState {
@@ -105,6 +111,7 @@ impl App {
             resize_cb: None,
             event_cbs: Vec::new(),
             has_children: false,
+            tray_cbs: Vec::new(),
         })
     }
 
@@ -166,7 +173,7 @@ impl App {
     /// Shortcut for `UIApp_SetMSAASamples`.
     pub fn set_render_quality(&mut self, quality: RenderQuality) -> &mut Self {
         unsafe {
-            sys::UIApp_SetRenderQuality(self.ptr, sys::UIRenderQuality(quality as i32));
+            sys::UIApp_SetRenderQuality(self.ptr, sys::UIRenderQuality(quality as u32));
         }
         self
     }
@@ -182,7 +189,7 @@ impl App {
     /// Selects the AA pipeline.
     pub fn set_aa_mode(&mut self, mode: AAMode) -> &mut Self {
         unsafe {
-            sys::UIApp_SetAAMode(self.ptr, sys::UIAAMode(mode as i32));
+            sys::UIApp_SetAAMode(self.ptr, sys::UIAAMode(mode as u32));
         }
         self
     }
@@ -213,6 +220,64 @@ impl App {
     pub fn trim_caches(&mut self) -> &mut Self {
         unsafe { sys::UIApp_TrimCaches(self.ptr) };
         self
+    }
+
+    /// Current window width in logical points (the real device screen width
+    /// on iOS, not the requested size).
+    pub fn width(&self) -> i32 {
+        unsafe { sys::UIApp_GetWidth(self.ptr) }
+    }
+
+    /// Current window height in logical points.
+    pub fn height(&self) -> i32 {
+        unsafe { sys::UIApp_GetHeight(self.ptr) }
+    }
+
+    /// Sets the app display name: updates both the bundle name (shown as the
+    /// app name / on iOS) and the desktop window title.
+    pub fn set_name(&mut self, name: &str) -> Result<&mut Self> {
+        let c = CString::new(name)?;
+        unsafe { sys::UIApp_SetName(self.ptr, c.as_ptr()) };
+        Ok(self)
+    }
+
+    /// Keeps the run loop alive while the window is hidden (e.g. minimized
+    /// to the tray) instead of exiting. Events keep pumping; rendering is
+    /// skipped while hidden. Desktop feature.
+    pub fn set_run_in_background(&mut self, enabled: bool) -> &mut Self {
+        unsafe { sys::UIApp_SetRunInBackground(self.ptr, enabled as c_int) };
+        self
+    }
+
+    /// Installs a desktop system-tray icon from an image path (a `mocida://`
+    /// URI works). Returns `true` on success; no-op (`false`) on iOS.
+    pub fn set_tray_icon(&mut self, icon_path: &str, tooltip: Option<&str>) -> Result<bool> {
+        let icon = CString::new(icon_path)?;
+        let tip = match tooltip {
+            Some(t) => Some(CString::new(t)?),
+            None => None,
+        };
+        let tip_ptr = tip.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+        let rc = unsafe { sys::UIApp_SetTrayIcon(self.ptr, icon.as_ptr(), tip_ptr) };
+        Ok(rc != 0)
+    }
+
+    /// Appends a clickable item to the tray menu; `handler` fires on click.
+    /// Requires [`App::set_tray_icon`] first. No-op on iOS.
+    pub fn add_tray_menu_item<F>(&mut self, label: &str, handler: F) -> Result<&mut Self>
+    where
+        F: FnMut() + 'static,
+    {
+        let c = CString::new(label)?;
+        let state = Box::new(TrayState {
+            handler: Box::new(handler),
+        });
+        let userdata = Box::as_ref(&state) as *const TrayState as *mut c_void;
+        unsafe {
+            sys::UIApp_AddTrayMenuItem(self.ptr, c.as_ptr(), Some(tray_trampoline), userdata);
+        }
+        self.tray_cbs.push(state);
+        Ok(self)
     }
 
     /// Declares this process's AppUserModelID (Windows taskbar / Task
@@ -328,6 +393,16 @@ impl Drop for App {
             *cell.borrow_mut() = None;
         });
     }
+}
+
+extern "C" fn tray_trampoline(userdata: *mut c_void) {
+    if userdata.is_null() {
+        return;
+    }
+    // Safety: `userdata` points at a Box<TrayState> payload kept alive on
+    // the owning App's `tray_cbs`.
+    let state = unsafe { &mut *(userdata as *mut TrayState) };
+    (state.handler)();
 }
 
 extern "C" fn resize_trampoline(width: c_int, height: c_int, userdata: *mut c_void) {

@@ -17,6 +17,7 @@
 #include <uikit/debug.h>
 #include <uikit/perf.h>
 #include <uikit/bundle.h>
+#include <uikit/screen.h>
 #ifndef MOCIDA_IOS
 #include <curl/curl.h>   /* vestigial; not linked on iOS */
 #endif
@@ -4522,6 +4523,29 @@ UIWindow* UIWindow_GetActive(void) {
 
 void UIWindow_SetActive(UIWindow* window) {
     g_activeWindow = window;
+}
+
+// Safe-area insets of the active window. Lives here (not screen.c) because
+// SDL_GetWindowSafeArea needs the SDL_Window, which only the active
+// UIWindow holds. On desktop the safe area == the whole window, so all
+// insets come out 0; on iOS the top reflects the notch / status bar.
+UIScreenInsets UIScreen_GetSafeArea(void) {
+    UIScreenInsets ins = { 0, 0, 0, 0 };
+    if (!g_activeWindow || !g_activeWindow->sdlWindow) return ins;
+    int ww = 0, wh = 0;
+    SDL_GetWindowSize(g_activeWindow->sdlWindow, &ww, &wh);
+    SDL_Rect r;
+    if (SDL_GetWindowSafeArea(g_activeWindow->sdlWindow, &r) && r.w > 0 && r.h > 0) {
+        ins.left   = r.x;
+        ins.top    = r.y;
+        ins.right  = ww - (r.x + r.w);
+        ins.bottom = wh - (r.y + r.h);
+        if (ins.left   < 0) ins.left   = 0;
+        if (ins.top    < 0) ins.top    = 0;
+        if (ins.right  < 0) ins.right  = 0;
+        if (ins.bottom < 0) ins.bottom = 0;
+    }
+    return ins;
 }
 
 UIWindow* UIWindow_Create(const char* title, int width, int height) {
