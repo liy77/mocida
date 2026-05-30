@@ -91,6 +91,14 @@ void UISearchFonts();
 char* UIGetFont(const char* family_name);
 
 /**
+ * Returns the path of the default font for widgets that don't set a family.
+ * Desktop: a fixed system path. iOS: the first font bundled in the .app
+ * (call UISearchFonts() first). May return NULL on iOS if no font shipped.
+ * The returned string is borrowed — copy if you need to keep it.
+ */
+const char* UIGetDefaultFontPath(void);
+
+/**
  * Destroys the UIFont object and frees allocated memory.
  * @param font The UIFont object to destroy.
  */

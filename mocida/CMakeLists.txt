@@ -667,6 +667,40 @@ function(mocida_add_executable target_name source_file)
             XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO"
             XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY ""
             XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2")
+
+        # Bundle fonts into <app>/fonts. iOS can't read system fonts, so
+        # the app ships its own. We collect:
+        #   1. every font the user dropped in the repo's fonts/ dir (custom)
+        #   2. a fallback system font from the build host (Arial, else
+        #      Helvetica) so text renders out-of-box even with no custom font
+        # All are discovered at launch by UISearchFonts (scans <app>/fonts).
+        set(_mocida_ios_fonts "")
+        file(GLOB _mocida_repo_fonts
+            "${CMAKE_CURRENT_SOURCE_DIR}/fonts/*.ttf"
+            "${CMAKE_CURRENT_SOURCE_DIR}/fonts/*.otf"
+            "${CMAKE_CURRENT_SOURCE_DIR}/fonts/*.ttc")
+        list(APPEND _mocida_ios_fonts ${_mocida_repo_fonts})
+
+        set(_mocida_font_fallback "")
+        if(EXISTS "/System/Library/Fonts/Supplemental/Arial.ttf")
+            set(_mocida_font_fallback "/System/Library/Fonts/Supplemental/Arial.ttf")
+            set(_mocida_font_fallback_name "Arial.ttf")
+        elseif(EXISTS "/System/Library/Fonts/Helvetica.ttc")
+            set(_mocida_font_fallback "/System/Library/Fonts/Helvetica.ttc")
+            set(_mocida_font_fallback_name "Helvetica.ttc")
+        endif()
+        if(_mocida_font_fallback)
+            set(_staged "${CMAKE_CURRENT_BINARY_DIR}/_iosfonts/${_mocida_font_fallback_name}")
+            configure_file("${_mocida_font_fallback}" "${_staged}" COPYONLY)
+            list(APPEND _mocida_ios_fonts "${_staged}")
+        endif()
+
+        if(_mocida_ios_fonts)
+            target_sources(${target_name} PRIVATE ${_mocida_ios_fonts})
+            set_source_files_properties(${_mocida_ios_fonts} PROPERTIES
+                MACOSX_PACKAGE_LOCATION "fonts"
+                HEADER_FILE_ONLY OFF)
+        endif()
         return()
     endif()
 

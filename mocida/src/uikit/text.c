@@ -23,7 +23,11 @@ UIText* UIText_Create(char* text, float fontSize) {
     }
 
     uiText->fontSize = fontSize;
-    uiText->fontFamily = _strdup(DEFAULT_FONT_PATH); // Default font family
+    // Default font: a system path on desktop, the first bundled font on iOS
+    // (UIGetDefaultFontPath handles the platform difference; may be NULL on
+    // iOS if no font was shipped / UISearchFonts hasn't run yet).
+    const char* defFont = UIGetDefaultFontPath();
+    uiText->fontFamily = defFont ? _strdup(defFont) : NULL;
     uiText->fontStyle = Normal; // Default style
     uiText->color = UI_COLOR_BLACK; // Default color (black)
     UIRectangle* UIRecN = UIRectangle_Create(); // Default rectangle
