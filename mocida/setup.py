@@ -231,7 +231,9 @@ def cmd_build(no_build):
 
 def main():
     ap = argparse.ArgumentParser(prog="setup.py", description="Mocida bootstrap.")
-    ap.add_argument("--no-build", action="store_true")
+    ap.add_argument("--no-build", "--skip-build", dest="no_build",
+                    action="store_true",
+                    help="configure deps but skip the initial build")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--skip-install", action="store_true")
     args = ap.parse_args()

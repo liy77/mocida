@@ -119,15 +119,24 @@ def configure_and_build(build_dir, extra_defs, target):
                 ("Unix Makefiles" if not _IS_WIN else "Ninja")
     toolchain = []
     compilers = []
+
+    # vcpkg toolchain (libcurl, and webview2 on Windows) — setup.py installs
+    # these into mocida/vcpkg on every OS, so the toolchain must be wired in on
+    # every OS for find_package(CURL) / find_package(unofficial-webview2) to
+    # resolve. Previously this was Windows-only, which broke the Linux/macOS
+    # configure (CURL not found).
+    vcpkg_tc = ROOT / "vcpkg" / "scripts" / "buildsystems" / "vcpkg.cmake"
+    if vcpkg_tc.exists():
+        toolchain.append(f"-DCMAKE_TOOLCHAIN_FILE={vcpkg_tc}")
+
     if _IS_WIN:
         cc = shutil.which("clang")
         cxx = shutil.which("clang++")
         if not cc:
             raise RelError("clang not found on PATH. Install LLVM or run setup.py.")
         compilers = [f"-DCMAKE_C_COMPILER={cc}", f"-DCMAKE_CXX_COMPILER={cxx}"]
-        vcpkg_tc = ROOT / "vcpkg" / "scripts" / "buildsystems" / "vcpkg.cmake"
-        if vcpkg_tc.exists():
-            toolchain.append(f"-DCMAKE_TOOLCHAIN_FILE={vcpkg_tc}")
+        # Prefer the NuGet static loader when present; otherwise CMakeLists
+        # falls back to find_package(unofficial-webview2) from vcpkg.
         wv2_static = ROOT / ".webview2" / "build" / "native" / "x64" / "WebView2LoaderStatic.lib"
         if wv2_static.exists():
             toolchain.append(f"-DMOCIDA_WEBVIEW2_NUGET_DIR={ROOT / '.webview2'}")

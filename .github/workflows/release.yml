@@ -113,6 +113,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential clang ninja-build cmake pkg-config \
+            libcurl4-openssl-dev \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
             libxfixes-dev libxss-dev libwayland-dev wayland-protocols \
             libxkbcommon-dev libdrm-dev libgbm-dev libgl1-mesa-dev libegl1-mesa-dev \
@@ -136,9 +137,19 @@ jobs:
         run: choco install ninja -y --no-progress
 
       # --- Bootstrap: clone the pinned SDL/SDL_image/SDL_ttf + mimalloc and
-      # bootstrap vcpkg + libcurl. (build.py setup -> mocida/setup.py.) ------
+      # bootstrap vcpkg + libcurl. --skip-build avoids the redundant (and on a
+      # fresh runner, fragile) Debug build that setup.py's step 5 would run;
+      # release.py does the real Release build next. ------------------------
       - name: Bootstrap dependencies (setup.py)
-        run: python build.py setup
+        run: python mocida/setup.py --skip-build
+
+      # --- Windows: the WebView2 NuGet fetch is unreliable on CI runners, so
+      # install webview2 via the vcpkg that setup.py just bootstrapped. The
+      # release.py configure wires the vcpkg toolchain on every OS, so CMake's
+      # find_package(unofficial-webview2) resolves from here. ----------------
+      - name: Install WebView2 (vcpkg, Windows)
+        if: runner.os == 'Windows'
+        run: .\mocida\vcpkg\vcpkg.exe install webview2:x64-windows
 
       # --- Build + upload the native assets to the tag. release.py detects the
       # OS, runs the two CMake passes, packages SDK + installer, and does
