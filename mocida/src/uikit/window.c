@@ -4619,10 +4619,13 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
     // Create window with simpler flags to avoid compatibility issues
     uint32_t window_flags = SDL_WINDOW_RESIZABLE;
 #if defined(MOCIDA_IOS)
-    // iOS windows are always full-screen; high-pixel-density so the logical
-    // size SDL reports matches the device's points (not the requested
-    // desktop size). The real size is read back right after creation below.
-    window_flags |= SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    // iOS windows are always full-screen. We deliberately do NOT request
+    // HIGH_PIXEL_DENSITY: with it the renderer surface becomes the device's
+    // pixel size (e.g. 1170x2532) while our layout works in points
+    // (390x844), and the 1:1 renderer would draw everything into the
+    // top-left pixel-sized corner. Without it SDL renders at point
+    // resolution and the OS upscales — layout fills the whole screen.
+    window_flags |= SDL_WINDOW_FULLSCREEN;
 #endif
 
     // Linux/WSLg hints — must be set BEFORE SDL_CreateWindow so the

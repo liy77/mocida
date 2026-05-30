@@ -49,44 +49,83 @@ static UIWidget* g_loopW = NULL;
 static UIWidget* g_vLblW = NULL;
 static UIWidget* g_volW = NULL;
 
-// Place a widget at a base (960-wide-design) position, scaled to fit the
-// current window. Mirrors the demo's responsive approach.
-static void vid_place(UIWidget* w, float S, float x, float y, float bw, float bh) {
+static void place(UIWidget* w, float x, float y, float bw, float bh) {
     if (!w) return;
-    UIWidget_SetPosition(w, x * S, y * S);
-    if (bw > 0.0f) UIWidget_SetSize(w, bw * S, bh * S);
+    UIWidget_SetPosition(w, x, y);
+    if (bw > 0.0f) UIWidget_SetSize(w, bw, bh);
 }
 
+// Proportional layout: everything is sized RELATIVE to the real window, so
+// the video fills the width and the controls sit below it at touch size —
+// not a shrunk-down desktop layout. Works on a phone and a desktop window.
 static void OnVideoResize(int win_w, int win_h, void* ud) {
-    (void)win_h; (void)ud;
-    if (win_w <= 0) return;
-    float S = (float)win_w / 960.0f;
-    if (S > 1.0f) S = 1.0f;
-    if (S < 0.34f) S = 0.34f;
-    // The video surface slot (whichever widget currently occupies it).
-    vid_place(g_dropZone,    S, 40, 30, 880, 480);
-    vid_place(g_videoSlot,   S, 40, 30, 880, 480);
-    vid_place(g_placeholder, S, 40, 30, 880, 480);
-    vid_place(g_posW,  S, 40, 530, 880, 28);
-    vid_place(g_timeLbl, S, 40, 565, 0, 0);
-    vid_place(g_openW, S, 40,  600, 130, 40);
-    vid_place(g_playW, S, 180, 600, 100, 40);
-    vid_place(g_stopW, S, 290, 600, 100, 40);
-    vid_place(g_muteW, S, 400, 600, 100, 40);
-    vid_place(g_loopW, S, 510, 600, 120, 40);
-    vid_place(g_vLblW, S, 660, 600, 0, 0);
-    vid_place(g_volW,  S, 660, 624, 220, 28);
-    vid_place(g_statusLbl, S, 40, 700, 0, 0);
-    // Scale label/button fonts (readability floor).
-    float FS = (S < 0.62f) ? 0.62f : S;
-    if (g_timeLbl && g_timeLbl->data)   UIText_SetFontSize((UIText*)g_timeLbl->data, 14.0f * FS);
-    if (g_vLblW && g_vLblW->data)       UIText_SetFontSize((UIText*)g_vLblW->data, 13.0f * FS);
-    if (g_statusLbl && g_statusLbl->data) UIText_SetFontSize((UIText*)g_statusLbl->data, 13.0f * FS);
-    if (g_openW && g_openW->data) UIButton_SetFontSize((UIButton*)g_openW->data, 16.0f * FS);
-    if (g_playBtn) UIButton_SetFontSize(g_playBtn, 16.0f * FS);
-    if (g_stopW && g_stopW->data) UIButton_SetFontSize((UIButton*)g_stopW->data, 16.0f * FS);
-    if (g_muteBtn) UIButton_SetFontSize(g_muteBtn, 16.0f * FS);
-    if (g_loopBtn) UIButton_SetFontSize(g_loopBtn, 16.0f * FS);
+    (void)ud;
+    if (win_w <= 0 || win_h <= 0) return;
+
+    const int compact = (win_w < 700);     // phone-ish
+    const float m   = compact ? 14.0f : 40.0f;
+    const float gap = 10.0f;
+    const float W   = (float)win_w - 2.0f * m;
+
+    // --- Controls live in a block anchored to the BOTTOM; the video fills
+    //     ALL the space above it, so the whole screen is used (no big empty
+    //     gap). First flow the transport buttons to learn how many rows
+    //     they need, then size the video to whatever height is left. ---
+    const float bh = compact ? 44.0f : 40.0f;
+    struct { UIWidget* w; float bw; } btns[] = {
+        { g_openW, compact ? 96.0f : 130.0f },
+        { g_playW, compact ? 80.0f : 100.0f },
+        { g_stopW, compact ? 80.0f : 100.0f },
+        { g_muteW, compact ? 80.0f : 100.0f },
+        { g_loopW, compact ? 104.0f : 120.0f },
+    };
+    float bxs[5]; int brow[5]; int nrows = 1;
+    { float bx = m; int row = 0;
+      for (int i = 0; i < 5; i++) {
+          if (bx > m && bx + btns[i].bw > m + W) { row++; bx = m; }
+          bxs[i] = bx; brow[i] = row; bx += btns[i].bw + gap;
+      }
+      nrows = row + 1; }
+
+    const float sliderH = 26.0f, lblH = 24.0f, volH = 26.0f, statusH = 20.0f;
+    const float btnBlockH = nrows * bh + (nrows - 1) * gap;
+    const float controlsH = sliderH + 6.0f + lblH + gap + btnBlockH + gap
+                          + volH + gap + statusH;
+
+    float vh = (float)win_h - 2.0f * m - controlsH - gap;
+    if (vh < 80.0f) vh = 80.0f;
+    place(g_dropZone,    m, m, W, vh);
+    place(g_videoSlot,   m, m, W, vh);
+    place(g_placeholder, m, m, W, vh);
+
+    float y = m + vh + gap;
+
+    // Position slider (full width) + time label.
+    place(g_posW, m, y, W, sliderH); y += sliderH + 6.0f;
+    place(g_timeLbl, m, y, 0, 0);    y += lblH + gap;
+
+    // Transport buttons (pre-flowed above).
+    for (int i = 0; i < 5; i++)
+        place(btns[i].w, bxs[i], y + brow[i] * (bh + gap), btns[i].bw, bh);
+    y += btnBlockH + gap;
+
+    // Volume: label then a slider filling the rest of the width.
+    place(g_vLblW, m, y + 4.0f, 0, 0);
+    place(g_volW,  m + 64.0f, y, W - 64.0f, volH);
+    y += volH + gap;
+
+    place(g_statusLbl, m, y, 0, 0);
+
+    // Readable, fixed font sizes (no shrinking).
+    const float lblF = 14.0f, btnF = 16.0f;
+    if (g_timeLbl && g_timeLbl->data)     UIText_SetFontSize((UIText*)g_timeLbl->data, lblF);
+    if (g_vLblW && g_vLblW->data)         UIText_SetFontSize((UIText*)g_vLblW->data, 13.0f);
+    if (g_statusLbl && g_statusLbl->data) UIText_SetFontSize((UIText*)g_statusLbl->data, 13.0f);
+    if (g_openW && g_openW->data) UIButton_SetFontSize((UIButton*)g_openW->data, btnF);
+    if (g_playBtn) UIButton_SetFontSize(g_playBtn, btnF);
+    if (g_stopW && g_stopW->data) UIButton_SetFontSize((UIButton*)g_stopW->data, btnF);
+    if (g_muteBtn) UIButton_SetFontSize(g_muteBtn, btnF);
+    if (g_loopBtn) UIButton_SetFontSize(g_loopBtn, btnF);
 }
 
 static int g_playing = 0;

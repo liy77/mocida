@@ -138,32 +138,28 @@ static void OnResize(int win_w, int win_h, void* userdata) {
     (void)userdata;
     if (win_w <= 0 || win_h <= 0) return;
 
-    // Responsive scale: the layout is authored for a ~1024pt-wide desktop
-    // window. On narrower screens (mobile) scale the whole layout down so
-    // it fits, with a floor so it never collapses. Fonts use a gentler
-    // floor so text stays readable on small phones.
-    const float DESIGN_W = 1024.0f;
-    float S = (float)win_w / DESIGN_W;
-    if (S > 1.0f) S = 1.0f;
-    if (S < 0.34f) S = 0.34f;
-    float FS = (S < 0.62f) ? 0.62f : S;   // font scale (readability floor)
-
-    // Apply responsive font sizes (authored sizes × FS).
-    set_label_font(g_state.titleLabel,  28.0f * FS);
-    set_label_font(g_state.fpsLabel,    18.0f * FS);
-    set_label_font(g_state.targetLabel, 18.0f * FS);
-    set_label_font(g_state.aaLabel,     18.0f * FS);
-    set_label_font(g_state.footerLabel, 14.0f * FS);
-    set_button_font(g_state.fpsBtn,  18.0f * FS);
-    set_button_font(g_state.aaBtn,   18.0f * FS);
-    set_button_font(g_state.trimBtn, 18.0f * FS);
-
-    const float pad      = 24.0f * S;
-    const float panelX   = pad;
-    const float panelY   = pad;
-    const float panelW   = (float)win_w - 2.0f * pad;
-    const float panelH   = (float)win_h - 2.0f * pad;
+    // Proportional layout: size everything RELATIVE to the real window so
+    // it fills the screen on mobile (not a shrunk-down desktop layout).
+    // `compact` switches to a phone-friendly arrangement (stacked header,
+    // tighter padding) while keeping readable, fixed font sizes.
+    const int   compact = (win_w < 700);
+    const float pad     = compact ? 14.0f : 24.0f;
+    const float panelX  = pad;
+    const float panelY  = pad;
+    const float panelW  = (float)win_w - 2.0f * pad;
+    const float panelH  = (float)win_h - 2.0f * pad;
     if (panelW <= 0.0f || panelH <= 0.0f) return;
+
+    // Readable fixed font sizes (slightly smaller on compact, never shrunk
+    // to unreadable).
+    set_label_font(g_state.titleLabel,  compact ? 22.0f : 28.0f);
+    set_label_font(g_state.fpsLabel,    compact ? 15.0f : 18.0f);
+    set_label_font(g_state.targetLabel, compact ? 15.0f : 18.0f);
+    set_label_font(g_state.aaLabel,     compact ? 15.0f : 18.0f);
+    set_label_font(g_state.footerLabel, compact ? 12.0f : 14.0f);
+    set_button_font(g_state.fpsBtn,  compact ? 15.0f : 18.0f);
+    set_button_font(g_state.aaBtn,   compact ? 15.0f : 18.0f);
+    set_button_font(g_state.trimBtn, compact ? 15.0f : 18.0f);
 
     // White background card
     if (g_state.panel) {
@@ -171,21 +167,36 @@ static void OnResize(int win_w, int win_h, void* userdata) {
         UIWidget_SetSize    (g_state.panel, panelW, panelH);
     }
 
-    // Header anchored to the top-left of the panel
-    if (g_state.titleLabel)  UIWidget_SetPosition(g_state.titleLabel,  panelX + 24.0f * S, panelY + 20.0f * S);
-    if (g_state.fpsLabel)    UIWidget_SetPosition(g_state.fpsLabel,    panelX + 24.0f * S, panelY + 66.0f * S);
-    if (g_state.targetLabel) UIWidget_SetPosition(g_state.targetLabel, panelX + 156.0f * S, panelY + 66.0f * S);
-    if (g_state.aaLabel)     UIWidget_SetPosition(g_state.aaLabel,     panelX + 336.0f * S, panelY + 66.0f * S);
+    const float inset = compact ? 14.0f : 24.0f;
+    const float hx    = panelX + inset;
 
-    // Cards: fixed authored widths, anchored to the top-left of the
-    // panel with a constant gap. Growing them with the panel ended up
-    // inconsistent (the draggable one could not match the new size
-    // without snapping the user's drag away), so they stay rigid.
-    const float cardsRowY   = panelY + 136.0f * S;
-    const float cardsRowH   = 160.0f * S;
-    const float gap         = 16.0f * S;
-    const float fixedW[4]   = { 240.0f * S, 240.0f * S, 240.0f * S, 140.0f * S };
-    float       cursorX     = panelX + 24.0f * S;
+    // Header. On compact, stack the three stat labels vertically (they
+    // don't fit side by side on a phone); on desktop keep them in a row.
+    if (g_state.titleLabel) UIWidget_SetPosition(g_state.titleLabel, hx, panelY + (compact ? 12.0f : 20.0f));
+    const float statY = panelY + (compact ? 44.0f : 66.0f);
+    float headerBottom;
+    if (compact) {
+        if (g_state.fpsLabel)    UIWidget_SetPosition(g_state.fpsLabel,    hx, statY);
+        if (g_state.targetLabel) UIWidget_SetPosition(g_state.targetLabel, hx, statY + 22.0f);
+        if (g_state.aaLabel)     UIWidget_SetPosition(g_state.aaLabel,     hx, statY + 44.0f);
+        headerBottom = statY + 66.0f;
+    } else {
+        if (g_state.fpsLabel)    UIWidget_SetPosition(g_state.fpsLabel,    hx, statY);
+        if (g_state.targetLabel) UIWidget_SetPosition(g_state.targetLabel, hx + 132.0f, statY);
+        if (g_state.aaLabel)     UIWidget_SetPosition(g_state.aaLabel,     hx + 300.0f, statY);
+        headerBottom = statY + 34.0f;
+    }
+
+    // Cards: a row that FILLS the panel width — four equal columns. Height
+    // tracks width (3:2-ish), capped so it never dominates a tall phone.
+    const float gap         = compact ? 10.0f : 16.0f;
+    const float cardsRowY   = headerBottom + (compact ? 12.0f : 24.0f);
+    float       cardW       = (panelW - 2.0f * inset - 3.0f * gap) / 4.0f;
+    if (cardW < 1.0f) cardW = 1.0f;
+    float       cardsRowH   = cardW * 0.66f;
+    if (cardsRowH > 180.0f) cardsRowH = 180.0f;
+    const float fixedW[4]   = { cardW, cardW, cardW, cardW };
+    float       cursorX     = hx;
     for (int i = 0; i < 4; i++) {
         const int isOrange = (i == 3);
 
@@ -225,25 +236,26 @@ static void OnResize(int win_w, int win_h, void* userdata) {
         cursorX += fixedW[i] + gap;
     }
 
-    // Button row below the cards
-    const float btnRowY = cardsRowY + cardsRowH + 50.0f * S;
-    const float btnH    = 52.0f * S;
+    // Button row below the cards: three equal columns filling the width.
+    const float btnRowY = cardsRowY + cardsRowH + (compact ? 18.0f : 50.0f);
+    const float btnH    = compact ? 46.0f : 52.0f;
+    const float btnW    = (panelW - 2.0f * inset - 2.0f * gap) / 3.0f;
     if (g_state.fpsBtn) {
-        UIWidget_SetPosition(g_state.fpsBtn, panelX + 24.0f * S, btnRowY);
-        UIWidget_SetSize    (g_state.fpsBtn, 220.0f * S, btnH);
+        UIWidget_SetPosition(g_state.fpsBtn, hx, btnRowY);
+        UIWidget_SetSize    (g_state.fpsBtn, btnW, btnH);
     }
     if (g_state.aaBtn) {
-        UIWidget_SetPosition(g_state.aaBtn, panelX + 264.0f * S, btnRowY);
-        UIWidget_SetSize    (g_state.aaBtn, 240.0f * S, btnH);
+        UIWidget_SetPosition(g_state.aaBtn, hx + btnW + gap, btnRowY);
+        UIWidget_SetSize    (g_state.aaBtn, btnW, btnH);
     }
     if (g_state.trimBtn) {
-        UIWidget_SetPosition(g_state.trimBtn, panelX + 524.0f * S, btnRowY);
-        UIWidget_SetSize    (g_state.trimBtn, 180.0f * S, btnH);
+        UIWidget_SetPosition(g_state.trimBtn, hx + 2.0f * (btnW + gap), btnRowY);
+        UIWidget_SetSize    (g_state.trimBtn, btnW, btnH);
     }
 
     // Footer anchored to the bottom-left of the panel
     if (g_state.footerLabel) {
-        UIWidget_SetPosition(g_state.footerLabel, panelX + 24.0f * S, panelY + panelH - 36.0f * S);
+        UIWidget_SetPosition(g_state.footerLabel, hx, panelY + panelH - (compact ? 26.0f : 36.0f));
     }
 }
 
