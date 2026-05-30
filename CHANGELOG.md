@@ -2,7 +2,7 @@
 
 All notable changes to this monorepo.
 
-## [v0.4.0] - 2026-05-30
+## [v0.4.1] - 2026-05-30
 
 Mocida agora é verdadeiramente multiplataforma: além do Windows, esta release
 traz backends nativos completos para macOS, Linux e iOS, um instalador e um
