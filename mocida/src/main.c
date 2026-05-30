@@ -151,6 +151,13 @@ static void OnResize(int win_w, int win_h, void* userdata) {
     const float panelH  = (float)win_h - panelY - pad - (float)safe.bottom;
     if (panelW <= 0.0f || panelH <= 0.0f) return;
 
+    // `narrow` drives the LAYOUT arrangement (stack vs. row) and is purely
+    // width-based — independent of `compact` (which only shrinks fonts /
+    // padding on small screens). A landscape phone is `compact` (short
+    // height) yet WIDE, so it must lay the header + buttons out in rows, not
+    // stacked, or the stacked buttons run off the bottom of the screen.
+    const int narrow = (panelW < 520.0f);
+
     // Readable fixed font sizes (slightly smaller on compact, never shrunk
     // to unreadable).
     set_label_font(g_state.titleLabel,  compact ? 22.0f : 28.0f);
@@ -176,7 +183,7 @@ static void OnResize(int win_w, int win_h, void* userdata) {
     if (g_state.titleLabel) UIWidget_SetPosition(g_state.titleLabel, hx, panelY + (compact ? 12.0f : 20.0f));
     const float statY = panelY + (compact ? 44.0f : 66.0f);
     float headerBottom;
-    if (compact) {
+    if (narrow) {
         if (g_state.fpsLabel)    UIWidget_SetPosition(g_state.fpsLabel,    hx, statY);
         if (g_state.targetLabel) UIWidget_SetPosition(g_state.targetLabel, hx, statY + 22.0f);
         if (g_state.aaLabel)     UIWidget_SetPosition(g_state.aaLabel,     hx, statY + 44.0f);
@@ -237,13 +244,14 @@ static void OnResize(int win_w, int win_h, void* userdata) {
         cursorX += fixedW[i] + gap;
     }
 
-    // Buttons. On compact (phone) the labels ("AA Mode: COVERAGE", …) don't
+    // Buttons. On a NARROW panel the labels ("AA Mode: COVERAGE", …) don't
     // fit three-across, and buttons can't wrap text — so STACK them
-    // full-width, one per row. On desktop keep the three-column row.
+    // full-width, one per row. On a wide panel (desktop OR landscape phone)
+    // keep the three-column row so they don't run off the bottom.
     const float btnRowY = cardsRowY + cardsRowH + (compact ? 18.0f : 50.0f);
     const float btnH    = compact ? 46.0f : 52.0f;
     const float fullW   = panelW - 2.0f * inset;
-    if (compact) {
+    if (narrow) {
         if (g_state.fpsBtn) {
             UIWidget_SetPosition(g_state.fpsBtn, hx, btnRowY);
             UIWidget_SetSize    (g_state.fpsBtn, fullW, btnH);
