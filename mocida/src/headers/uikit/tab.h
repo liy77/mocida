@@ -1,6 +1,7 @@
 #ifndef UIKIT_TAB_H
 #define UIKIT_TAB_H
 
+#include <SDL3/SDL.h>   /* SDL_Texture (cached tab-label textures) */
 #include <uikit/widget.h>
 #include <uikit/children.h>
 #include <uikit/color.h>

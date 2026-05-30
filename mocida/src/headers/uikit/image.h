@@ -34,6 +34,14 @@ typedef enum {
     IMAGE_LOAD_IN_PROGRESS
 } UIImageLoadState;
 
+// UIKit defines an Objective-C class `UIImage`, which collides with our C
+// struct of the same name. The clash only matters in Objective-C(++) TUs
+// on iOS (e.g. video_avf.mm, where AVFoundation drags in UIKit) — and those
+// TUs don't use our UIImage struct, only UIFillMode above. So hide the
+// struct + its prototypes from that exact case. Plain C TUs (image.c,
+// window.c, the demo) still get the full definition.
+#if !(defined(MOCIDA_IOS) && defined(__OBJC__))
+
 /**
  * UIImage structure representing an image widget.
  * It contains properties for margins, radius, border width,
@@ -137,5 +145,7 @@ UIImage* UIImage_FromMemory(SDL_Renderer* renderer,
  * @param image Pointer to the UIImage. NULL is safe.
  */
 void UIImage_Destroy(UIImage* image);
+
+#endif // !(MOCIDA_IOS && __OBJC__)
 
 #endif

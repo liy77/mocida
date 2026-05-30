@@ -16,7 +16,9 @@
 #include <uikit/overlay.h>
 #include <uikit/debug.h>
 #include <uikit/perf.h>
-#include <curl/curl.h>
+#ifndef MOCIDA_IOS
+#include <curl/curl.h>   /* vestigial; not linked on iOS */
+#endif
 
 /**
  * FontCacheEntry structure representing a cached font.

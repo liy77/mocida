@@ -17,6 +17,20 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# ----------------------------------------------------------------------
+# iOS target detection. Driven by `-DCMAKE_SYSTEM_NAME=iOS` (build.py
+# --ios). On iOS we build the demo as an app bundle, skip desktop-only
+# deps (curl is unused; WebView2 is Windows), use UIKit instead of
+# AppKit, and produce an UNSIGNED bundle — the user re-signs the .ipa
+# separately. MOCIDA_IOS is propagated to the C sources for #ifdef guards.
+# ----------------------------------------------------------------------
+set(MOCIDA_IOS OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(MOCIDA_IOS ON)
+endif()
+# App bundle identifier (override with -DMOCIDA_BUNDLE_ID=...).
+set(MOCIDA_BUNDLE_ID "net.liy77.mocida" CACHE STRING "iOS/macOS app bundle identifier")
+
 # Release optimisations. We APPEND to CMake's defaults rather than
 # overwrite them — overwriting strips out the runtime-library flags
 # (/MD, --dependent-lib=msvcrt, etc.) that CMake injects per
@@ -121,6 +135,23 @@ set(SDLIMAGE_VENDORED ON CACHE BOOL "" FORCE)
 set(SDLIMAGE_AVIF OFF CACHE BOOL "" FORCE)
 set(SDLIMAGE_SAMPLES OFF CACHE BOOL "" FORCE)
 
+# The vendored libwebp builds CLI tools (cwebp/dwebp/img2webp/...) as
+# executables. On iOS CMake treats every executable as a MACOSX_BUNDLE,
+# and libwebp's install(TARGETS) for those tools has no BUNDLE DESTINATION,
+# so configure fails. We never use the tools (only the decode library SDL_image
+# links), so disable them. Also disable the vendored dep install() rules on
+# iOS — nothing in an app bundle gets `make install`ed. Gated to iOS to leave
+# the desktop builds byte-for-byte unchanged.
+if(MOCIDA_IOS)
+    foreach(_webp_tool CWEBP DWEBP GIF2WEBP IMG2WEBP WEBPINFO WEBPMUX
+                       ANIM_UTILS EXTRAS)
+        set(WEBP_BUILD_${_webp_tool} OFF CACHE BOOL "" FORCE)
+    endforeach()
+    set(SDL_INSTALL      OFF CACHE BOOL "" FORCE)
+    set(SDL3IMAGE_INSTALL OFF CACHE BOOL "" FORCE)
+    set(SDL3TTF_INSTALL  OFF CACHE BOOL "" FORCE)
+endif()
+
 # ----------------------------------------------------------------------
 # Local SDL3 patch: SDL_tray.c global-symbol fix.
 #
@@ -180,7 +211,11 @@ endif()
 add_subdirectory(SDL_image)
 add_subdirectory(SDL_ttf)
 
-find_package(CURL REQUIRED)
+# curl is currently only a vestigial include in window.c (no symbols used)
+# and there is no vcpkg arm64-ios curl in this setup, so skip it on iOS.
+if(NOT MOCIDA_IOS)
+    find_package(CURL REQUIRED)
+endif()
 
 # WebView2 (Microsoft Edge Chromium) - only on Windows. Provides the
 # native browser surface used by UIWebView. The runtime DLL ships next
@@ -202,7 +237,7 @@ endif()
 option(MOCIDA_USE_MIMALLOC "Use Microsoft mimalloc for malloc/free" ON)
 set(MOCIDA_MIMALLOC_AVAILABLE OFF)
 
-if(MOCIDA_USE_MIMALLOC AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/mimalloc/CMakeLists.txt)
+if(MOCIDA_USE_MIMALLOC AND NOT MOCIDA_IOS AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/mimalloc/CMakeLists.txt)
     set(MI_OVERRIDE     ON  CACHE BOOL "" FORCE)
     set(MI_BUILD_SHARED OFF CACHE BOOL "" FORCE)
     set(MI_BUILD_OBJECT OFF CACHE BOOL "" FORCE)
@@ -245,9 +280,16 @@ file(GLOB_RECURSE MOCIDA_SOURCES_CXX "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/*.cp
 set(MOCIDA_SOURCES_OBJCXX "")
 if(APPLE)
     set(CMAKE_OBJCXX_STANDARD 17)
-    set(MOCIDA_SOURCES_OBJCXX
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/webview_cocoa.mm"
+    # video_avf.mm (AVFoundation) is cross-Apple — macOS + iOS.
+    list(APPEND MOCIDA_SOURCES_OBJCXX
         "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/video_avf.mm")
+    # webview_cocoa.mm is AppKit/NSView — macOS only. iOS would need a
+    # UIKit WKWebView backend (not yet written), so UIWebView falls back
+    # to the no-backend stub on iOS for now.
+    if(NOT MOCIDA_IOS)
+        list(APPEND MOCIDA_SOURCES_OBJCXX
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/webview_cocoa.mm")
+    endif()
 endif()
 
 # winmain.c is the executable-side entry-point shim that delegates
@@ -284,16 +326,30 @@ target_include_directories(mocida PUBLIC
 # The .mm opts out of the C precompiled header below (PCH is per-language;
 # the C stdlib PCH is not valid for an Objective-C++ translation unit).
 if(APPLE)
-    target_compile_definitions(mocida PRIVATE
-        MOCIDA_HAS_WKWEBVIEW=1
-        MOCIDA_HAS_AVFOUNDATION=1)
+    # AVFoundation video backend: both macOS and iOS.
+    target_compile_definitions(mocida PRIVATE MOCIDA_HAS_AVFOUNDATION=1)
     target_link_libraries(mocida PUBLIC
-        "-framework WebKit" "-framework Cocoa"
         "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo")
     set_source_files_properties(${MOCIDA_SOURCES_OBJCXX} PROPERTIES
         SKIP_PRECOMPILE_HEADERS ON)
-    message(STATUS "Mocida: macOS UIWebView backend = WKWebView (webview_cocoa.mm)")
-    message(STATUS "Mocida: macOS UIVideo  backend = AVFoundation (video_avf.mm)")
+    message(STATUS "Mocida: UIVideo backend = AVFoundation (video_avf.mm)")
+
+    if(MOCIDA_IOS)
+        # iOS uses UIKit; no WebKit/Cocoa WKWebView backend yet.
+        # ImageIO/CoreServices/CoreGraphics back SDL3_image's IMG_ImageIO
+        # decoder (CGImageSource*, UTTypeConformsTo) on iOS.
+        target_link_libraries(mocida PUBLIC
+            "-framework UIKit" "-framework Foundation"
+            "-framework ImageIO" "-framework MobileCoreServices"
+            "-framework CoreServices" "-framework CoreGraphics"
+            "-framework CoreFoundation")
+        message(STATUS "Mocida: iOS build — UIWebView falls back to stub (no UIKit backend yet)")
+    else()
+        # macOS: AppKit WKWebView backend.
+        target_compile_definitions(mocida PRIVATE MOCIDA_HAS_WKWEBVIEW=1)
+        target_link_libraries(mocida PUBLIC "-framework WebKit" "-framework Cocoa")
+        message(STATUS "Mocida: macOS UIWebView backend = WKWebView (webview_cocoa.mm)")
+    endif()
 endif()
 
 # ----------------------------------------------------------------------
@@ -355,8 +411,13 @@ target_link_libraries(mocida PUBLIC
     ${_M_SDL3}
     ${_M_SDL3_IMG}
     ${_M_SDL3_TTF}
-    CURL::libcurl
 )
+if(NOT MOCIDA_IOS)
+    target_link_libraries(mocida PUBLIC CURL::libcurl)
+endif()
+if(MOCIDA_IOS)
+    target_compile_definitions(mocida PUBLIC MOCIDA_IOS=1)
+endif()
 
 # Windows Media Foundation (UIVideo backend) + WebView2 (UIWebView).
 # All MF libs ship with the Windows SDK. WebView2 has two delivery
@@ -587,6 +648,27 @@ function(mocida_add_executable target_name source_file)
     # subsystem (WIN32_EXECUTABLE TRUE) routes WinMain → user `main`.
     add_executable(${target_name} ${source_file} ${MOCIDA_WINMAIN_SRC})
     target_link_libraries(${target_name} PRIVATE mocida)
+
+    # iOS: build as an (unsigned) .app bundle. SDL's UIKit app delegate
+    # provides UIApplicationMain and calls our SDL_main. Signing is left
+    # OFF so the user can re-sign the produced .ipa with their own cert /
+    # provisioning profile afterwards.
+    if(MOCIDA_IOS)
+        set_target_properties(${target_name} PROPERTIES
+            MACOSX_BUNDLE TRUE
+            MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/cmake/iOSInfo.plist.in"
+            MACOSX_BUNDLE_EXECUTABLE_NAME "${target_name}"
+            MACOSX_BUNDLE_GUI_IDENTIFIER "${MOCIDA_BUNDLE_ID}"
+            MACOSX_BUNDLE_BUNDLE_NAME "${target_name}"
+            MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1.0"
+            MACOSX_BUNDLE_BUNDLE_VERSION "1"
+            XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${MOCIDA_BUNDLE_ID}"
+            XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
+            XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO"
+            XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY ""
+            XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2")
+        return()
+    endif()
 
     # Linux: hide symbols of every static archive we link in (SDL3,
     # SDL3_image, SDL3_ttf, bundled harfbuzz / freetype / etc., mimalloc)

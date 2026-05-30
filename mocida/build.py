@@ -329,7 +329,119 @@ def parse_args(argv):
     p.add_argument("--force", "--clean", dest="force", action="store_true")
     p.add_argument("--reconfigure", action="store_true")
     p.add_argument("--verbose", action="store_true")
+    p.add_argument("--ios", action="store_true",
+                   help="cross-build an UNSIGNED iOS .app + .ipa (device arm64) "
+                        "via the Xcode generator; re-sign it yourself afterwards")
+    p.add_argument("--bundle-id", default="net.liy77.mocida",
+                   help="iOS bundle identifier (default net.liy77.mocida)")
     return p.parse_args(argv)
+
+
+def package_ipa(app_dir, ipa_path):
+    """Wrap a built .app into an unsigned .ipa (a zip with the app under
+    Payload/). Returns True on success."""
+    import zipfile as _zip
+    payload_root = app_dir.parent / "_ipa_payload"
+    shutil.rmtree(payload_root, ignore_errors=True)
+    (payload_root / "Payload").mkdir(parents=True)
+    shutil.copytree(app_dir, payload_root / "Payload" / app_dir.name, symlinks=True)
+    if ipa_path.exists():
+        ipa_path.unlink()
+    with _zip.ZipFile(ipa_path, "w", _zip.ZIP_DEFLATED) as zf:
+        for path in sorted((payload_root).rglob("*")):
+            zf.write(path, path.relative_to(payload_root))
+    shutil.rmtree(payload_root, ignore_errors=True)
+    return ipa_path.exists()
+
+
+def build_ios(args):
+    """Cross-build an UNSIGNED iOS app bundle + .ipa for a physical device
+    (arm64) using the Xcode generator. Signing is disabled — the produced
+    .ipa must be re-signed with your own certificate / provisioning profile
+    before it will install on a device."""
+    if _SYS != "Darwin":
+        err("--ios requires macOS (Xcode toolchain).")
+        return 1
+    if not shutil.which("xcodebuild"):
+        err("xcodebuild not found. Install Xcode + command-line tools.")
+        return 1
+
+    config = args.config
+    build_dir = ROOT / "build" / "ios" / config.lower()
+
+    print(_c("Mocida Build (iOS, unsigned)", "35;1"))
+    print(_c(f"  ios/{config.lower()}  (Xcode, arm64 device)  bundle={args.bundle_id}", "90"))
+
+    if not check_dependencies():
+        return 1
+
+    if args.force and build_dir.exists():
+        warn(f"Force-rebuild: wiping {build_dir.relative_to(ROOT)} ...")
+        shutil.rmtree(build_dir, ignore_errors=True)
+    build_dir.mkdir(parents=True, exist_ok=True)
+
+    needs_configure = not (build_dir / "CMakeCache.txt").exists()
+    if needs_configure:
+        cfg = [
+            "cmake", "-G", "Xcode", "-S", str(ROOT), "-B", str(build_dir),
+            "-DCMAKE_SYSTEM_NAME=iOS",
+            "-DCMAKE_OSX_ARCHITECTURES=arm64",
+            "-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0",
+            "-DCMAKE_OSX_SYSROOT=iphoneos",
+            f"-DCMAKE_BUILD_TYPE={config}",
+            "-DMOCIDA_BUILD_SHARED=OFF",
+            "-DMOCIDA_BUILD_DEMO=ON",
+            "-DMOCIDA_BUILD_TESTS=OFF",
+            "-DMOCIDA_USE_PCH=OFF",     # PCH + multi-config Xcode is fragile
+            f"-DMOCIDA_BUNDLE_ID={args.bundle_id}",
+            "-Wno-dev", "--log-level=NOTICE",
+        ]
+        step("Configuring CMake (iOS)")
+        with Spinner("running CMake configure"):
+            r = subprocess.run(cfg, cwd=str(ROOT),
+                               capture_output=not args.verbose, text=True)
+        if r.returncode != 0:
+            if not args.verbose and r.stdout: print(r.stdout)
+            if not args.verbose and r.stderr: print(r.stderr)
+            err("CMake configuration failed!")
+            return r.returncode
+        good("Configured.")
+
+    step("Building: demo.app  (xcodebuild, code signing OFF)")
+    build_cmd = [
+        "cmake", "--build", str(build_dir), "--config", config,
+        "--target", "demo", "--",
+        "-sdk", "iphoneos",
+        "CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_REQUIRED=NO",
+    ]
+    t0 = time.perf_counter()
+    code = run_build_with_progress(build_cmd, ROOT, verbose=args.verbose)
+    if code != 0:
+        err("iOS build failed!")
+        return code
+    good(f"Built in {time.perf_counter() - t0:.1f}s.")
+
+    # Xcode lays the bundle down under <config>-iphoneos/demo.app.
+    app_dir = build_dir / f"{config}-iphoneos" / "demo.app"
+    if not app_dir.exists():
+        # Fallback: search for it.
+        found = list(build_dir.rglob("demo.app"))
+        app_dir = found[0] if found else app_dir
+    if not app_dir.exists():
+        err(f"could not locate demo.app under {build_dir.relative_to(ROOT)}")
+        return 1
+
+    ipa_path = build_dir / "mocida-demo.ipa"
+    step("Packaging unsigned .ipa")
+    if not package_ipa(app_dir, ipa_path):
+        err("failed to package .ipa")
+        return 1
+    good(f"Unsigned IPA: {ipa_path.relative_to(ROOT)}")
+    print("  This .ipa is UNSIGNED — re-sign before installing, e.g.:")
+    print("    codesign -f -s \"Apple Development: you\" --entitlements ent.plist \\")
+    print(f"      {app_dir.relative_to(ROOT)}   # then re-zip Payload/ into an .ipa")
+    print("  or drag the .app into Xcode's Devices window / use an IPA re-sign tool.")
+    return 0
 
 
 def main(argv=None):
@@ -337,6 +449,9 @@ def main(argv=None):
     global _VERBOSE
     _VERBOSE = args.verbose
     os.chdir(ROOT)
+
+    if args.ios:
+        return build_ios(args)
 
     if _SYS == "Windows":
         augment_path_windows()

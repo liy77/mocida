@@ -17,6 +17,13 @@
 #include <uikit/app.h>
 #include <stdio.h>
 
+#ifdef MOCIDA_IOS
+// On iOS the app is launched by SDL's UIKit app delegate
+// (UIApplicationMain). Including SDL_main.h renames our main() to
+// SDL_main and pulls in the bootstrap the delegate calls.
+#include <SDL3/SDL_main.h>
+#endif
+
 typedef struct {
     UIWidget* fpsLabel;      // text "FPS: ..."
     UIWidget* targetLabel;   // text "Target: 60 FPS"
@@ -273,7 +280,8 @@ static UIWidget* BuildDraggable(UIChildren* children,
 // main
 // --------------------------------------------------------------------
 
-int main(void) {
+int main(int argc, char** argv) {
+    (void)argc; (void)argv;   // SDL_main signature (also matches winmain shim)
     const int WIN_W = 1024;
     const int WIN_H = 640;
 
