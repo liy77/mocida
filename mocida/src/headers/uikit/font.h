@@ -10,8 +10,31 @@
 #define DEFAULT_FONT_PATH "C:\\Windows\\Fonts\\Arial.ttf"
 
 #elif defined(__APPLE__)
-#define SYSTEM_FONTS_PATH "/Library/Fonts/"
-#define DEFAULT_FONT_PATH "/Library/Fonts/Arial.ttf"
+// Modern macOS keeps almost nothing in /Library/Fonts: system faces live
+// in /System/Library/Fonts (+ its Supplemental/ subdir, where Arial.ttf
+// actually is), and user fonts in ~/Library/Fonts. UISearchFonts walks all
+// of those; this define is just the bootstrap root for the recursive walk.
+#define SYSTEM_FONTS_PATH "/System/Library/Fonts/"
+
+static const char* find_default_macos_font() {
+    const char* candidates[] = {
+        "/System/Library/Fonts/Supplemental/Arial.ttf", // family "Arial"
+        "/Library/Fonts/Arial Unicode.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",          // always present
+        "/System/Library/Fonts/SFNS.ttf",               // San Francisco
+        NULL
+    };
+    for (int i = 0; candidates[i] != NULL; i++) {
+        FILE* f = fopen(candidates[i], "r");
+        if (f) {
+            fclose(f);
+            return candidates[i];
+        }
+    }
+    return NULL;
+}
+
+#define DEFAULT_FONT_PATH find_default_macos_font()
 
 #elif defined(__linux__)
 #define SYSTEM_FONTS_PATH "/usr/share/fonts/"

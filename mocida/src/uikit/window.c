@@ -3011,7 +3011,20 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
             // even if UISearchFonts() was never called by the host app.
             const char* fpath = NULL;
 #if defined(__APPLE__)
-            fpath = "/Library/Fonts/Arial.ttf";
+            // /Library/Fonts/Arial.ttf does not exist on modern macOS; Arial
+            // ships in /System/Library/Fonts/Supplemental, Helvetica.ttc is
+            // always present. Probe candidates so the placeholder still draws.
+            static const char* kFontCands[] = {
+                "/System/Library/Fonts/Supplemental/Arial.ttf",
+                "/Library/Fonts/Arial Unicode.ttf",
+                "/System/Library/Fonts/Helvetica.ttc",
+                "/System/Library/Fonts/SFNS.ttf",
+                NULL
+            };
+            for (int i = 0; kFontCands[i]; i++) {
+                FILE* tf = fopen(kFontCands[i], "rb");
+                if (tf) { fclose(tf); fpath = kFontCands[i]; break; }
+            }
 #else
             static const char* kFontCands[] = {
                 "/usr/share/fonts/dejavu/DejaVuSans.ttf",

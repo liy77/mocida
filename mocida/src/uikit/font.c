@@ -55,7 +55,10 @@ static void WalkFontsDir(const char* dirPath, int* count) {
 
         const char* ext = strrchr(entry->d_name, '.');
         if (!ext) continue;
-        if (strcasecmp(ext, ".ttf") != 0 && strcasecmp(ext, ".otf") != 0)
+        // .ttc (TrueType Collection) is how macOS ships most system faces
+        // (Helvetica.ttc, etc.); TTF_OpenFont opens face 0 of a collection.
+        if (strcasecmp(ext, ".ttf") != 0 && strcasecmp(ext, ".otf") != 0 &&
+            strcasecmp(ext, ".ttc") != 0)
             continue;
 
         TTF_Font* font = TTF_OpenFont(child, 12);
@@ -187,7 +190,30 @@ void UISearchFonts() {
     UIFonts = temp;
     UIFonts[fontCount] = NULL; // NULL-terminate the array
 
-#elif defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
+#elif defined(__APPLE__)
+    // macOS spreads fonts across several roots, and the family the host app
+    // asks for (e.g. "Arial") is usually NOT in /Library/Fonts — it lives in
+    // /System/Library/Fonts/Supplemental. Walk every root recursively so the
+    // family lookup in UIGetFont can actually find them. Without this, text
+    // widgets silently render nothing because their font path never resolves.
+    WalkFontsDir("/System/Library/Fonts", &fontCount);  // incl. Supplemental/
+    WalkFontsDir("/Library/Fonts", &fontCount);         // third-party / Office
+    const char* home = getenv("HOME");
+    if (home) {
+        char userFonts[1024];
+        snprintf(userFonts, sizeof(userFonts), "%s/Library/Fonts", home);
+        WalkFontsDir(userFonts, &fontCount);
+    }
+
+    FontEntry** temp = realloc(UIFonts, sizeof(FontEntry *) * (fontCount + 1));
+    if (temp == NULL) {
+        printf("Memory allocation failed for NULL termination\n");
+        TTF_Quit();
+        return;
+    }
+    UIFonts = temp;
+    UIFonts[fontCount] = NULL;
+#elif defined(__linux__) || defined(__FreeBSD__)
     // Linux distros nest fonts under category subdirs (truetype/, opentype/,
     // X11/, vendor-specific dirs, ...), so a single-level opendir of
     // /usr/share/fonts returns ZERO .ttf entries — only those subdirs.
