@@ -21,6 +21,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifdef MOCIDA_IOS
+#include <SDL3/SDL_main.h>   // iOS: UIKit app delegate boots SDL_main
+#endif
+
 // ---- Layout constants ----------------------------------------------
 #define TOOLBAR_H        48
 #define OUTER_MARGIN     20
@@ -224,7 +228,8 @@ static void on_resize(int w, int h, void* ud) {
 // main
 // --------------------------------------------------------------------
 
-int main(void) {
+int main(int argc, char** argv) {
+    (void)argc; (void)argv;
     const int INIT_W = 1024;
     const int INIT_H = 720;
 

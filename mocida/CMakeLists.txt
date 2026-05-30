@@ -283,10 +283,11 @@ if(APPLE)
     # video_avf.mm (AVFoundation) is cross-Apple — macOS + iOS.
     list(APPEND MOCIDA_SOURCES_OBJCXX
         "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/video_avf.mm")
-    # webview_cocoa.mm is AppKit/NSView — macOS only. iOS would need a
-    # UIKit WKWebView backend (not yet written), so UIWebView falls back
-    # to the no-backend stub on iOS for now.
-    if(NOT MOCIDA_IOS)
+    # WKWebView backend: AppKit (NSView) on macOS, UIKit (UIView) on iOS.
+    if(MOCIDA_IOS)
+        list(APPEND MOCIDA_SOURCES_OBJCXX
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/webview_uikit.mm")
+    else()
         list(APPEND MOCIDA_SOURCES_OBJCXX
             "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/webview_cocoa.mm")
     endif()
@@ -335,15 +336,16 @@ if(APPLE)
     message(STATUS "Mocida: UIVideo backend = AVFoundation (video_avf.mm)")
 
     if(MOCIDA_IOS)
-        # iOS uses UIKit; no WebKit/Cocoa WKWebView backend yet.
+        # iOS UIKit WKWebView backend (webview_uikit.mm).
         # ImageIO/CoreServices/CoreGraphics back SDL3_image's IMG_ImageIO
         # decoder (CGImageSource*, UTTypeConformsTo) on iOS.
+        target_compile_definitions(mocida PRIVATE MOCIDA_HAS_WKWEBVIEW=1)
         target_link_libraries(mocida PUBLIC
-            "-framework UIKit" "-framework Foundation"
+            "-framework UIKit" "-framework Foundation" "-framework WebKit"
             "-framework ImageIO" "-framework MobileCoreServices"
             "-framework CoreServices" "-framework CoreGraphics"
             "-framework CoreFoundation")
-        message(STATUS "Mocida: iOS build — UIWebView falls back to stub (no UIKit backend yet)")
+        message(STATUS "Mocida: iOS UIWebView backend = WKWebView (webview_uikit.mm)")
     else()
         # macOS: AppKit WKWebView backend.
         target_compile_definitions(mocida PRIVATE MOCIDA_HAS_WKWEBVIEW=1)

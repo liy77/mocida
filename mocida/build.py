@@ -334,6 +334,9 @@ def parse_args(argv):
                         "via the Xcode generator; re-sign it yourself afterwards")
     p.add_argument("--bundle-id", default="net.liy77.mocida",
                    help="iOS bundle identifier (default net.liy77.mocida)")
+    p.add_argument("--simulator", action="store_true",
+                   help="with --ios: build for the iOS Simulator (no signing) "
+                        "and install + launch on a booted simulator")
     return p.parse_args(argv)
 
 
@@ -367,10 +370,15 @@ def build_ios(args):
         return 1
 
     config = args.config
-    build_dir = ROOT / "build" / "ios" / config.lower()
+    sim = args.simulator
+    sysroot = "iphonesimulator" if sim else "iphoneos"
+    sdk_suffix = "iphonesimulator" if sim else "iphoneos"
+    sub = ("sim-" if sim else "") + config.lower()
+    build_dir = ROOT / "build" / "ios" / sub
 
     print(_c("Mocida Build (iOS, unsigned)", "35;1"))
-    print(_c(f"  ios/{config.lower()}  (Xcode, arm64 device)  bundle={args.bundle_id}", "90"))
+    target_desc = "arm64 simulator" if sim else "arm64 device"
+    print(_c(f"  ios/{sub}  (Xcode, {target_desc})  bundle={args.bundle_id}", "90"))
 
     if not check_dependencies():
         return 1
@@ -387,7 +395,7 @@ def build_ios(args):
             "-DCMAKE_SYSTEM_NAME=iOS",
             "-DCMAKE_OSX_ARCHITECTURES=arm64",
             "-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0",
-            "-DCMAKE_OSX_SYSROOT=iphoneos",
+            f"-DCMAKE_OSX_SYSROOT={sysroot}",
             f"-DCMAKE_BUILD_TYPE={config}",
             "-DMOCIDA_BUILD_SHARED=OFF",
             "-DMOCIDA_BUILD_DEMO=ON",
@@ -396,7 +404,7 @@ def build_ios(args):
             f"-DMOCIDA_BUNDLE_ID={args.bundle_id}",
             "-Wno-dev", "--log-level=NOTICE",
         ]
-        step("Configuring CMake (iOS)")
+        step(f"Configuring CMake (iOS {sysroot})")
         with Spinner("running CMake configure"):
             r = subprocess.run(cfg, cwd=str(ROOT),
                                capture_output=not args.verbose, text=True)
@@ -411,7 +419,7 @@ def build_ios(args):
     build_cmd = [
         "cmake", "--build", str(build_dir), "--config", config,
         "--target", "demo", "--",
-        "-sdk", "iphoneos",
+        "-sdk", sysroot,
         "CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_REQUIRED=NO",
     ]
     t0 = time.perf_counter()
@@ -421,15 +429,16 @@ def build_ios(args):
         return code
     good(f"Built in {time.perf_counter() - t0:.1f}s.")
 
-    # Xcode lays the bundle down under <config>-iphoneos/demo.app.
-    app_dir = build_dir / f"{config}-iphoneos" / "demo.app"
+    app_dir = build_dir / f"{config}-{sdk_suffix}" / "demo.app"
     if not app_dir.exists():
-        # Fallback: search for it.
         found = list(build_dir.rglob("demo.app"))
         app_dir = found[0] if found else app_dir
     if not app_dir.exists():
         err(f"could not locate demo.app under {build_dir.relative_to(ROOT)}")
         return 1
+
+    if sim:
+        return run_ios_simulator(app_dir, args.bundle_id, build_dir)
 
     ipa_path = build_dir / "mocida-demo.ipa"
     step("Packaging unsigned .ipa")
@@ -441,6 +450,53 @@ def build_ios(args):
     print("    codesign -f -s \"Apple Development: you\" --entitlements ent.plist \\")
     print(f"      {app_dir.relative_to(ROOT)}   # then re-zip Payload/ into an .ipa")
     print("  or drag the .app into Xcode's Devices window / use an IPA re-sign tool.")
+    return 0
+
+
+def run_ios_simulator(app_dir, bundle_id, build_dir):
+    """Boot a simulator (if needed), install + launch the app, screenshot."""
+    import json as _json
+    def simctl(*a, capture=True):
+        return subprocess.run(["xcrun", "simctl", *a],
+                              capture_output=capture, text=True)
+
+    # Find a booted device, else boot the first available iPhone.
+    devs = _json.loads(simctl("list", "devices", "available", "-j").stdout)
+    booted = None
+    first_iphone = None
+    for runtime, lst in devs.get("devices", {}).items():
+        for d in lst:
+            if d.get("state") == "Booted":
+                booted = d["udid"]
+            if first_iphone is None and "iPhone" in d.get("name", ""):
+                first_iphone = d["udid"]
+    udid = booted or first_iphone
+    if not udid:
+        err("no available iOS Simulator device found (open Xcode > Settings > "
+            "Platforms to install a runtime).")
+        return 1
+    if not booted:
+        step(f"Booting simulator {udid}")
+        simctl("boot", udid)
+        subprocess.run(["open", "-a", "Simulator"])
+    target = "booted" if booted else udid
+
+    step("Installing on simulator")
+    r = simctl("install", target, str(app_dir))
+    if r.returncode != 0:
+        err(f"simctl install failed: {r.stderr.strip()}")
+        return 1
+
+    step("Launching")
+    r = simctl("launch", target, bundle_id)
+    if r.returncode != 0:
+        err(f"simctl launch failed: {r.stderr.strip()}")
+        return 1
+    good(f"Launched {bundle_id} on simulator {udid}.")
+    shot = build_dir / "sim-screenshot.png"
+    subprocess.run(["xcrun", "simctl", "io", target, "screenshot", str(shot)])
+    if shot.exists():
+        print(f"  Screenshot: {shot.relative_to(ROOT)}")
     return 0
 
 

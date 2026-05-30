@@ -3047,8 +3047,14 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
         void* nsWindow = NULL;
         if (window->sdlWindow) {
             SDL_PropertiesID props = SDL_GetWindowProperties(window->sdlWindow);
+#if defined(MOCIDA_IOS)
+            // iOS: the UIKit backend wants the UIWindow.
+            nsWindow = SDL_GetPointerProperty(
+                props, SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER, NULL);
+#else
             nsWindow = SDL_GetPointerProperty(
                 props, SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, NULL);
+#endif
         }
 
         extern void UIWebView_RendererTick_Mac(UIWebView*, void*,
