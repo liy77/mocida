@@ -4618,6 +4618,12 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
 
     // Create window with simpler flags to avoid compatibility issues
     uint32_t window_flags = SDL_WINDOW_RESIZABLE;
+#if defined(MOCIDA_IOS)
+    // iOS windows are always full-screen; high-pixel-density so the logical
+    // size SDL reports matches the device's points (not the requested
+    // desktop size). The real size is read back right after creation below.
+    window_flags |= SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#endif
 
     // Linux/WSLg hints — must be set BEFORE SDL_CreateWindow so the
     // window subsystem picks them up at creation time. They are no-ops
@@ -4666,6 +4672,23 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
         free(window);
         return NULL;
     }
+
+#if defined(MOCIDA_IOS)
+    // The requested size is meaningless on iOS — the OS sized the window to
+    // the device screen. Read the real logical size back and adopt it so
+    // layout (and UIScreen) reflect the actual device, not the desktop
+    // default the app asked for.
+    {
+        int rw = 0, rh = 0;
+        SDL_GetWindowSize(sdlWindow, &rw, &rh);
+        if (rw > 0 && rh > 0) {
+            width  = rw;
+            height = rh;
+            window->width  = rw;
+            window->height = rh;
+        }
+    }
+#endif
 
     // Dump the list of renderers SDL3 knows about at runtime. A renderer
     // missing here = either disabled at compile time or its runtime

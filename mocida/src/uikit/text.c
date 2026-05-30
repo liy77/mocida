@@ -118,6 +118,16 @@ UIText* UIText_SetBackground(UIText* text, UIRectangle* backgroundRect) {
     return text;
 }
 
+UIText* UIText_SetFontSize(UIText* text, float fontSize) {
+    if (text == NULL || fontSize <= 0.0f) return text;
+    if (text->fontSize == fontSize) return text;
+    text->fontSize = fontSize;
+    // Drop the cached glyph texture so the next render rebuilds at the new
+    // size (lets layouts scale text responsively, e.g. against Screen).
+    UIText_DestroyTexture(text);
+    return text;
+}
+
 UIText* UIText_SetText(UIText* text, char* newText) {
     if (text == NULL || newText == NULL) {
         return NULL; // Invalid arguments

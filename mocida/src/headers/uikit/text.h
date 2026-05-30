@@ -211,6 +211,13 @@ UIText* UIText_SetFontFamily(UIText* text, char* fontFamily);
 UIText* UIText_SetFontStyle(UIText* text, int fontStyle);
 
 /**
+ * Sets the font size (points) and invalidates the cached glyph texture so
+ * the next render rebuilds at the new size. Enables responsive text sizing
+ * (e.g. scaling against UIScreen_GetSize()).
+ */
+UIText* UIText_SetFontSize(UIText* text, float fontSize);
+
+/**
  * Sets the color of the UIText object.
  * @param text Pointer to the UIText object.
  * @param color Color to be set.

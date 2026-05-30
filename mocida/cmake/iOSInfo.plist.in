@@ -47,6 +47,33 @@
 	<array>
 		<string>arm64</string>
 	</array>
+	<!-- Launcher icon: loose PNGs (AppIcon60x60@2x/@3x, AppIcon76x76@2x …)
+	     at the bundle root, referenced by base name. -->
+	<key>CFBundleIcons</key>
+	<dict>
+		<key>CFBundlePrimaryIcon</key>
+		<dict>
+			<key>CFBundleIconFiles</key>
+			<array>
+				<string>AppIcon60x60</string>
+			</array>
+			<key>CFBundleIconName</key>
+			<string>AppIcon</string>
+		</dict>
+	</dict>
+	<key>CFBundleIcons~ipad</key>
+	<dict>
+		<key>CFBundlePrimaryIcon</key>
+		<dict>
+			<key>CFBundleIconFiles</key>
+			<array>
+				<string>AppIcon60x60</string>
+				<string>AppIcon76x76</string>
+			</array>
+			<key>CFBundleIconName</key>
+			<string>AppIcon</string>
+		</dict>
+	</dict>
 	<!-- Metal renderer; no GLES requirement. -->
 	<key>UIStatusBarHidden</key>
 	<true/>

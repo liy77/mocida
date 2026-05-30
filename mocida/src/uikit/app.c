@@ -813,6 +813,16 @@ int UIApp_GetTargetFPS(UIApp* app) {
     return app->targetFps;
 }
 
+// Current window size in logical points. On iOS this is the real device
+// screen size adopted at creation (not the requested desktop default), so
+// it's the right value to drive responsive initial layout from.
+int UIApp_GetWidth(UIApp* app) {
+    return (app && app->window) ? app->window->width : 0;
+}
+int UIApp_GetHeight(UIApp* app) {
+    return (app && app->window) ? app->window->height : 0;
+}
+
 void UIApp_SetMSAASamples(UIApp* app, int samples) {
     if (!app) return;
     if (samples < 1)  samples = 1;

@@ -670,6 +670,20 @@ function(mocida_add_executable target_name source_file)
             XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY ""
             XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2")
 
+        # Launcher icon (the iOS equivalent of UIApp_SetWindowIcon on desktop).
+        # Loose icon PNGs at the bundle root, referenced by CFBundleIcons in
+        # the Info.plist — deterministic, no asset-catalog/actool dance.
+        file(GLOB _mocida_app_icons "${CMAKE_CURRENT_SOURCE_DIR}/cmake/AppIconFiles/*.png")
+        if(_mocida_app_icons)
+            # Copy straight into the built .app root after the link — the most
+            # reliable way to get loose icons exactly where iOS expects them,
+            # without depending on the Xcode resource-phase / actool plumbing.
+            add_custom_command(TARGET ${target_name} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy ${_mocida_app_icons}
+                        "$<TARGET_BUNDLE_DIR:${target_name}>/"
+                COMMENT "Copying app icons into the bundle")
+        endif()
+
         # Bundle fonts into <app>/fonts. iOS can't read system fonts, so
         # the app ships its own. We collect:
         #   1. every font the user dropped in the repo's fonts/ dir (custom)

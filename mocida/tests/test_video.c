@@ -16,6 +16,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifdef MOCIDA_IOS
+#include <SDL3/SDL_main.h>   // iOS: UIKit app delegate boots SDL_main
+#endif
+
 // ---- Globals -----------------------------------------------------------
 static UIApp*      g_app        = NULL;
 static UIChildren* g_children   = NULL;
@@ -34,6 +38,56 @@ static UIButton*   g_loopBtn    = NULL;
 
 static UISlider*   g_posSlider  = NULL;
 static UISlider*   g_volSlider  = NULL;
+
+// Widget wrappers kept for the responsive layout (on_resize scales these).
+static UIWidget* g_posW = NULL;
+static UIWidget* g_openW = NULL;
+static UIWidget* g_playW = NULL;
+static UIWidget* g_stopW = NULL;
+static UIWidget* g_muteW = NULL;
+static UIWidget* g_loopW = NULL;
+static UIWidget* g_vLblW = NULL;
+static UIWidget* g_volW = NULL;
+
+// Place a widget at a base (960-wide-design) position, scaled to fit the
+// current window. Mirrors the demo's responsive approach.
+static void vid_place(UIWidget* w, float S, float x, float y, float bw, float bh) {
+    if (!w) return;
+    UIWidget_SetPosition(w, x * S, y * S);
+    if (bw > 0.0f) UIWidget_SetSize(w, bw * S, bh * S);
+}
+
+static void OnVideoResize(int win_w, int win_h, void* ud) {
+    (void)win_h; (void)ud;
+    if (win_w <= 0) return;
+    float S = (float)win_w / 960.0f;
+    if (S > 1.0f) S = 1.0f;
+    if (S < 0.34f) S = 0.34f;
+    // The video surface slot (whichever widget currently occupies it).
+    vid_place(g_dropZone,    S, 40, 30, 880, 480);
+    vid_place(g_videoSlot,   S, 40, 30, 880, 480);
+    vid_place(g_placeholder, S, 40, 30, 880, 480);
+    vid_place(g_posW,  S, 40, 530, 880, 28);
+    vid_place(g_timeLbl, S, 40, 565, 0, 0);
+    vid_place(g_openW, S, 40,  600, 130, 40);
+    vid_place(g_playW, S, 180, 600, 100, 40);
+    vid_place(g_stopW, S, 290, 600, 100, 40);
+    vid_place(g_muteW, S, 400, 600, 100, 40);
+    vid_place(g_loopW, S, 510, 600, 120, 40);
+    vid_place(g_vLblW, S, 660, 600, 0, 0);
+    vid_place(g_volW,  S, 660, 624, 220, 28);
+    vid_place(g_statusLbl, S, 40, 700, 0, 0);
+    // Scale label/button fonts (readability floor).
+    float FS = (S < 0.62f) ? 0.62f : S;
+    if (g_timeLbl && g_timeLbl->data)   UIText_SetFontSize((UIText*)g_timeLbl->data, 14.0f * FS);
+    if (g_vLblW && g_vLblW->data)       UIText_SetFontSize((UIText*)g_vLblW->data, 13.0f * FS);
+    if (g_statusLbl && g_statusLbl->data) UIText_SetFontSize((UIText*)g_statusLbl->data, 13.0f * FS);
+    if (g_openW && g_openW->data) UIButton_SetFontSize((UIButton*)g_openW->data, 16.0f * FS);
+    if (g_playBtn) UIButton_SetFontSize(g_playBtn, 16.0f * FS);
+    if (g_stopW && g_stopW->data) UIButton_SetFontSize((UIButton*)g_stopW->data, 16.0f * FS);
+    if (g_muteBtn) UIButton_SetFontSize(g_muteBtn, 16.0f * FS);
+    if (g_loopBtn) UIButton_SetFontSize(g_loopBtn, 16.0f * FS);
+}
 
 static int g_playing = 0;
 static int g_muted   = 0;
@@ -115,6 +169,7 @@ static int LoadVideo(const char* path) {
         UIWidget_SetPosition(g_placeholder, 40.0f, 30.0f);
         UIWidget_SetZIndex(g_placeholder, 1);
         UIChildren_Add(g_children, g_placeholder);
+        if (g_app) OnVideoResize(UIApp_GetWidth(g_app), UIApp_GetHeight(g_app), NULL);
 
         printf("[video] failed to open '%s'\n", path);
         g_playing = 0;
@@ -128,6 +183,7 @@ static int LoadVideo(const char* path) {
     UIWidget_SetPosition(g_videoSlot, 40.0f, 30.0f);
     UIWidget_SetZIndex(g_videoSlot, 1);
     UIChildren_Add(g_children, g_videoSlot);
+    if (g_app) OnVideoResize(UIApp_GetWidth(g_app), UIApp_GetHeight(g_app), NULL);
 
     // Configure slider range from the cached duration.
     const double dur = UIVideo_GetDuration(v);
@@ -256,7 +312,8 @@ static void OnFpsTick(UIEventData data) {
 
 // ---- main -------------------------------------------------------------
 
-int main(void) {
+int main(int argc, char** argv) {
+    (void)argc; (void)argv;
     // Linux: gst_init must run before SDL_Init or it segfaults inside
     // GLib's option parser on certain WSL/Ubuntu builds. UIVideo_PreInit
     // is a no-op on Windows.
@@ -287,9 +344,9 @@ int main(void) {
     UISlider* pos = UISlider_Create(0.0f, 1.0f, 0.0f);
     UISlider_OnChange(pos, OnPosChange, NULL);
     g_posSlider = pos;
-    UIWidget* posW = widgcs(pos, 880.0f, 28.0f);
-    UIWidget_SetPosition(posW, 40.0f, 530.0f);
-    UIChildren_Add(children, posW);
+    g_posW = widgcs(pos, 880.0f, 28.0f);
+    UIWidget_SetPosition(g_posW, 40.0f, 530.0f);
+    UIChildren_Add(children, g_posW);
 
     // Time label "M:SS / M:SS"
     UIText* tlbl = UIText_Create("0:00 / 0:00", 14.0f);
@@ -305,27 +362,27 @@ int main(void) {
     UIButton_SetRadius(openBtn, 8.0f);
     UIButton_SetColors(openBtn, (UIColor){59,130,246,1.0f}, UI_COLOR_WHITE);
     UIButton_OnClick (openBtn, OnOpenClicked, NULL);
-    UIWidget* openW = widgcs(openBtn, 130.0f, 40.0f);
-    UIWidget_SetPosition(openW, 40.0f, 600.0f);
-    UIChildren_Add(children, openW);
+    g_openW = widgcs(openBtn, 130.0f, 40.0f);
+    UIWidget_SetPosition(g_openW, 40.0f, 600.0f);
+    UIChildren_Add(children, g_openW);
 
     UIButton* playBtn = UIButton_Create("Play", 16.0f);
     UIButton_SetFontFamily(playBtn, UIGetFont("Arial"));
     UIButton_SetRadius(playBtn, 8.0f);
     UIButton_OnClick(playBtn, OnPlayPause, NULL);
     g_playBtn = playBtn;
-    UIWidget* playW = widgcs(playBtn, 100.0f, 40.0f);
-    UIWidget_SetPosition(playW, 180.0f, 600.0f);
-    UIChildren_Add(children, playW);
+    g_playW = widgcs(playBtn, 100.0f, 40.0f);
+    UIWidget_SetPosition(g_playW, 180.0f, 600.0f);
+    UIChildren_Add(children, g_playW);
 
     UIButton* stopBtn = UIButton_Create("Stop", 16.0f);
     UIButton_SetFontFamily(stopBtn, UIGetFont("Arial"));
     UIButton_SetRadius(stopBtn, 8.0f);
     UIButton_SetColors(stopBtn, (UIColor){239,68,68,1.0f}, UI_COLOR_WHITE);
     UIButton_OnClick (stopBtn, OnStop, NULL);
-    UIWidget* stopW = widgcs(stopBtn, 100.0f, 40.0f);
-    UIWidget_SetPosition(stopW, 290.0f, 600.0f);
-    UIChildren_Add(children, stopW);
+    g_stopW = widgcs(stopBtn, 100.0f, 40.0f);
+    UIWidget_SetPosition(g_stopW, 290.0f, 600.0f);
+    UIChildren_Add(children, g_stopW);
 
     UIButton* muteBtn = UIButton_Create("Mute", 16.0f);
     UIButton_SetFontFamily(muteBtn, UIGetFont("Arial"));
@@ -333,9 +390,9 @@ int main(void) {
     UIButton_SetColors(muteBtn, (UIColor){100,116,139,1.0f}, UI_COLOR_WHITE);
     UIButton_OnClick (muteBtn, OnMute, NULL);
     g_muteBtn = muteBtn;
-    UIWidget* muteW = widgcs(muteBtn, 100.0f, 40.0f);
-    UIWidget_SetPosition(muteW, 400.0f, 600.0f);
-    UIChildren_Add(children, muteW);
+    g_muteW = widgcs(muteBtn, 100.0f, 40.0f);
+    UIWidget_SetPosition(g_muteW, 400.0f, 600.0f);
+    UIChildren_Add(children, g_muteW);
 
     UIButton* loopBtn = UIButton_Create("Loop: OFF", 16.0f);
     UIButton_SetFontFamily(loopBtn, UIGetFont("Arial"));
@@ -343,24 +400,24 @@ int main(void) {
     UIButton_SetColors(loopBtn, (UIColor){34,197,94,1.0f}, UI_COLOR_WHITE);
     UIButton_OnClick (loopBtn, OnLoop, NULL);
     g_loopBtn = loopBtn;
-    UIWidget* loopW = widgcs(loopBtn, 120.0f, 40.0f);
-    UIWidget_SetPosition(loopW, 510.0f, 600.0f);
-    UIChildren_Add(children, loopW);
+    g_loopW = widgcs(loopBtn, 120.0f, 40.0f);
+    UIWidget_SetPosition(g_loopW, 510.0f, 600.0f);
+    UIChildren_Add(children, g_loopW);
 
     // Volume label + slider on the right.
     UIText* vLbl = UIText_Create("Volume", 13.0f);
     UIText_SetFontFamily(vLbl, UIGetFont("Arial"));
     UIText_SetColor(vLbl, (UIColor){ 71, 85, 105, 1.0f });
-    UIWidget* vLblW = widgc(vLbl);
-    UIWidget_SetPosition(vLblW, 660.0f, 600.0f);
-    UIChildren_Add(children, vLblW);
+    g_vLblW = widgc(vLbl);
+    UIWidget_SetPosition(g_vLblW, 660.0f, 600.0f);
+    UIChildren_Add(children, g_vLblW);
 
     UISlider* vol = UISlider_Create(0.0f, 1.0f, 1.0f);
     UISlider_OnChange(vol, OnVolChange, NULL);
     g_volSlider = vol;
-    UIWidget* volW = widgcs(vol, 220.0f, 28.0f);
-    UIWidget_SetPosition(volW, 660.0f, 624.0f);
-    UIChildren_Add(children, volW);
+    g_volW = widgcs(vol, 220.0f, 28.0f);
+    UIWidget_SetPosition(g_volW, 660.0f, 624.0f);
+    UIChildren_Add(children, g_volW);
 
     // Status line at the very bottom.
     UIText* st = UIText_Create("no video loaded - drop a file or click Open", 13.0f);
@@ -372,6 +429,11 @@ int main(void) {
 
     UIApp_SetChildren(app, children);
     UIApp_SetBackgroundColor(app, (UIColor){ 226, 232, 240, 1.0f });
+
+    // Responsive layout: scale to the real window size (device screen on
+    // iOS). Runs once now and on every resize.
+    UIApp_OnResize(app, OnVideoResize, NULL);
+    OnVideoResize(UIApp_GetWidth(app), UIApp_GetHeight(app), NULL);
 
     // Try presets so you can also test without dragging.
     const char* presets[] = {

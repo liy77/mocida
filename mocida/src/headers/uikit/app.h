@@ -30,6 +30,7 @@
 #include <uikit/cursor.h>
 #include <uikit/debug.h>
 #include <uikit/profile.h>
+#include <uikit/screen.h>
 #include <uikit/overlay.h>
 #include <uikit/crash.h>
 #include <uikit/walker.h>
@@ -362,6 +363,10 @@ void UIApp_SetTargetFPS(UIApp* app, int fps);
  * @param app Pointer to the UIApp object.
  */
 int UIApp_GetTargetFPS(UIApp* app);
+
+/** Current window size in logical points (real device size on iOS). */
+int UIApp_GetWidth(UIApp* app);
+int UIApp_GetHeight(UIApp* app);
 
 /**
  * Sets the number of samples-per-side used by the analytic-coverage AA

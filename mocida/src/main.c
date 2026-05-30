@@ -126,11 +126,39 @@ static void OnOrangeDragStart(UIMouseArea* area, UIMouseEvent ev, void* ud) {
 // out the 4 cards in equal columns across the panel, line the buttons
 // up under them, and dock the title / FPS labels to the top-left and
 // the footer hint to the bottom-left. Called by UIApp_OnResize.
+// Set a label/button font size from its widget (responsive text).
+static void set_label_font(UIWidget* w, float sz) {
+    if (w && w->data) UIText_SetFontSize((UIText*)w->data, sz);
+}
+static void set_button_font(UIWidget* w, float sz) {
+    if (w && w->data) UIButton_SetFontSize((UIButton*)w->data, sz);
+}
+
 static void OnResize(int win_w, int win_h, void* userdata) {
     (void)userdata;
     if (win_w <= 0 || win_h <= 0) return;
 
-    const float pad      = 24.0f;
+    // Responsive scale: the layout is authored for a ~1024pt-wide desktop
+    // window. On narrower screens (mobile) scale the whole layout down so
+    // it fits, with a floor so it never collapses. Fonts use a gentler
+    // floor so text stays readable on small phones.
+    const float DESIGN_W = 1024.0f;
+    float S = (float)win_w / DESIGN_W;
+    if (S > 1.0f) S = 1.0f;
+    if (S < 0.34f) S = 0.34f;
+    float FS = (S < 0.62f) ? 0.62f : S;   // font scale (readability floor)
+
+    // Apply responsive font sizes (authored sizes × FS).
+    set_label_font(g_state.titleLabel,  28.0f * FS);
+    set_label_font(g_state.fpsLabel,    18.0f * FS);
+    set_label_font(g_state.targetLabel, 18.0f * FS);
+    set_label_font(g_state.aaLabel,     18.0f * FS);
+    set_label_font(g_state.footerLabel, 14.0f * FS);
+    set_button_font(g_state.fpsBtn,  18.0f * FS);
+    set_button_font(g_state.aaBtn,   18.0f * FS);
+    set_button_font(g_state.trimBtn, 18.0f * FS);
+
+    const float pad      = 24.0f * S;
     const float panelX   = pad;
     const float panelY   = pad;
     const float panelW   = (float)win_w - 2.0f * pad;
@@ -144,20 +172,20 @@ static void OnResize(int win_w, int win_h, void* userdata) {
     }
 
     // Header anchored to the top-left of the panel
-    if (g_state.titleLabel)  UIWidget_SetPosition(g_state.titleLabel,  panelX + 24.0f, panelY + 20.0f);
-    if (g_state.fpsLabel)    UIWidget_SetPosition(g_state.fpsLabel,    panelX + 24.0f, panelY + 66.0f);
-    if (g_state.targetLabel) UIWidget_SetPosition(g_state.targetLabel, panelX + 156.0f, panelY + 66.0f);
-    if (g_state.aaLabel)     UIWidget_SetPosition(g_state.aaLabel,     panelX + 336.0f, panelY + 66.0f);
+    if (g_state.titleLabel)  UIWidget_SetPosition(g_state.titleLabel,  panelX + 24.0f * S, panelY + 20.0f * S);
+    if (g_state.fpsLabel)    UIWidget_SetPosition(g_state.fpsLabel,    panelX + 24.0f * S, panelY + 66.0f * S);
+    if (g_state.targetLabel) UIWidget_SetPosition(g_state.targetLabel, panelX + 156.0f * S, panelY + 66.0f * S);
+    if (g_state.aaLabel)     UIWidget_SetPosition(g_state.aaLabel,     panelX + 336.0f * S, panelY + 66.0f * S);
 
     // Cards: fixed authored widths, anchored to the top-left of the
     // panel with a constant gap. Growing them with the panel ended up
     // inconsistent (the draggable one could not match the new size
     // without snapping the user's drag away), so they stay rigid.
-    const float cardsRowY   = panelY + 136.0f;
-    const float cardsRowH   = 160.0f;
-    const float gap         = 16.0f;
-    const float fixedW[4]   = { 240.0f, 240.0f, 240.0f, 140.0f };
-    float       cursorX     = panelX + 24.0f;
+    const float cardsRowY   = panelY + 136.0f * S;
+    const float cardsRowH   = 160.0f * S;
+    const float gap         = 16.0f * S;
+    const float fixedW[4]   = { 240.0f * S, 240.0f * S, 240.0f * S, 140.0f * S };
+    float       cursorX     = panelX + 24.0f * S;
     for (int i = 0; i < 4; i++) {
         const int isOrange = (i == 3);
 
@@ -198,24 +226,24 @@ static void OnResize(int win_w, int win_h, void* userdata) {
     }
 
     // Button row below the cards
-    const float btnRowY = cardsRowY + cardsRowH + 50.0f;
-    const float btnH    = 52.0f;
+    const float btnRowY = cardsRowY + cardsRowH + 50.0f * S;
+    const float btnH    = 52.0f * S;
     if (g_state.fpsBtn) {
-        UIWidget_SetPosition(g_state.fpsBtn, panelX + 24.0f, btnRowY);
-        UIWidget_SetSize    (g_state.fpsBtn, 220.0f, btnH);
+        UIWidget_SetPosition(g_state.fpsBtn, panelX + 24.0f * S, btnRowY);
+        UIWidget_SetSize    (g_state.fpsBtn, 220.0f * S, btnH);
     }
     if (g_state.aaBtn) {
-        UIWidget_SetPosition(g_state.aaBtn, panelX + 264.0f, btnRowY);
-        UIWidget_SetSize    (g_state.aaBtn, 240.0f, btnH);
+        UIWidget_SetPosition(g_state.aaBtn, panelX + 264.0f * S, btnRowY);
+        UIWidget_SetSize    (g_state.aaBtn, 240.0f * S, btnH);
     }
     if (g_state.trimBtn) {
-        UIWidget_SetPosition(g_state.trimBtn, panelX + 524.0f, btnRowY);
-        UIWidget_SetSize    (g_state.trimBtn, 180.0f, btnH);
+        UIWidget_SetPosition(g_state.trimBtn, panelX + 524.0f * S, btnRowY);
+        UIWidget_SetSize    (g_state.trimBtn, 180.0f * S, btnH);
     }
 
     // Footer anchored to the bottom-left of the panel
     if (g_state.footerLabel) {
-        UIWidget_SetPosition(g_state.footerLabel, panelX + 24.0f, panelY + panelH - 36.0f);
+        UIWidget_SetPosition(g_state.footerLabel, panelX + 24.0f * S, panelY + panelH - 36.0f * S);
     }
 }
 
@@ -415,7 +443,9 @@ int main(int argc, char** argv) {
     // Run the resize hook once so the initial layout uses the same
     // fluid logic as later resizes (avoids divergence between the
     // hand-coded `BuildCard` positions above and the OnResize math).
-    OnResize(WIN_W, WIN_H, NULL);
+    // Use the REAL window size (on iOS the OS sized it to the device
+    // screen, not the requested WIN_W/WIN_H desktop default).
+    OnResize(UIApp_GetWidth(app), UIApp_GetHeight(app), NULL);
 
     // The debug overlay is opt-in. Enable it here so the demo shows it
     // off; toggle live with F9 (bounds) · F10 (stats HUD) · F8 (heatmap)

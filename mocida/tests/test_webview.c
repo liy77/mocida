@@ -380,7 +380,8 @@ int main(int argc, char** argv) {
     UIApp_OnResize(g_app, on_resize, NULL);
     UIApp_SetEventCallback(g_app, UI_EVENT_FRAMERATE_CHANGED, on_fps_tick);
 
-    on_resize(INIT_W, INIT_H, NULL);
+    // Lay out against the real window size (device screen on iOS).
+    on_resize(UIApp_GetWidth(g_app), UIApp_GetHeight(g_app), NULL);
 
     UIApp_ShowWindow(g_app);
     UIApp_Run(g_app);
