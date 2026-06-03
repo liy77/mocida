@@ -131,6 +131,36 @@ the box. Details in [`mocida/README.md`](mocida/README.md#debug--profiling).
 
 ---
 
+## Roadmap / TODO
+
+Status across the monorepo. Checked = working today.
+
+**C toolkit (`mocida/`)**
+- [x] Widget model on SDL3 (stacks, text, inputs, buttons, toggles, sliders, dialogs, tabs, dropdowns, scroll/grid, image/video, WebView2)
+- [x] Analytic-coverage AA, SDF shadows, MSAA / SSAA / FXAA / TAA
+- [x] Debug stack (logger, profiler, overlay, crash handler), mimalloc
+- [x] Flexbox-ish layout: `align` (cross) + `justify` (main) + per-side padding/margins
+- [x] Keyboard dispatch (`UIWidget_OnKeyDown`), recursive mouse/text/control dispatch into containers
+- [x] `window.c` refactored into `window_draw.inc` + `window_render.inc` + per-widget `window_widgets.inc`
+- [ ] Input dispatch recursion into `Scroll` content (covers Stack/Grid today)
+- [ ] First-class Linux/macOS render parity (Windows-first today)
+
+**Rust bindings (`mocida-rs/`)**
+- [x] `mocida-sys` (bindgen FFI) + idiomatic `mocida` wrapper, ownership + callback trampolines
+- [x] Renderer / MSAA / AA / quality config, min/max window size, reactive `Window`/`Screen`
+- [ ] Wrap remaining C surface as it grows
+
+**MUI runtime + dev host (`mocida-rs/mui-runtime`, `mui-dev`)**
+- [x] Declarative `.mui`/`.crm` → live mocida window; signals, `${}` reactivity, hot-reload
+- [x] Reactive `if`/`for` (condition-tracked rebuild), string/int/bool/list signals
+- [x] `onKeyInput` interpreter (`=` reassign, `+=`/`-=`/`++`, `println!` debug)
+- [x] MouseArea, full widget styling surface, component reuse
+- [ ] Reactive **diff/reconcile** (today: full re-interpret per change → signal state resets on reload)
+- [ ] Richer handler interpreter (locals, loops, more expressions)
+- [ ] M4 Cranelift JIT for handlers/expressions (tree-walk today)
+
+---
+
 ## Formatting and pre-commit hooks
 
 Formatting is enforced on **changed/staged files only** via the
