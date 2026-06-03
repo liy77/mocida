@@ -225,7 +225,7 @@ impl App {
     /// Shortcut for `UIApp_SetMSAASamples`.
     pub fn set_render_quality(&mut self, quality: RenderQuality) -> &mut Self {
         unsafe {
-            sys::UIApp_SetRenderQuality(self.ptr, sys::UIRenderQuality(quality as i32));
+            sys::UIApp_SetRenderQuality(self.ptr, sys::UIRenderQuality(quality as _));
         }
         self
     }
@@ -241,7 +241,7 @@ impl App {
     /// Selects the AA pipeline.
     pub fn set_aa_mode(&mut self, mode: AAMode) -> &mut Self {
         unsafe {
-            sys::UIApp_SetAAMode(self.ptr, sys::UIAAMode(mode as i32));
+            sys::UIApp_SetAAMode(self.ptr, sys::UIAAMode(mode as _));
         }
         self
     }

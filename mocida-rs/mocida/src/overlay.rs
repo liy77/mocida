@@ -56,7 +56,7 @@ pub fn flags() -> u32 {
 
 /// Toggles an individual flag.
 pub fn toggle_flag(flag: OverlayFlag) {
-    unsafe { sys::UIDebugOverlay_ToggleFlag(sys::UIOverlayFlag(flag as i32)) };
+    unsafe { sys::UIDebugOverlay_ToggleFlag(sys::UIOverlayFlag(flag as _)) };
 }
 
 /// Hands an SDL scancode to the overlay. Returns `true` if it matched

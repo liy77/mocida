@@ -135,7 +135,7 @@ impl TextArea {
 
     /// Wrap mode.
     pub fn wrap_mode(self, mode: WrapMode) -> Self {
-        unsafe { sys::UITextArea_SetWrapMode(self.ptr, sys::UIWrapMode(mode as i32)) };
+        unsafe { sys::UITextArea_SetWrapMode(self.ptr, sys::UIWrapMode(mode as _)) };
         self
     }
 

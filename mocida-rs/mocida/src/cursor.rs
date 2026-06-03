@@ -35,13 +35,13 @@ pub enum Cursor {
 impl Cursor {
     /// Applies the cursor immediately (mirrors `UICursor_Apply`).
     pub fn apply(self) {
-        unsafe { sys::UICursor_Apply(sys::UICursor(self as i32)) };
+        unsafe { sys::UICursor_Apply(sys::UICursor(self as _)) };
     }
 
     /// Convert to the raw bindgen newtype.
     #[inline]
     pub fn into_raw(self) -> sys::UICursor {
-        sys::UICursor(self as i32)
+        sys::UICursor(self as _)
     }
 }
 

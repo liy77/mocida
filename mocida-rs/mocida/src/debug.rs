@@ -70,7 +70,7 @@ impl LogSink {
 
 /// Installs a global level filter.
 pub fn set_level(level: LogLevel) {
-    unsafe { sys::UIDebug_SetLevel(sys::UILogLevel(level as i32)) };
+    unsafe { sys::UIDebug_SetLevel(sys::UILogLevel(level as _)) };
 }
 
 /// Reads the current global level filter.
@@ -168,7 +168,7 @@ pub fn log(level: LogLevel, category: &str, message: &str) -> Result<()> {
     let blank = CString::new("")?;
     unsafe {
         sys::UIDebug_Logf(
-            sys::UILogLevel(level as i32),
+            sys::UILogLevel(level as _),
             cat.as_ptr(),
             blank.as_ptr(),
             0,

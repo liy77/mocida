@@ -189,7 +189,7 @@ impl Text {
     /// Selects the wrap strategy.
     pub fn wrap_mode(self, mode: WrapMode) -> Self {
         unsafe {
-            sys::UIText_SetWrapMode(self.ptr, sys::UIWrapMode(mode as i32));
+            sys::UIText_SetWrapMode(self.ptr, sys::UIWrapMode(mode as _));
         }
         self
     }
@@ -205,7 +205,7 @@ impl Text {
     /// Sets horizontal alignment within the widget bounds.
     pub fn h_align(self, align: TextHAlign) -> Self {
         unsafe {
-            sys::UIText_SetHAlign(self.ptr, sys::UITextHAlign(align as i32));
+            sys::UIText_SetHAlign(self.ptr, sys::UITextHAlign(align as _));
         }
         self
     }
@@ -213,7 +213,7 @@ impl Text {
     /// Sets vertical alignment within the widget bounds.
     pub fn v_align(self, align: TextVAlign) -> Self {
         unsafe {
-            sys::UIText_SetVAlign(self.ptr, sys::UITextVAlign(align as i32));
+            sys::UIText_SetVAlign(self.ptr, sys::UITextVAlign(align as _));
         }
         self
     }

@@ -51,7 +51,7 @@ pub struct Stack {
 impl Stack {
     /// Creates a stack with the given orientation.
     pub fn new(orientation: StackOrientation) -> Result<Self> {
-        let ptr = unsafe { sys::UIStack_Create(sys::UIStackOrientation(orientation as i32)) };
+        let ptr = unsafe { sys::UIStack_Create(sys::UIStackOrientation(orientation as _)) };
         if ptr.is_null() {
             return Err(Error::Null("UIStack_Create"));
         }
@@ -72,14 +72,14 @@ impl Stack {
 
     /// Sets the cross-axis alignment of items (start / center / end).
     pub fn align(self, align: StackAlign) -> Self {
-        unsafe { sys::UIStack_SetAlign(self.ptr, sys::UIStackAlign(align as i32)) };
+        unsafe { sys::UIStack_SetAlign(self.ptr, sys::UIStackAlign(align as _)) };
         self
     }
 
     /// Sets the main-axis distribution of items (start / center / end /
     /// space-between).
     pub fn justify(self, justify: StackJustify) -> Self {
-        unsafe { sys::UIStack_SetJustify(self.ptr, sys::UIStackJustify(justify as i32)) };
+        unsafe { sys::UIStack_SetJustify(self.ptr, sys::UIStackJustify(justify as _)) };
         self
     }
 

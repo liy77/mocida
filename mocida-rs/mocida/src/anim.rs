@@ -69,7 +69,7 @@ where
             target,
             to,
             duration_ms,
-            sys::UIEase(ease as i32),
+            sys::UIEase(ease as _),
             cb,
             userdata,
         )

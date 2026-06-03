@@ -71,7 +71,7 @@ impl Image {
                 animated as i32,
                 0,
                 std::ptr::null_mut(),
-                sys::UIFillMode(fill_mode as i32),
+                sys::UIFillMode(fill_mode as _),
                 tint.into_raw(),
             )
         };
@@ -99,7 +99,7 @@ impl Image {
                 renderer,
                 data.as_ptr() as *const std::ffi::c_void,
                 data.len(),
-                sys::UIFillMode(fill_mode as i32),
+                sys::UIFillMode(fill_mode as _),
                 tint.into_raw(),
             )
         };

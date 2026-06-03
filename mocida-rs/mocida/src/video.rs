@@ -65,7 +65,7 @@ impl Video {
 
     /// Picks a fill mode (same enum as [`Image`](crate::Image)).
     pub fn fill_mode(self, mode: FillMode) -> Self {
-        unsafe { sys::UIVideo_SetFillMode(self.ptr, sys::UIFillMode(mode as i32)) };
+        unsafe { sys::UIVideo_SetFillMode(self.ptr, sys::UIFillMode(mode as _)) };
         self
     }
 
