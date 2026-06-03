@@ -258,7 +258,17 @@ option(MOCIDA_USE_MIMALLOC "Use Microsoft mimalloc for malloc/free" ON)
 set(MOCIDA_MIMALLOC_AVAILABLE OFF)
 
 if(MOCIDA_USE_MIMALLOC AND NOT MOCIDA_IOS AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/mimalloc/CMakeLists.txt)
-    set(MI_OVERRIDE     ON  CACHE BOOL "" FORCE)
+    # macOS: MI_OVERRIDE installs mimalloc's process-wide malloc-zone interpose,
+    # which also captures the Rust side's (mui-dev / copper_syntax) internal
+    # allocations. A Vec alloc'd in one zone and freed in the other aborts with
+    # "pointer being freed was not allocated" (SIGABRT) before the first render.
+    # mocida_alloc.h already routes the C code to mi_malloc at compile time, so
+    # the runtime override is redundant here — keep it OFF on Apple.
+    if(APPLE)
+        set(MI_OVERRIDE OFF CACHE BOOL "" FORCE)
+    else()
+        set(MI_OVERRIDE ON  CACHE BOOL "" FORCE)
+    endif()
     set(MI_BUILD_SHARED OFF CACHE BOOL "" FORCE)
     set(MI_BUILD_OBJECT OFF CACHE BOOL "" FORCE)
     set(MI_BUILD_TESTS  OFF CACHE BOOL "" FORCE)
