@@ -26,6 +26,33 @@ UIStack* UIStack_SetPadding(UIStack* s, float l, float t, float r, float b) {
     return s;
 }
 
+UIStack* UIStack_SetAlign(UIStack* s, UIStackAlign align) {
+    if (s) s->align = (int)align;
+    return s;
+}
+
+UIStack* UIStack_SetJustify(UIStack* s, UIStackJustify justify) {
+    if (s) s->justify = (int)justify;
+    return s;
+}
+
+UIStack* UIStack_SetBackground(UIStack* s, UIColor color) {
+    if (s) s->bgColor = color;
+    return s;
+}
+
+UIStack* UIStack_SetRadius(UIStack* s, float radius) {
+    if (s) s->radius = radius;
+    return s;
+}
+
+UIStack* UIStack_SetBorder(UIStack* s, UIColor color, float width) {
+    if (!s) return s;
+    s->borderColor = color;
+    s->borderWidth = width;
+    return s;
+}
+
 int UIStack_AddItem(UIStack* s, UIWidget* item) {
     if (!s || !item) return 0;
     return UIChildren_Add(s->items, item);

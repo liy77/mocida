@@ -89,6 +89,35 @@ typedef struct {
      */
     int clipChildren;
 
+    /**
+     * Per-child cross-axis alignment inside a parent Stack, overriding the
+     * Stack's own `align` for THIS child. 0 = inherit the stack; 1 = start,
+     * 2 = center, 3 = end (mapped to the cross axis: left/center/right in a
+     * vertical stack, top/center/bottom in a horizontal one). Lets a single
+     * `Text(align: left)` sit left in an otherwise-centered column.
+     */
+    int selfAlign;
+
+    /**
+     * Outer margins (pixels) honoured by container layout (UIStack). Space
+     * reserved OUTSIDE the widget's box: a Stack offsets the item by the
+     * leading margin and advances its cursor past the trailing one, so a
+     * single child can push itself away from its siblings/edges. 0 = none.
+     */
+    float marginLeft;
+    float marginTop;
+    float marginRight;
+    float marginBottom;
+
+    /**
+     * Optional key-down callback. Fires on EVERY key press (keyboard isn't
+     * spatial, so there's no hit-test) for every widget that set one — the
+     * handler decides whether the key is relevant. `key` is the SDL key name
+     * ("A", "Return", "Escape", "Space", …); `mods` is the SDL keymod bitmask.
+     */
+    void (*onKeyDown)(void* self, const char* key, int mods, void* userdata);
+    void* onKeyDownUserdata;
+
     UIWidgetData data; /**< Concrete widget payload (UIRectangle*, UIText*, ...). */
 } UIWidget;
 
@@ -244,6 +273,38 @@ UIWidget* UIWidget_GetParent(UIWidget* widget);
  * @return None.
  */
 void UIWidget_SetAlignmentByParent(UIWidget* widget, uint8_t valign, uint8_t halign);
+
+/**
+ * Sets this widget's per-child cross-axis alignment inside a parent Stack,
+ * overriding the Stack's `align` for this child only.
+ * @param widget Pointer to the UIWidget object.
+ * @param align 0 = inherit the stack, 1 = start, 2 = center, 3 = end.
+ */
+void UIWidget_SetSelfAlign(UIWidget* widget, int align);
+
+/**
+ * Sets this widget's outer margins (pixels), honoured by container layout
+ * (UIStack offsets the item by the leading margin and advances past the
+ * trailing one).
+ * @param widget Pointer to the UIWidget object.
+ * @param left   Left margin.
+ * @param top    Top margin.
+ * @param right  Right margin.
+ * @param bottom Bottom margin.
+ */
+void UIWidget_SetMargin(UIWidget* widget, float left, float top, float right, float bottom);
+
+/**
+ * Sets a key-down callback on this widget. It fires on every key press (with
+ * the SDL key name + mod bitmask); the handler itself decides which keys it
+ * cares about. Pass NULL to clear.
+ */
+void UIWidget_SetOnKeyDown(UIWidget* widget,
+                           void (*cb)(void* self, const char* key, int mods, void* userdata),
+                           void* userdata);
+
+// UIWidget_DispatchKeyDown(UIChildren*, ...) is declared in children.h (which
+// owns the UIChildren type), to avoid a circular include here.
 
 /**
  * Gets the vertical target of a UIAlignment object.

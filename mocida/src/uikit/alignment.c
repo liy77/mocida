@@ -111,6 +111,18 @@ void UIAlignment_Align(UIWidget* widget) {
     widget->y += marginTop - marginBottom;
 } 
 
+void UIWidget_SetSelfAlign(UIWidget* widget, int align) {
+    if (widget) widget->selfAlign = align;
+}
+
+void UIWidget_SetMargin(UIWidget* widget, float left, float top, float right, float bottom) {
+    if (!widget) return;
+    widget->marginLeft   = left;
+    widget->marginTop    = top;
+    widget->marginRight  = right;
+    widget->marginBottom = bottom;
+}
+
 void UIWidget_SetAlignmentByParent(UIWidget* widget, uint8_t valign, uint8_t halign) {
     if (widget == NULL) {
         return;

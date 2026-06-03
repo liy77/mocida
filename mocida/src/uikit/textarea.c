@@ -1,6 +1,7 @@
 #include <uikit/textarea.h>
 #include <uikit/textfield.h>
 #include <uikit/window.h>
+#include <uikit/font.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -91,6 +92,11 @@ UITextArea* UITextArea_Create(const char* initialText, float fontSize) {
     ta->maxLength = -1;
 
     ta->fontSize          = fontSize > 0.0f ? fontSize : 16.0f;
+    {
+        // Default to the app font (like UIText_Create) so text renders.
+        const char* defFont = UIGetDefaultFontPath();
+        ta->fontFamily    = defFont ? _strdup(defFont) : NULL;
+    }
     ta->textColor         = (UIColor){ 15, 23, 42, 1.0f };
     ta->placeholderColor  = (UIColor){ 148, 163, 184, 1.0f };
     ta->caretColor        = (UIColor){ 59, 130, 246, 1.0f };

@@ -49,6 +49,17 @@ UIWidget* UIWidget_Create(UIWidgetData data)  {
     widget->id = NULL;
     widget->focused = 0;
     widget->clipChildren = 0;
+    // Container-layout fields — MUST be zeroed: the Stack/Rectangle render reads
+    // them every frame (cross-axis align + outer margins). Left uninitialised
+    // (malloc, not calloc) they hold heap garbage, which makes layout random per
+    // allocation: items jump around and spacing appears even with gap:0.
+    widget->selfAlign = 0;
+    widget->marginLeft = 0.0f;
+    widget->marginTop = 0.0f;
+    widget->marginRight = 0.0f;
+    widget->marginBottom = 0.0f;
+    widget->onKeyDown = NULL;
+    widget->onKeyDownUserdata = NULL;
 
     return widget;
 }
@@ -353,3 +364,40 @@ UIWidget* UIWidget_FindByData(void* data) {
     return NULL;
 }
 
+
+// ---------------------------------------------------------------------------
+// Generic per-widget key-down callback + recursive dispatch.
+// ---------------------------------------------------------------------------
+
+void UIWidget_SetOnKeyDown(UIWidget* widget,
+                           void (*cb)(void* self, const char* key, int mods, void* userdata),
+                           void* userdata) {
+    if (!widget) return;
+    widget->onKeyDown = cb;
+    widget->onKeyDownUserdata = userdata;
+}
+
+// Returns a container widget's child collection so the key dispatch can recurse
+// into nested widgets (keyboard isn't spatial, so it visits the whole tree).
+static UIChildren* KeyContainerChildren(UIWidget* w) {
+    if (!w || !w->data) return NULL;
+    UIWidgetBase* base = (UIWidgetBase*)w->data;
+    const char* t = base->__widget_type;
+    if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;
+    if (strcmp(t, UI_WIDGET_GRID) == 0)      return ((UIGrid*)base)->items;
+    if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) return (UIChildren*)((UIRectangle*)base)->children;
+    return NULL;
+}
+
+void UIWidget_DispatchKeyDown(UIChildren* children, const char* key, int mods) {
+    if (!children) return;
+    for (int i = 0; i < children->count; i++) {
+        UIWidget* w = children->children[i];
+        if (!w) continue;
+        if (w->onKeyDown) {
+            w->onKeyDown((void*)w, key, mods, w->onKeyDownUserdata);
+        }
+        UIChildren* kids = KeyContainerChildren(w);
+        if (kids) UIWidget_DispatchKeyDown(kids, key, mods);
+    }
+}

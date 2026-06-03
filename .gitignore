@@ -26,3 +26,8 @@ cmake-build-*/
 /mimalloc/
 mocida_webview.log
 mocida_crash_*.log
+
+# --- cforge codegen output (a generated Rust crate) ---
+/dist/
+# --- vendored SDL source copied for the C tests (build fixture, not ours) ---
+/mocida/tests/SDL/

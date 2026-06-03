@@ -22,6 +22,14 @@ typedef struct {
 UIChildren* UIChildren_Create(int capacity);
 
 /**
+ * Dispatches a key-down to every widget in the tree that registered an
+ * `onKeyDown` callback (see UIWidget_SetOnKeyDown), recursing into layout
+ * containers (Stack/Grid/Rectangle). Called by the app's SDL key handler.
+ * `key` is the SDL key name ("A", "Return", "Escape", …).
+ */
+void UIWidget_DispatchKeyDown(UIChildren* children, const char* key, int mods);
+
+/**
  * Adds a child widget to the UIChildren object.
  * @param children Pointer to the UIChildren object.
  * @param child Pointer to the child widget to be added.

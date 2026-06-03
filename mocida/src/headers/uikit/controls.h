@@ -218,6 +218,7 @@ struct UIRadioButton {
     const char* __widget_type; /**< Widget type tag (== UI_WIDGET_RADIO). */
     void* group;               /**< Shared pointer identifying the radio group (siblings share it). */
     int   selected;            /**< 1 when this button is the active choice of its group. */
+    int   enabled;             /**< 0 disables interaction (no hover/click). Default 1. */
     int   hovered;             /**< Internal: mouse currently over the button. */
     int   pressed;             /**< Internal: mouse-down without release. */
     UICursor cursor;           /**< Cursor shown on hover. */
@@ -246,6 +247,7 @@ UIRadioButton* UIRadio_SetDotScale   (UIRadioButton* r, float scale);
 UIRadioButton* UIRadio_SetAnimMs     (UIRadioButton* r, int ms);
 UIRadioButton* UIRadio_OnChange      (UIRadioButton* r, UIRadioCallback cb, void* userdata);
 UIRadioButton* UIRadio_SetCursor     (UIRadioButton* r, UICursor cursor);
+UIRadioButton* UIRadio_SetEnabled    (UIRadioButton* r, int enabled);
 void           UIRadio_Destroy       (UIRadioButton* r);
 
 // ---------------------------------------------------------------------

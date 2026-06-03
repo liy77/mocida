@@ -149,6 +149,15 @@ typedef enum {
 typedef void (*UIAppResizeCallback)(int width, int height, void* userdata);
 
 /**
+ * Per-frame tick callback: fires once at the top of every iteration of the
+ * main loop (before event handling and rendering), so it runs on the UI
+ * thread between frames. Use it for cheap per-frame work like polling for
+ * a hot-reload signal and swapping the root tree via UIApp_SetChildren.
+ * Keep it light — it runs every frame.
+ */
+typedef void (*UIAppTickCallback)(void* userdata);
+
+/**
  * Top-level application object. Owns the main window, the root widget,
  * and global render / animation tuning knobs. One UIApp is enough for
  * the vast majority of programs; multi-window apps share these
@@ -165,6 +174,9 @@ typedef struct {
 
     UIAppResizeCallback onResize; /**< Fires on every window resize (incl. live-drag). */
     void*               onResizeUserdata; /**< Opaque pointer forwarded to onResize. */
+
+    UIAppTickCallback   onTick;        /**< Fires once per frame at the top of the loop. NULL = no-op. */
+    void*               onTickUserdata; /**< Opaque pointer forwarded to onTick. */
 
     int   runInBackground;     /**< 1 = keep the run loop alive when the window is hidden (e.g. minimized to tray). */
     void* tray;                /**< SDL_Tray* for the desktop tray icon, or NULL. */
@@ -187,6 +199,22 @@ UIApp* UIApp_Create(const char* title, int width, int height);
  * @return Pointer to the UIWindow object.
  */
 UIWidget* UIApp_GetWindow(UIApp* app);
+
+/**
+ * Toggle the always-on-top flag on the current app's window. Global (no app
+ * handle needed) so a UI event handler can call it from anywhere.
+ * @param on Non-zero to keep the window above others; zero to clear.
+ */
+void UIApp_SetAlwaysOnTop(int on);
+
+/* Global (current-app) wrappers for the MUI App / Window bridge - callable
+ * without an app handle (they act on the most-recently created app). */
+void        UIApp_SetTitleG (const char* title);
+void        UIApp_SetSizeG  (int width, int height);
+void        UIApp_SetMaxFpsG(int fps);
+int         UIApp_GetWidthG (void);
+int         UIApp_GetHeightG(void);
+const char* UIApp_GetTitleG (void);
 
 /**
  * Gets a property of the UIApp object.
@@ -380,6 +408,13 @@ void UIApp_SetEventCallback(UIApp* app, UI_EVENT event, UIEventCallback callback
  * repositions widgets but doesn't resize them).
  */
 void UIApp_OnResize(UIApp* app, UIAppResizeCallback cb, void* userdata);
+
+/**
+ * Registers a per-frame tick callback (see UIAppTickCallback). Fires once at
+ * the top of every main-loop iteration on the UI thread. Pass NULL to clear.
+ * Intended for lightweight per-frame work such as hot-reload polling.
+ */
+void UIApp_OnTick(UIApp* app, UIAppTickCallback cb, void* userdata);
 
 /**
  * Console window control (Windows only). Mocida apps link as the

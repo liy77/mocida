@@ -1130,9 +1130,15 @@ void DrawRoundedRectFill(SDL_Renderer* rend, SDL_FRect rect, UIColor color, floa
         (Uint8)SDL_clamp((int)(color.a * 255.0f), 0, 255)
     };
 
-    // No radius: plain rectangle (batched).
+    // No radius: plain rectangle. Flush immediately so the fill is
+    // committed to the target now — container backgrounds (Stack/Rectangle
+    // with radius 0) draw their fill before their children, and a queued
+    // rect left in the batch would otherwise flush at frame end and paint
+    // over those children. The rounded path below flushes for the same
+    // reason (see FlushRenderBatch after the 5 edge rects).
     if (radius <= 0.5f) {
         BatchRect(rend, &rect, sdlColor);
+        FlushRenderBatch(rend);
         return;
     }
 
@@ -1505,12 +1511,21 @@ static void RenderScroll(UIWindow* window, UIWidget* el, UIScroll* s) {
     if (!s->allowHorizontal) s->scrollX = 0.0f;
     if (!s->allowVertical)   s->scrollY = 0.0f;
 
-    // Optional background.
+    // Optional background. Honour the rectangle's drop shadow (drawn
+    // first, behind the fill) so a scroll/panel can cast a shadow like a
+    // standalone UIRectangle does.
     if (s->background) {
         UIRectangle* bg = (UIRectangle*)s->background;
+        const float op = el->opacity;
+        if (bg->hasShadow) {
+            UIShadow sh = bg->shadow; sh.color.a *= op;
+            DrawDropShadow(window->sdlRenderer, viewport, bg->radius, sh);
+        }
+        UIColor bgC     = bg->color;       bgC.a *= op;
+        UIColor borderC = bg->borderColor; borderC.a *= op;
         DrawRoundedRectWithBorder(window->sdlRenderer, viewport,
-                                  bg->color, bg->radius,
-                                  (int)bg->borderWidth, bg->borderColor);
+                                  bgC, bg->radius,
+                                  (int)bg->borderWidth, borderC);
     }
 
     // Flush pending batches before changing the clip rect - otherwise
@@ -1638,18 +1653,89 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
         UIStack* s = (UIStack*)base;
         if (!s->items) return;
         UIChildren_SortByZ(s->items);
-        float cursorX = el->x + s->paddingLeft;
-        float cursorY = el->y + s->paddingTop;
+        // Optional background fill / border behind the stack's items.
+        if (el->width && el->height &&
+            (s->bgColor.a > 0.0f || s->borderWidth > 0.0f)) {
+            g_tempRect1.x = el->x;
+            g_tempRect1.y = el->y;
+            g_tempRect1.w = *el->width;
+            g_tempRect1.h = *el->height;
+            UIColor fillC   = s->bgColor;     fillC.a   *= op;
+            UIColor borderC = s->borderColor; borderC.a *= op;
+            if (g_tempRect1.w > 0 && g_tempRect1.h > 0) {
+                DrawRoundedRectWithBorder(window->sdlRenderer, g_tempRect1,
+                                          fillC, s->radius,
+                                          (int)s->borderWidth, borderC);
+            }
+        }
+        // Cross-axis extents (inside padding) for `align` (center/end).
+        const float innerW = (el->width  ? *el->width  : 0.0f) - s->paddingLeft - s->paddingRight;
+        const float innerH = (el->height ? *el->height : 0.0f) - s->paddingTop  - s->paddingBottom;
+        // Main-axis distribution (`justify`): measure the items' total extent +
+        // gaps, then offset the start cursor (center/end) or spread the gap
+        // (spaceBetween). Needs the stack to be bigger than its content on the
+        // main axis (explicit size or runtime parent-fill); otherwise no room.
+        // Items also carry outer margins; they count toward the main-axis
+        // extent (justify) and offset each item on both axes.
+        float mainStart = 0.0f, betweenGap = 0.0f;
+        if (s->justify != UI_STACK_JUSTIFY_START) {
+            int   visN     = 0;
+            float mainUsed = 0.0f;
+            for (int i = 0; i < s->items->count; i++) {
+                UIWidget* it = s->items->children[i];
+                if (!it || !it->visible) continue;
+                mainUsed += (s->orientation == UI_STACK_HORIZONTAL)
+                          ? (it->width  ? *it->width  : 0.0f) + it->marginLeft + it->marginRight
+                          : (it->height ? *it->height : 0.0f) + it->marginTop  + it->marginBottom;
+                visN++;
+            }
+            const float mainAvail = (s->orientation == UI_STACK_HORIZONTAL) ? innerW : innerH;
+            if (s->justify == UI_STACK_JUSTIFY_BETWEEN) {
+                if (visN > 1) betweenGap = (mainAvail - mainUsed) / (float)(visN - 1);
+                if (betweenGap < s->spacing) betweenGap = s->spacing;
+            } else {
+                const float content = mainUsed + s->spacing * (float)(visN > 0 ? visN - 1 : 0);
+                float slack = mainAvail - content;
+                if (slack < 0.0f) slack = 0.0f;
+                mainStart = (s->justify == UI_STACK_JUSTIFY_CENTER) ? slack * 0.5f : slack;
+            }
+        }
+        const float gap = (s->justify == UI_STACK_JUSTIFY_BETWEEN) ? betweenGap : s->spacing;
+        float cursorX = el->x + s->paddingLeft + ((s->orientation == UI_STACK_HORIZONTAL) ? mainStart : 0.0f);
+        float cursorY = el->y + s->paddingTop  + ((s->orientation == UI_STACK_HORIZONTAL) ? 0.0f : mainStart);
         for (int i = 0; i < s->items->count; i++) {
             UIWidget* item = s->items->children[i];
             if (!item || !item->visible) continue;
             const float iw = item->width  ? *item->width  : 0.0f;
             const float ih = item->height ? *item->height : 0.0f;
-            item->x = cursorX;
-            item->y = cursorY;
-            RenderSingleWidget(window, item);
-            if (s->orientation == UI_STACK_HORIZONTAL) cursorX += iw + s->spacing;
-            else                                       cursorY += ih + s->spacing;
+            const float mL = item->marginLeft, mT = item->marginTop;
+            const float mR = item->marginRight, mB = item->marginBottom;
+            // A child's `selfAlign` (1=start,2=center,3=end) overrides the
+            // stack's `align` for that child only; 0 = inherit the stack.
+            const int ea = item->selfAlign ? (item->selfAlign - 1) : s->align;
+            if (s->orientation == UI_STACK_HORIZONTAL) {
+                const float ew = ih + mT + mB; // cross extent incl. margins
+                float off = (ea == UI_STACK_ALIGN_CENTER) ? (innerH - ew) * 0.5f
+                          : (ea == UI_STACK_ALIGN_END)    ? (innerH - ew)
+                          :                                  0.0f;
+                if (off < 0.0f) off = 0.0f;
+                cursorX += mL;                 // leading main-axis margin
+                item->x = cursorX;
+                item->y = cursorY + off + mT;  // cross align + leading cross margin
+                RenderSingleWidget(window, item);
+                cursorX += iw + mR + gap;      // trailing main-axis margin + gap
+            } else {
+                const float ew = iw + mL + mR;
+                float off = (ea == UI_STACK_ALIGN_CENTER) ? (innerW - ew) * 0.5f
+                          : (ea == UI_STACK_ALIGN_END)    ? (innerW - ew)
+                          :                                  0.0f;
+                if (off < 0.0f) off = 0.0f;
+                cursorY += mT;
+                item->x = cursorX + off + mL;
+                item->y = cursorY;
+                RenderSingleWidget(window, item);
+                cursorY += ih + mB + gap;
+            }
         }
         return;
     }
@@ -1881,6 +1967,28 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
                 DrawRoundedRectWithBorder(window->sdlRenderer, g_tempRect1,
                                           fillC, rect->radius,
                                           (int)rect->borderWidth, borderC);
+            }
+        }
+        // Rectangle-as-container: render inner children top-to-bottom
+        // inside the padding box. Children are absolutely positioned so
+        // nested containers see on-screen coords. Each child keeps its
+        // own opacity (mirrors the Stack render path).
+        if (rect->children && ((UIChildren*)rect->children)->count > 0) {
+            UIChildren* kids = (UIChildren*)rect->children;
+            UIChildren_SortByZ(kids);
+            float cursorX = el->x + rect->paddingLeft;
+            float cursorY = el->y + rect->paddingTop;
+            for (int i = 0; i < kids->count; i++) {
+                UIWidget* item = kids->children[i];
+                if (!item || !item->visible) continue;
+                const float ih = item->height ? *item->height : 0.0f;
+                // Honour the child's outer margins (vertical flow), so a child
+                // can push itself away from the rect's edges / its neighbours.
+                cursorY += item->marginTop;
+                item->x = cursorX + item->marginLeft;
+                item->y = cursorY;
+                RenderSingleWidget(window, item);
+                cursorY += ih + item->marginBottom + rect->gap;
             }
         }
         return;
@@ -3408,7 +3516,11 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
         }
         (void)passUsed;
 
-        TTF_Font* font = (tf->fontFamily && tf->fontSize > 0.0f)
+        // GetFont(NULL, size) returns the default font, so a field with no
+        // explicit fontFamily still renders its text (matches UIText, which
+        // calls GetFont the same way). Guarding on fontFamily here was why a
+        // field with no `font:` showed nothing despite holding text.
+        TTF_Font* font = (tf->fontSize > 0.0f)
             ? GetFont(tf->fontFamily, tf->fontSize) : NULL;
         if (font) {
             TTF_SetFontStyle(font, (TTF_FontStyleFlags)tf->fontStyle);
@@ -3581,7 +3693,7 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
                                   bg2, ta->radius,
                                   (int)ta->borderWidth, border2);
 
-        TTF_Font* font = (ta->fontFamily && ta->fontSize > 0.0f)
+        TTF_Font* font = (ta->fontSize > 0.0f)
             ? GetFont(ta->fontFamily, ta->fontSize) : NULL;
         if (!font) return;
         TTF_SetFontStyle(font, (TTF_FontStyleFlags)ta->fontStyle);

@@ -128,16 +128,18 @@ static bool LiveResizeWatch(void* userdata, SDL_Event* event) {
         return false;
     }
 
-    int w = event->window.data1;
-    int h = event->window.data2;
-#if defined(MOCIDA_IOS)
-    // On iOS the resize event during an orientation change can carry stale
-    // / pre-rotation dimensions; SDL_GetWindowSize is authoritative for the
-    // settled orientation, so always trust it here.
+    // Always read the LOGICAL (screen-coordinate) size. SDL_EVENT_WINDOW_RESIZED
+    // carries logical data1/data2, but SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED carries
+    // PHYSICAL pixels — using those would set window->width to the DPI-scaled size
+    // (e.g. 1035 for a 720 logical window at 144 DPI), while the renderer's logical
+    // presentation (UIWindow_Render) stays at the logical size. That mismatch makes
+    // Window.width report the wrong value and shifts/overflows layout. SDL_GetWindowSize
+    // returns the logical size for every event type, matching the render space.
+    int w = 0, h = 0;
     SDL_GetWindowSize(app->window->sdlWindow, &w, &h);
-#endif
     if (w <= 0 || h <= 0) {
-        SDL_GetWindowSize(app->window->sdlWindow, &w, &h);
+        w = event->window.data1;
+        h = event->window.data2;
     }
     ApplyResize(app, w, h);
     UIWindow_Render(app->window);
@@ -266,6 +268,14 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
                                         event->key.scancode, event->key.mod);
             UIText_DispatchKeyDown     (app->window->children, app->window->sdlWindow,
                                         event->key.scancode, event->key.mod);
+            // Generic per-widget key callbacks (MUI `onKeyInput`). The key name
+            // is SDL's ("A", "Return", "Escape", "Space", …); fires for every
+            // widget that registered one (keyboard isn't spatial).
+            {
+                const char* keyName = SDL_GetKeyName(event->key.key);
+                UIWidget_DispatchKeyDown(app->window->children,
+                                         keyName ? keyName : "", (int)event->key.mod);
+            }
             break;
         }
         case SDL_EVENT_MOUSE_BUTTON_UP: {
@@ -465,6 +475,10 @@ int  UIApp_IsConsoleVisible (void) { return 0; }
 static void EnsureDebugConsole(void) { /* no-op */ }
 #endif
 
+/// The most-recently created app, for global window helpers (set in
+/// UIApp_Create). One app per process in practice.
+static UIApp* g_currentApp = NULL;
+
 UIApp* UIApp_Create(const char* title, int width, int height) {
     /* Debug-only console attach. No-op in release (no logs to see
      * anyway; the WIN32 subsystem suppressed any auto-console). */
@@ -501,6 +515,8 @@ UIApp* UIApp_Create(const char* title, int width, int height) {
     app->taaBlend = 0.5f;
     app->onResize = NULL;                      // User callback; opt-in via UIApp_SetResizeCallback.
     app->onResizeUserdata = NULL;
+    app->onTick = NULL;                        // Per-frame callback; opt-in via UIApp_OnTick.
+    app->onTickUserdata = NULL;
     app->orientations = UI_ORIENTATION_ALL;    // iOS: every orientation allowed by default.
     app->statusBarHidden = 0;                  // iOS: status bar visible by default.
 
@@ -557,7 +573,45 @@ UIApp* UIApp_Create(const char* title, int width, int height) {
     // window border on Windows (where the OS modal sizing loop blocks
     // the normal poll loop).
     SDL_AddEventWatch(LiveResizeWatch, app);
+    // Track the most-recently created app so global helpers (e.g.
+    // UIApp_SetAlwaysOnTop) can reach the window without threading the handle
+    // through every caller — there is effectively one app per process.
+    g_currentApp = app;
     return app;
+}
+
+/// Toggle the always-on-top flag on the current app's window. Global so a UI
+/// handler can call it from anywhere (`Screen.alwaysOnTop = true` in MUI).
+void UIApp_SetAlwaysOnTop(int on) {
+    if (g_currentApp && g_currentApp->window && g_currentApp->window->sdlWindow) {
+        SDL_SetWindowAlwaysOnTop(g_currentApp->window->sdlWindow, on ? true : false);
+    }
+}
+
+// ---- Global (current-app) convenience wrappers, for the MUI App.*/Window.*
+// bridge (a handler/effect can call these from anywhere). All no-op if there's
+// no current app. -----------------------------------------------------------
+void UIApp_SetTitleG(const char* title) {
+    if (g_currentApp && title) UIApp_SetWindowTitle(g_currentApp, title);
+}
+void UIApp_SetSizeG(int width, int height) {
+    if (g_currentApp) UIApp_SetWindowSize(g_currentApp, width, height);
+}
+void UIApp_SetMaxFpsG(int fps) {
+    if (g_currentApp) UIApp_SetTargetFPS(g_currentApp, fps);
+}
+int UIApp_GetWidthG(void) {
+    return g_currentApp ? UIApp_GetWidth(g_currentApp) : 0;
+}
+int UIApp_GetHeightG(void) {
+    return g_currentApp ? UIApp_GetHeight(g_currentApp) : 0;
+}
+const char* UIApp_GetTitleG(void) {
+    if (g_currentApp && g_currentApp->window && g_currentApp->window->sdlWindow) {
+        const char* t = SDL_GetWindowTitle(g_currentApp->window->sdlWindow);
+        return t ? t : "";
+    }
+    return "";
 }
 
 UIWidget* UIApp_GetWindow(UIApp* app) {
@@ -717,6 +771,12 @@ void UIApp_OnResize(UIApp* app, UIAppResizeCallback cb, void* userdata) {
     if (!app) return;
     app->onResize = cb;
     app->onResizeUserdata = userdata;
+}
+
+void UIApp_OnTick(UIApp* app, UIAppTickCallback cb, void* userdata) {
+    if (!app) return;
+    app->onTick = cb;
+    app->onTickUserdata = userdata;
 }
 
 // Maps a UIOrientation bitmask to SDL's space-separated
@@ -1089,6 +1149,11 @@ void UIApp_Run(UIApp* app) {
     // the tray menu / "show window" works, but skip rendering.
     while (app->window->visible || app->runInBackground) {
         UIProfile_FrameBegin();
+
+        // Per-frame user tick (opt-in). A single null-check when unused, so it
+        // costs nothing for apps that don't set it; hot-reload uses it to swap
+        // the root tree between frames on the UI thread.
+        if (app->onTick) app->onTick(app->onTickUserdata);
 
         {
             UI_SCOPEC("events", UI_PROF_EVENT);

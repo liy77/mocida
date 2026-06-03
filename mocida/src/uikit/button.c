@@ -1,4 +1,6 @@
 #include <uikit/button.h>
+#include <uikit/container.h>
+#include <uikit/stack.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -210,20 +212,47 @@ static UIButton* AsButton(UIWidget* w) {
     return (UIButton*)base;
 }
 
+// If `w` is a container that holds a child collection (Stack / Grid), return
+// it so the mouse dispatch can recurse into nested buttons. Containers lay out
+// their children's absolute x/y during the render pass, so the same absolute
+// hit-test (InsideWidget) works at any depth. Other widgets return NULL.
+static UIChildren* ContainerChildren(UIWidget* w) {
+    if (!w || !w->data) return NULL;
+    UIWidgetBase* base = (UIWidgetBase*)w->data;
+    const char* t = base->__widget_type;
+    if (strcmp(t, UI_WIDGET_STACK) == 0) {
+        return ((UIStack*)base)->items;
+    }
+    if (strcmp(t, UI_WIDGET_GRID) == 0) {
+        return ((UIGrid*)base)->items;
+    }
+    if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) {
+        return (UIChildren*)((UIRectangle*)base)->children;
+    }
+    return NULL;
+}
+
+// Per-button event application (one widget, already known to be a button).
+static void ButtonOnMotion(UIButton* btn, int inside) {
+    btn->isMouseInside = inside;
+    if (btn->isPressed) {
+        btn->state = inside ? UI_BUTTON_STATE_PRESSED : UI_BUTTON_STATE_NORMAL;
+    } else {
+        btn->state = inside ? UI_BUTTON_STATE_HOVER : UI_BUTTON_STATE_NORMAL;
+    }
+}
+
 void UIButton_DispatchMouseMotion(UIChildren* children, float x, float y) {
     if (!children) return;
     for (int i = 0; i < children->count; i++) {
         UIWidget* w   = children->children[i];
         UIButton* btn = AsButton(w);
-        if (!btn || !btn->enabled) continue;
-
-        const int inside = InsideWidget(w, x, y);
-        btn->isMouseInside = inside;
-
-        if (btn->isPressed) {
-            btn->state = inside ? UI_BUTTON_STATE_PRESSED : UI_BUTTON_STATE_NORMAL;
+        if (btn && btn->enabled) {
+            ButtonOnMotion(btn, InsideWidget(w, x, y));
         } else {
-            btn->state = inside ? UI_BUTTON_STATE_HOVER : UI_BUTTON_STATE_NORMAL;
+            // Recurse into containers so nested buttons get hover too.
+            UIChildren* kids = ContainerChildren(w);
+            if (kids) UIButton_DispatchMouseMotion(kids, x, y);
         }
     }
 }
@@ -233,12 +262,15 @@ void UIButton_DispatchMouseDown(UIChildren* children, float x, float y) {
     for (int i = 0; i < children->count; i++) {
         UIWidget* w   = children->children[i];
         UIButton* btn = AsButton(w);
-        if (!btn || !btn->enabled) continue;
-
-        if (InsideWidget(w, x, y)) {
-            btn->isPressed     = 1;
-            btn->isMouseInside = 1;
-            btn->state         = UI_BUTTON_STATE_PRESSED;
+        if (btn && btn->enabled) {
+            if (InsideWidget(w, x, y)) {
+                btn->isPressed     = 1;
+                btn->isMouseInside = 1;
+                btn->state         = UI_BUTTON_STATE_PRESSED;
+            }
+        } else {
+            UIChildren* kids = ContainerChildren(w);
+            if (kids) UIButton_DispatchMouseDown(kids, x, y);
         }
     }
 }
@@ -248,18 +280,19 @@ void UIButton_DispatchMouseUp(UIChildren* children, float x, float y) {
     for (int i = 0; i < children->count; i++) {
         UIWidget* w   = children->children[i];
         UIButton* btn = AsButton(w);
-        if (!btn || !btn->enabled) continue;
-
-        const int inside = InsideWidget(w, x, y);
-
-        if (btn->isPressed && inside) {
-            if (btn->onClick) btn->onClick(btn, btn->userdata);
-            btn->state = UI_BUTTON_STATE_HOVER;
+        if (btn && btn->enabled) {
+            const int inside = InsideWidget(w, x, y);
+            if (btn->isPressed && inside) {
+                if (btn->onClick) btn->onClick(btn, btn->userdata);
+                btn->state = UI_BUTTON_STATE_HOVER;
+            } else {
+                btn->state = inside ? UI_BUTTON_STATE_HOVER : UI_BUTTON_STATE_NORMAL;
+            }
+            btn->isPressed     = 0;
+            btn->isMouseInside = inside;
         } else {
-            btn->state = inside ? UI_BUTTON_STATE_HOVER : UI_BUTTON_STATE_NORMAL;
+            UIChildren* kids = ContainerChildren(w);
+            if (kids) UIButton_DispatchMouseUp(kids, x, y);
         }
-
-        btn->isPressed     = 0;
-        btn->isMouseInside = inside;
     }
 }

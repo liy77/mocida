@@ -1,4 +1,6 @@
 #include <uikit/mouse_area.h>
+#include <uikit/container.h>
+#include <uikit/stack.h>
 #include <SDL3/SDL.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +25,22 @@ static UIMouseArea* AsArea(UIWidget* w) {
     UIWidgetBase* base = (UIWidgetBase*)w->data;
     if (strcmp(base->__widget_type, UI_WIDGET_MOUSE_AREA) != 0) return NULL;
     return (UIMouseArea*)base;
+}
+
+// If `w` is a layout container (Stack / Grid / Rectangle), return its child
+// collection so the mouse dispatch can recurse into NESTED mouse areas. The
+// container's render pass already set each child's absolute x/y, so the same
+// absolute InsideWidget hit-test works at any depth. Other widgets return NULL.
+// (Mirrors button.c's ContainerChildren — without this a MouseArea inside a
+// Stack/Rectangle never receives events.)
+static UIChildren* ContainerChildren(UIWidget* w) {
+    if (!w || !w->data) return NULL;
+    UIWidgetBase* base = (UIWidgetBase*)w->data;
+    const char* t = base->__widget_type;
+    if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;
+    if (strcmp(t, UI_WIDGET_GRID) == 0)      return ((UIGrid*)base)->items;
+    if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) return (UIChildren*)((UIRectangle*)base)->children;
+    return NULL;
 }
 
 // Clamps the (x, y) origin of a w x h rectangle to live inside the
@@ -148,7 +166,12 @@ void UIMouseArea_DispatchMouseMotion(UIChildren* children, float x, float y) {
     for (int i = 0; i < children->count; i++) {
         UIWidget* w = children->children[i];
         UIMouseArea* area = AsArea(w);
-        if (!area || !area->enabled) continue;
+        if (!area) {
+            UIChildren* kids = ContainerChildren(w);
+            if (kids) UIMouseArea_DispatchMouseMotion(kids, x, y);
+            continue;
+        }
+        if (!area->enabled) continue;
 
         const int inside = InsideWidget(w, x, y);
 
@@ -219,7 +242,12 @@ void UIMouseArea_DispatchMouseDown(UIChildren* children, float x, float y, int b
     for (int i = children->count - 1; i >= 0; i--) {
         UIWidget* w = children->children[i];
         UIMouseArea* area = AsArea(w);
-        if (!area || !area->enabled) continue;
+        if (!area) {
+            UIChildren* kids = ContainerChildren(w);
+            if (kids) UIMouseArea_DispatchMouseDown(kids, x, y, button);
+            continue;
+        }
+        if (!area->enabled) continue;
 
         if (InsideWidget(w, x, y)) {
             area->pressed = 1;
@@ -258,7 +286,12 @@ void UIMouseArea_DispatchMouseUp(UIChildren* children, float x, float y, int but
     for (int i = 0; i < children->count; i++) {
         UIWidget* w = children->children[i];
         UIMouseArea* area = AsArea(w);
-        if (!area || !area->enabled || !area->pressed) continue;
+        if (!area) {
+            UIChildren* kids = ContainerChildren(w);
+            if (kids) UIMouseArea_DispatchMouseUp(kids, x, y, button);
+            continue;
+        }
+        if (!area->enabled || !area->pressed) continue;
 
         if (area->dragging) {
             FireCallback(area, area->onDragEnd,

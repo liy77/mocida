@@ -27,6 +27,26 @@ typedef struct {
     /** When 0 the renderer skips the shadow pass entirely. Set via UIRectangle_SetShadow. */
     int hasShadow;
     UIShadow shadow;           /**< Shadow parameters (offset, blur, spread, color). */
+
+    /**
+     * Optional inner content. A rectangle is the most basic container:
+     * any widget added via UIRectangle_AddChild is rendered *inside* the
+     * rect's bounds, laid out top-to-bottom from the inner padding box
+     * with `gap` between consecutive children (mouse events recurse into
+     * them as well). NULL when the rectangle is a plain leaf (the common
+     * case), so leaf rectangles stay zero-overhead. The rectangle OWNS
+     * this collection and frees it (and the children) on Destroy.
+     *
+     * Typed `void*` (a `UIChildren*`) to avoid a circular include with
+     * children.h, which already includes rect.h — same convention as
+     * `UIScroll.background`. Cast to `UIChildren*` at the use sites.
+     */
+    void* children;
+    float paddingLeft;         /**< Inner left padding for children (pixels). */
+    float paddingTop;          /**< Inner top padding for children (pixels). */
+    float paddingRight;        /**< Inner right padding for children (pixels). */
+    float paddingBottom;       /**< Inner bottom padding for children (pixels). */
+    float gap;                 /**< Vertical gap between consecutive children (pixels). */
 } UIRectangle;
 
 /**
@@ -95,6 +115,31 @@ UIRectangle* UIRectangle_SetShadow(UIRectangle* rect, UIShadow shadow);
  * @return The same UIRectangle pointer (for chaining).
  */
 UIRectangle* UIRectangle_ClearShadow(UIRectangle* rect);
+
+/**
+ * Adds a child widget to the rectangle, turning it into a container.
+ * The children list is created lazily on the first call. Children are
+ * laid out top-to-bottom inside the rect's inner padding box, separated
+ * by `gap`. The rectangle takes ownership of `child` and frees it on
+ * Destroy.
+ *
+ * @param rect  Pointer to the UIRectangle.
+ * @param child Child widget (ownership transferred).
+ * @return The same UIRectangle pointer (for chaining), or NULL on error.
+ */
+UIRectangle* UIRectangle_AddChild(UIRectangle* rect, UIWidget* child);
+
+/**
+ * Sets the inner padding applied to the rectangle's children.
+ * @return The same UIRectangle pointer (for chaining).
+ */
+UIRectangle* UIRectangle_SetPadding(UIRectangle* rect, float left, float top, float right, float bottom);
+
+/**
+ * Sets the vertical gap inserted between consecutive children.
+ * @return The same UIRectangle pointer (for chaining).
+ */
+UIRectangle* UIRectangle_SetGap(UIRectangle* rect, float gap);
 
 /**
  * Destroys the UIRectangle object and frees its memory.

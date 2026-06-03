@@ -2,6 +2,10 @@
 #include <uikit/textarea.h>
 #include <uikit/text.h>
 #include <uikit/window.h>
+#include <uikit/stack.h>
+#include <uikit/container.h>
+#include <uikit/rect.h>
+#include <uikit/font.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -63,7 +67,13 @@ UITextField* UITextField_Create(const char* initialText, float fontSize) {
     tf->maxLength = -1;
 
     tf->fontSize         = fontSize > 0.0f ? fontSize : 16.0f;
-    tf->fontFamily       = NULL;
+    // Default to the app's font (like UIText_Create) so the field renders its
+    // text even when no explicit font is set — without this the glyph texture
+    // is never built and typed text stays invisible.
+    {
+        const char* defFont = UIGetDefaultFontPath();
+        tf->fontFamily   = defFont ? _strdup(defFont) : NULL;
+    }
     tf->textColor        = (UIColor){ 15, 23, 42, 1.0f };
     tf->placeholderColor = (UIColor){ 148, 163, 184, 1.0f };
     tf->caretColor       = (UIColor){ 59, 130, 246, 1.0f };
@@ -461,6 +471,79 @@ static void WordAround(const UITextField* tf, int pos, int* outStart, int* outEn
 }
 
 // ---------------------------------------------------------------------
+// Container recursion (mirrors button.c). Without this, a TextField nested in
+// a Stack/Grid/Rectangle never receives focus / keyboard, because the
+// dispatchers only scanned the flat top-level children array.
+// ---------------------------------------------------------------------
+
+static UIChildren* TF_ContainerChildren(UIWidget* w) {
+    if (!w || !w->data) return NULL;
+    UIWidgetBase* base = (UIWidgetBase*)w->data;
+    const char* t = base->__widget_type;
+    if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;
+    if (strcmp(t, UI_WIDGET_GRID) == 0)      return ((UIGrid*)base)->items;
+    if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) return (UIChildren*)((UIRectangle*)base)->children;
+    return NULL;
+}
+
+// Depth-first: the topmost text field under (x, y) anywhere in the subtree.
+static int TF_FindHit(UIChildren* children, float x, float y,
+                      UITextField** outTf, UIWidget** outW) {
+    if (!children) return 0;
+    for (int i = children->count - 1; i >= 0; i--) {
+        UIWidget* w = children->children[i];
+        UITextField* tf = AsTextField(w);
+        if (tf) {
+            if (InsideWidget(w, x, y)) { *outTf = tf; *outW = w; return 1; }
+        } else {
+            UIChildren* kids = TF_ContainerChildren(w);
+            if (kids && TF_FindHit(kids, x, y, outTf, outW)) return 1;
+        }
+    }
+    return 0;
+}
+
+// Recursively blur every field in the subtree except `keep` (keeps the global
+// "only one focused field" invariant across sibling containers).
+static void TF_BlurAllExcept(UIChildren* children, SDL_Window* win, UITextField* keep) {
+    if (!children) return;
+    for (int i = 0; i < children->count; i++) {
+        UIWidget* w = children->children[i];
+        UITextField* tf = AsTextField(w);
+        if (tf) {
+            if (tf == keep) continue;
+            SetFocused(tf, win, 0);
+            tf->mouseSelecting = 0;
+            tf->lastClickMs    = 0;
+            tf->lastClickPos   = -1;
+            tf->clickCount     = 0;
+        } else {
+            UIChildren* kids = TF_ContainerChildren(w);
+            if (kids) TF_BlurAllExcept(kids, win, keep);
+        }
+    }
+}
+
+// Recursively find the focused field anywhere in the subtree.
+static UITextField* TF_FindFocused(UIChildren* children) {
+    if (!children) return NULL;
+    for (int i = 0; i < children->count; i++) {
+        UIWidget* w = children->children[i];
+        UITextField* tf = AsTextField(w);
+        if (tf) {
+            if (tf->focused) return tf;
+        } else {
+            UIChildren* kids = TF_ContainerChildren(w);
+            if (kids) {
+                UITextField* f = TF_FindFocused(kids);
+                if (f) return f;
+            }
+        }
+    }
+    return NULL;
+}
+
+// ---------------------------------------------------------------------
 // Dispatchers
 // ---------------------------------------------------------------------
 
@@ -469,15 +552,11 @@ void UITextField_DispatchMouseDown(UIChildren* children, SDL_Window* win,
     if (!children || button != SDL_BUTTON_LEFT) return;
 
     // First pass: find the topmost text field under the cursor and the
-    // widget that owns it (so we can convert x into local coords).
+    // widget that owns it (so we can convert x into local coords). Recurses
+    // into containers so a nested field is found.
     UITextField* hit    = NULL;
     UIWidget*    hitW   = NULL;
-    for (int i = children->count - 1; i >= 0; i--) {
-        UIWidget* w = children->children[i];
-        UITextField* tf = AsTextField(w);
-        if (!tf) continue;
-        if (InsideWidget(w, x, y)) { hit = tf; hitW = w; break; }
-    }
+    TF_FindHit(children, x, y, &hit, &hitW);
 
     // Unfocus everyone else BEFORE focusing the hit. Order matters:
     // SDL only tracks one active text-input session per window, so a
@@ -485,15 +564,9 @@ void UITextField_DispatchMouseDown(UIChildren* children, SDL_Window* win,
     // old one would leave SDL with text input OFF even though our
     // internal `focused` flag says otherwise. By stopping first and
     // starting last we keep the SDL state consistent with our flags.
-    for (int i = 0; i < children->count; i++) {
-        UITextField* tf = AsTextField(children->children[i]);
-        if (!tf || tf == hit) continue;
-        SetFocused(tf, win, 0);
-        tf->mouseSelecting = 0;
-        tf->lastClickMs    = 0;
-        tf->lastClickPos   = -1;
-        tf->clickCount     = 0;
-    }
+    // Recurses across the whole tree so a focused field in a sibling
+    // container is blurred too.
+    TF_BlurAllExcept(children, win, hit);
 
     if (hit) {
         UITextField* tf = hit;
@@ -555,7 +628,12 @@ void UITextField_DispatchMouseMotion(UIChildren* children, float x, float y) {
     for (int i = 0; i < children->count; i++) {
         UIWidget* w = children->children[i];
         UITextField* tf = AsTextField(w);
-        if (!tf || !tf->mouseSelecting) continue;
+        if (!tf) {
+            UIChildren* kids = TF_ContainerChildren(w);
+            if (kids) UITextField_DispatchMouseMotion(kids, x, y);
+            continue;
+        }
+        if (!tf->mouseSelecting) continue;
         const float localX = x - (w->x + tf->paddingLeft);
         int pos = CaretFromLocalX(tf, localX);
         if (pos > tf->textLen) pos = tf->textLen;
@@ -569,23 +647,23 @@ void UITextField_DispatchMouseMotion(UIChildren* children, float x, float y) {
 }
 
 void UITextField_DispatchMouseUp(UIChildren* children, float x, float y, int button) {
-    (void)x; (void)y;
     if (!children || button != SDL_BUTTON_LEFT) return;
     for (int i = 0; i < children->count; i++) {
-        UITextField* tf = AsTextField(children->children[i]);
-        if (!tf) continue;
+        UIWidget* w = children->children[i];
+        UITextField* tf = AsTextField(w);
+        if (!tf) {
+            UIChildren* kids = TF_ContainerChildren(w);
+            if (kids) UITextField_DispatchMouseUp(kids, x, y, button);
+            continue;
+        }
         tf->mouseSelecting = 0;
     }
 }
 
 void UITextField_DispatchTextInput(UIChildren* children, const char* text) {
     if (!children || !text || !*text) return;
-    for (int i = 0; i < children->count; i++) {
-        UITextField* tf = AsTextField(children->children[i]);
-        if (!tf || !tf->focused) continue;
-        InsertChars(tf, text, (int)strlen(text));
-        return;
-    }
+    UITextField* tf = TF_FindFocused(children);
+    if (tf) InsertChars(tf, text, (int)strlen(text));
 }
 
 // Picks out the selected substring as a heap-allocated copy. Caller
@@ -607,8 +685,14 @@ void UITextField_DispatchKeyDown(UIChildren* children, SDL_Window* win,
                                  SDL_Scancode key, Uint16 mod) {
     if (!children) return;
     for (int i = 0; i < children->count; i++) {
-        UITextField* tf = AsTextField(children->children[i]);
-        if (!tf || !tf->focused) continue;
+        UIWidget* w = children->children[i];
+        UITextField* tf = AsTextField(w);
+        if (!tf) {
+            UIChildren* kids = TF_ContainerChildren(w);
+            if (kids) UITextField_DispatchKeyDown(kids, win, key, mod);
+            continue;
+        }
+        if (!tf->focused) continue;
 
         const int ctrl  = (mod & SDL_KMOD_CTRL)  != 0;
         const int shift = (mod & SDL_KMOD_SHIFT) != 0;

@@ -1,4 +1,5 @@
 #include <uikit/rect.h>
+#include <uikit/children.h>
 #include <uikit/debug.h>
 
 UIRectangle* UIRectangle_Create() {
@@ -20,6 +21,42 @@ UIRectangle* UIRectangle_Create() {
     rect->hasShadow = 0;
     rect->shadow = UI_SHADOW_NONE;
 
+    // Container support: leaf by default (no children allocated).
+    rect->children = NULL;
+    rect->paddingLeft = 0;
+    rect->paddingTop = 0;
+    rect->paddingRight = 0;
+    rect->paddingBottom = 0;
+    rect->gap = 0;
+
+    return rect;
+}
+
+UIRectangle* UIRectangle_AddChild(UIRectangle* rect, UIWidget* child) {
+    if (!rect || !child) return NULL;
+    if (!rect->children) {
+        rect->children = UIChildren_Create(8);
+        if (!rect->children) {
+            UI_ERROR(UI_CAT_WIDGET, "out of memory allocating UIRectangle children");
+            return NULL;
+        }
+    }
+    UIChildren_Add((UIChildren*)rect->children, child);
+    return rect;
+}
+
+UIRectangle* UIRectangle_SetPadding(UIRectangle* rect, float left, float top, float right, float bottom) {
+    if (!rect) return NULL;
+    rect->paddingLeft = left;
+    rect->paddingTop = top;
+    rect->paddingRight = right;
+    rect->paddingBottom = bottom;
+    return rect;
+}
+
+UIRectangle* UIRectangle_SetGap(UIRectangle* rect, float gap) {
+    if (!rect) return NULL;
+    rect->gap = gap;
     return rect;
 }
 
@@ -67,6 +104,11 @@ UIRectangle* UIRectangle_SetBorderColor(UIRectangle* rect, UIColor color) {
 
 void UIRectangle_Destroy(UIRectangle* rect) {
     if (rect) {
+        // Free owned children (the list also destroys each child widget).
+        if (rect->children) {
+            UIChildren_Destroy((UIChildren*)rect->children);
+            rect->children = NULL;
+        }
         // __widget_type points at a string literal (UI_WIDGET_RECTANGLE);
         // calling free() on it would be undefined behaviour.
         free(rect);

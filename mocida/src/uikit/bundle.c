@@ -134,10 +134,35 @@ static int parse_str(const char** pp, char* out, size_t cap) {
     return 1;
 }
 
+// True for an absolute path on Windows (`C:\`, `C:/`, `\`) or Unix (`/`).
+static int is_abs_path(const char* s) {
+    if (!s || !*s) return 0;
+    if (s[0] == '/' || s[0] == '\\') return 1;
+    int drive = ((s[0] >= 'A' && s[0] <= 'Z') || (s[0] >= 'a' && s[0] <= 'z')) && s[1] == ':';
+    return drive;
+}
+
 int UIApp_LoadBundleManifest(const char* path) {
     if (!path) return 0;
     FILE* f = fopen(path, "rb");
     if (!f) return 0;
+
+    // The bundle's own directory (with trailing separator), so relative asset
+    // paths resolve against the bundle — not the process CWD or the exe dir.
+    char bundle_dir[1024] = "";
+    {
+        const char* slash = NULL;
+        for (const char* q = path; *q; q++) {
+            if (*q == '/' || *q == '\\') slash = q;
+        }
+        if (slash) {
+            size_t n = (size_t)(slash - path) + 1;
+            if (n < sizeof(bundle_dir)) {
+                memcpy(bundle_dir, path, n);
+                bundle_dir[n] = '\0';
+            }
+        }
+    }
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
@@ -175,7 +200,16 @@ int UIApp_LoadBundleManifest(const char* path) {
                 if (*p != ':') { ok = 0; break; }
                 p = skip_ws(p + 1);
                 if (!parse_str(&p, av, sizeof(av))) { ok = 0; break; }
-                UIApp_SetBundle(ak, av);
+                // Resolve a relative asset path against the bundle's directory
+                // so `"logo.png": "assets/logo.png"` finds the file next to the
+                // bundle regardless of the working directory.
+                if (bundle_dir[0] && !is_abs_path(av)) {
+                    char full[1024];
+                    snprintf(full, sizeof(full), "%s%s", bundle_dir, av);
+                    UIApp_SetBundle(ak, full);
+                } else {
+                    UIApp_SetBundle(ak, av);
+                }
             }
         } else if (*p == '"') {
             if (!parse_str(&p, val, sizeof(val))) { ok = 0; break; }

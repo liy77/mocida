@@ -1,4 +1,7 @@
 #include <uikit/controls.h>
+#include <uikit/stack.h>
+#include <uikit/container.h>
+#include <uikit/rect.h>
 #include <SDL3/SDL.h>          // for SDL_BUTTON_LEFT
 #include <stdlib.h>
 #include <string.h>
@@ -392,6 +395,7 @@ UIRadioButton* UIRadio_Create(void* group, int initialSelected) {
     r->__widget_type = UI_WIDGET_RADIO;
     r->group         = group;
     r->selected      = initialSelected ? 1 : 0;
+    r->enabled       = 1;
     r->_phase        = r->selected ? 1.0f : 0.0f;
     r->boxColor      = (UIColor){ 255, 255, 255, 1.0f };
     r->dotColor      = (UIColor){ 59, 130, 246, 1.0f };
@@ -405,6 +409,11 @@ UIRadioButton* UIRadio_Create(void* group, int initialSelected) {
 
 UIRadioButton* UIRadio_SetCursor(UIRadioButton* r, UICursor cursor) {
     if (r) r->cursor = cursor;
+    return r;
+}
+
+UIRadioButton* UIRadio_SetEnabled(UIRadioButton* r, int enabled) {
+    if (r) r->enabled = enabled ? 1 : 0;
     return r;
 }
 
@@ -480,12 +489,30 @@ static int InsideRect(float x, float y, float rx, float ry, float rw, float rh) 
     return (x >= rx && x < rx + rw && y >= ry && y < ry + rh);
 }
 
+// Child list of a container (Stack/Grid/Rectangle), so the control dispatch can
+// recurse into nested checkboxes/radios/switches/sliders. NULL for non-
+// containers. Mirrors button.c / textfield.c. Without this, controls nested in
+// a Stack never receive clicks.
+static UIChildren* CtlContainerChildren(UIWidget* w) {
+    if (!w || !w->data) return NULL;
+    UIWidgetBase* base = (UIWidgetBase*)w->data;
+    const char* t = base->__widget_type;
+    if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;
+    if (strcmp(t, UI_WIDGET_GRID) == 0)      return ((UIGrid*)base)->items;
+    if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) return (UIChildren*)((UIRectangle*)base)->children;
+    return NULL;
+}
+
 void UIControls_DispatchMouseMotion(UIChildren* children, float x, float y) {
     if (!children) return;
     for (int i = 0; i < children->count; i++) {
         UIWidget* w = children->children[i];
         if (!w || !w->visible || !w->data || !w->width || !w->height) continue;
         UIWidgetBase* base = (UIWidgetBase*)w->data;
+
+        // Containers: recurse so nested controls get hover feedback too.
+        UIChildren* kids = CtlContainerChildren(w);
+        if (kids) { UIControls_DispatchMouseMotion(kids, x, y); continue; }
 
         // Checkbox: just hover/press feedback.
         if (!strcmp(base->__widget_type, UI_WIDGET_CHECKBOX)) {
@@ -538,6 +565,11 @@ void UIControls_DispatchMouseDown(UIChildren* children, float x, float y, int bu
         if (!InsideRect(x, y, w->x, w->y, *w->width, *w->height)) continue;
         UIWidgetBase* base = (UIWidgetBase*)w->data;
 
+        // Containers: the click is inside this container's bounds, so the hit
+        // control (if any) is nested here — recurse and stop.
+        UIChildren* kids = CtlContainerChildren(w);
+        if (kids) { UIControls_DispatchMouseDown(kids, x, y, button); return; }
+
         if (!strcmp(base->__widget_type, UI_WIDGET_CHECKBOX)) {
             UICheckbox* c = (UICheckbox*)base;
             c->pressed = 1;
@@ -550,7 +582,7 @@ void UIControls_DispatchMouseDown(UIChildren* children, float x, float y, int bu
         }
         if (!strcmp(base->__widget_type, UI_WIDGET_RADIO)) {
             UIRadioButton* r = (UIRadioButton*)base;
-            r->pressed = 1;
+            if (r->enabled) r->pressed = 1;
             return;
         }
         if (!strcmp(base->__widget_type, UI_WIDGET_SLIDER)) {
@@ -581,6 +613,11 @@ void UIControls_DispatchMouseUp(UIChildren* children, float x, float y, int butt
         if (!w || !w->data || !w->width || !w->height) continue;
         UIWidgetBase* base = (UIWidgetBase*)w->data;
 
+        // Containers: recurse (radio sibling-deselect then runs within the
+        // nested level, where same-group radios actually sit together).
+        UIChildren* kids = CtlContainerChildren(w);
+        if (kids) { UIControls_DispatchMouseUp(kids, x, y, button); continue; }
+
         if (!strcmp(base->__widget_type, UI_WIDGET_CHECKBOX)) {
             UICheckbox* c = (UICheckbox*)base;
             if (c->pressed && c->hovered) {
@@ -601,7 +638,7 @@ void UIControls_DispatchMouseUp(UIChildren* children, float x, float y, int butt
         }
         if (!strcmp(base->__widget_type, UI_WIDGET_RADIO)) {
             UIRadioButton* r = (UIRadioButton*)base;
-            if (r->pressed && r->hovered && !r->selected) {
+            if (r->enabled && r->pressed && r->hovered && !r->selected) {
                 r->selected = 1;
                 if (r->animMs <= 0) r->_phase = 1.0f;
                 // Deselect siblings in the same group.
