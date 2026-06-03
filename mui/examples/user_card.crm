@@ -1,0 +1,36 @@
+// user_card.crm — async data + reactive effects + match-based rendering.
+//
+// Copper syntax throughout: `mut x =` bindings, `Some`/`None`/`Ok`/`Err`
+// variants, `match` arms separated by commas, `effect { ... }` for reactive
+// side effects.
+
+import { fetch_user, User } from api
+
+view UserCard(id: int) {
+  mut user = signal(None)        // Option<User>
+  mut error = signal(None)
+
+  // `effect` re-runs whenever a signal it reads changes. Reading `id`
+  // (a prop) re-fetches when the card is reused with a new id.
+  effect {
+    user.set(None)
+    match fetch_user(id) {
+      Ok(u)  => user.set(Some(u)),
+      Err(e) => error.set(Some(e)),
+    }
+  }
+
+  Stack(orientation: vertical, gap: 10, padding: 16) {
+    match user.get() {
+      Some(u) => Stack(orientation: vertical, gap: 6) {
+        Image(u.avatar_url, fillMode: FillMode.Cover, key: u.id)
+        Text(u.name, size: 20, fontStyle: FontStyle.Bold)
+        Text(u.email, size: 13, color: #64748b)
+      },
+      None => match error.get() {
+        Some(e) => Text("Failed: ${e}", color: #ef4444),
+        None    => Spinner(radius: 14),
+      },
+    }
+  }
+}

@@ -1,0 +1,33 @@
+// counter.mui — state, bindings, events, and control flow in pure markup.
+//
+// State uses Copper's own declaration syntax: `mut name = value` for a
+// mutable binding, bare `name = value` for an immutable one. There is no
+// `let` in Copper. `signal(...)` wraps the value in a mocida Signal (the
+// reactive primitive); any expression that READS a signal (here `${count}`
+// and `value: count`) subscribes that spot, so only the affected widget
+// updates when the value changes — no full-tree rebuild.
+
+view Counter(start: int = 0, step: int = 1) {
+  mut count = signal(start)
+
+  Stack(orientation: vertical, gap: 12, padding: 16) {
+    TextArea("Text Area here", )
+    Text("Count: ${count}", size: 24, color: #0f172a)
+
+    Stack(orientation: horizontal, gap: 8) {
+      Button("-", size: 18, onClick: { count -= step })
+      Button("+", size: 18, onClick: { count += step })
+    }
+
+    // Two-way binding: dragging the slider writes `count`, and setting
+    // `count` elsewhere moves the slider.
+    Slider(min: 0, max: 100, value: count)
+
+    // Conditional subtree — re-evaluated reactively when `count` changes.
+    if count > 10 {
+      Text("That's a lot!", size: 14, color: #ef4444)
+    } else {
+      Text("Keep going...", size: 14, color: #64748b)
+    }
+  }
+}

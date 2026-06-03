@@ -1,0 +1,16 @@
+[package]
+name = "mui-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MUI dev runtime: builds + reconciles a mocida widget tree from the MUI component AST (see mocida/mui/ARCHITECTURE.md)."
+
+[dependencies]
+mocida = { path = "../mocida" }
+# The MUI parser + component AST live in the copper-lang repo, next to
+# copper-syntax. Referenced by relative path (the two repos sit side by side).
+mui-syntax = { path = "../../../copper-lang/crates/mui-syntax" }
+copper-syntax = { path = "../../../copper-lang/crates/copper-syntax" }

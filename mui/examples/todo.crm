@@ -1,0 +1,66 @@
+// todo.crm — a .crm file is Copper + Mocida ("the TSX of mocida"): the full
+// Copper language (imports, `func`, `struct`, `match`, async) living alongside
+// `view` blocks. Same component AST as .mui; the difference is that .crm
+// unlocks the entire Copper language around the views.
+//
+// Note the Copper syntax: `func void name(...)` for functions (not `fn`),
+// `mut x =` / `x =` for bindings (no `let`), `|x| ...` closures, `cond ? a : b`
+// ternaries.
+
+import * from std.io
+
+struct Todo {
+  id: int,
+  title: string,
+  done: bool,
+}
+
+// A reusable child view. Views compose like functions: call `TodoRow(...)`.
+view TodoRow(todo: Todo, onToggle: fn(int)) {
+  Stack(orientation: horizontal, gap: 8, key: todo.id) {
+    Checkbox(value: todo.done, onChange: { onToggle(todo.id) })
+    Text(todo.title, size: 16,
+         color: todo.done ? #94a3b8 : #0f172a,
+         fontStyle: todo.done ? FontStyle.Strikethrough : FontStyle.Normal)
+  }
+}
+
+view TodoApp() {
+  mut todos = signal([
+    Todo { id: 1, title: "Design the .mui grammar", done: true },
+    Todo { id: 2, title: "Wire the dev runtime", done: false },
+    Todo { id: 3, title: "JIT the handlers", done: false },
+  ])
+  mut draft = signal("")
+
+  func void add() {
+    if draft.get().len() == 0 {
+      return
+    }
+    todos.push(Todo { id: todos.len() + 1, title: draft.get(), done: false })
+    draft.set("")
+  }
+
+  func void toggle(id: int) {
+    todos.update(|list| list.map(|t|
+      t.id == id ? Todo { id: t.id, title: t.title, done: !t.done } : t))
+  }
+
+  Stack(orientation: vertical, gap: 12, padding: 20) {
+    Text("Todos", size: 28, fontStyle: FontStyle.Bold)
+
+    Stack(orientation: horizontal, gap: 8) {
+      TextField(value: draft, placeholder: "What needs doing?")
+      Button("Add", onClick: { add() })
+    }
+
+    // Lists map a collection to child views; `key:` drives reconciliation.
+    ListView(gap: 6) {
+      for todo in todos {
+        TodoRow(todo: todo, onToggle: toggle, key: todo.id)
+      }
+    }
+
+    Text("${todos.filter(|t| !t.done).len()} left", size: 12, color: #64748b)
+  }
+}

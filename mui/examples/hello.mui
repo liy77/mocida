@@ -1,0 +1,13 @@
+// hello.mui — the smallest MUI document.
+//
+// A .mui file is pure markup (the "view" layer). It may contain one or more
+// `view` functions; the first public one is the entry view unless told
+// otherwise. Bindings and small handlers are written as Copper expressions
+// inside `{ ... }` / `${ ... }`.
+
+view Hello(name: string = "world") {
+  Stack(orientation: vertical, gap: 12, padding: 24) {
+    Text("Hello, ${name}!", size: 28, color: #0f172a)
+    Text("Built with mocida + copper.", size: 14, color: #64748b)
+  }
+}

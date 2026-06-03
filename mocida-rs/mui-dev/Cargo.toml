@@ -1,0 +1,14 @@
+[package]
+name = "mui-dev"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MUI live-design host: render a .mui / .crm file in a mocida window (M1: static render; hot-reload arrives in M2)."
+
+[dependencies]
+mocida = { path = "../mocida" }
+mui-runtime = { path = "../mui-runtime" }
+mui-syntax = { path = "../../../copper-lang/crates/mui-syntax" }
