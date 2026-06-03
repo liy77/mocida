@@ -92,7 +92,10 @@ impl WebView {
     /// start blank.
     pub fn new(initial_url: Option<&str>) -> Result<Self> {
         let url_c = initial_url.map(CString::new).transpose()?;
-        let url_ptr = url_c.as_ref().map(|c| c.as_ptr()).unwrap_or(std::ptr::null());
+        let url_ptr = url_c
+            .as_ref()
+            .map(|c| c.as_ptr())
+            .unwrap_or(std::ptr::null());
         let ptr = unsafe { sys::UIWebView_Create(url_ptr) };
         if ptr.is_null() {
             return Err(Error::Null("UIWebView_Create"));
@@ -121,7 +124,10 @@ impl WebView {
         if p.is_null() {
             None
         } else {
-            unsafe { CStr::from_ptr(p) }.to_str().ok().map(str::to_owned)
+            unsafe { CStr::from_ptr(p) }
+                .to_str()
+                .ok()
+                .map(str::to_owned)
         }
     }
 
@@ -191,7 +197,10 @@ impl WebView {
         if p.is_null() {
             None
         } else {
-            unsafe { CStr::from_ptr(p) }.to_str().ok().map(str::to_owned)
+            unsafe { CStr::from_ptr(p) }
+                .to_str()
+                .ok()
+                .map(str::to_owned)
         }
     }
 
@@ -279,7 +288,9 @@ impl WebView {
             handler: Box::new(handler),
         });
         let userdata = Box::as_ref(&state) as *const ProcessFailedState as *mut c_void;
-        unsafe { sys::UIWebView_OnProcessFailed(self.ptr, Some(process_failed_trampoline), userdata) };
+        unsafe {
+            sys::UIWebView_OnProcessFailed(self.ptr, Some(process_failed_trampoline), userdata)
+        };
         self.process_failed_cb = Some(state);
         self
     }
@@ -326,11 +337,26 @@ impl Drop for WebView {
             return;
         }
         for slot in [
-            self.ready_cb.take().map(Box::into_raw).map(|p| p as *mut ()),
-            self.url_change_cb.take().map(Box::into_raw).map(|p| p as *mut ()),
-            self.loading_cb.take().map(Box::into_raw).map(|p| p as *mut ()),
-            self.process_failed_cb.take().map(Box::into_raw).map(|p| p as *mut ()),
-            self.request_cb.take().map(Box::into_raw).map(|p| p as *mut ()),
+            self.ready_cb
+                .take()
+                .map(Box::into_raw)
+                .map(|p| p as *mut ()),
+            self.url_change_cb
+                .take()
+                .map(Box::into_raw)
+                .map(|p| p as *mut ()),
+            self.loading_cb
+                .take()
+                .map(Box::into_raw)
+                .map(|p| p as *mut ()),
+            self.process_failed_cb
+                .take()
+                .map(Box::into_raw)
+                .map(|p| p as *mut ()),
+            self.request_cb
+                .take()
+                .map(Box::into_raw)
+                .map(|p| p as *mut ()),
         ]
         .into_iter()
         .flatten()

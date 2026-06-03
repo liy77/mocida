@@ -111,10 +111,16 @@ pub struct App {
     has_children: bool,
     /// Heap-stored tray menu-item callbacks, kept alive for the app's life.
     tray_cbs: Vec<Box<TrayState>>,
+    /// Heap-stored per-frame tick callback, kept alive for the app's lifetime.
+    tick_cb: Option<Box<TickState>>,
 }
 
 struct ResizeState {
     handler: Box<dyn FnMut(i32, i32) + 'static>,
+}
+
+struct TickState {
+    handler: Box<dyn FnMut() + 'static>,
 }
 
 struct TrayState {
@@ -139,6 +145,7 @@ impl App {
             event_cbs: Vec::new(),
             has_children: false,
             tray_cbs: Vec::new(),
+            tick_cb: None,
         })
     }
 
@@ -181,6 +188,24 @@ impl App {
         self
     }
 
+    /// Sets the minimum window size the user can resize to (desktop only).
+    /// Mirrors `UIApp_SetMinSize` / `SDL_SetWindowMinimumSize`.
+    pub fn set_min_size(&mut self, width: i32, height: i32) -> &mut Self {
+        unsafe {
+            sys::UIApp_SetMinSize(self.ptr, width, height);
+        }
+        self
+    }
+
+    /// Sets the maximum window size the user can resize to (desktop only).
+    /// Mirrors `UIApp_SetMaxSize` / `SDL_SetWindowMaximumSize`.
+    pub fn set_max_size(&mut self, width: i32, height: i32) -> &mut Self {
+        unsafe {
+            sys::UIApp_SetMaxSize(self.ptr, width, height);
+        }
+        self
+    }
+
     /// Sets the window position.
     pub fn set_window_position(&mut self, x: i32, y: i32) -> &mut Self {
         unsafe {
@@ -189,7 +214,7 @@ impl App {
         self
     }
 
-    /// Switches the render backend.
+    /// Switches the render backend (recreates the renderer).
     pub fn set_render_driver(&mut self, driver: RenderDriver) -> &mut Self {
         unsafe {
             sys::UIApp_SetRenderDriver(self.ptr, driver as sys::UIRenderDriver);
@@ -200,7 +225,7 @@ impl App {
     /// Shortcut for `UIApp_SetMSAASamples`.
     pub fn set_render_quality(&mut self, quality: RenderQuality) -> &mut Self {
         unsafe {
-            sys::UIApp_SetRenderQuality(self.ptr, sys::UIRenderQuality(quality as u32));
+            sys::UIApp_SetRenderQuality(self.ptr, sys::UIRenderQuality(quality as i32));
         }
         self
     }
@@ -216,7 +241,7 @@ impl App {
     /// Selects the AA pipeline.
     pub fn set_aa_mode(&mut self, mode: AAMode) -> &mut Self {
         unsafe {
-            sys::UIApp_SetAAMode(self.ptr, sys::UIAAMode(mode as u32));
+            sys::UIApp_SetAAMode(self.ptr, sys::UIAAMode(mode as i32));
         }
         self
     }
@@ -379,6 +404,26 @@ impl App {
         self
     }
 
+    /// Registers a per-frame tick handler: it runs once at the top of every
+    /// main-loop iteration on the UI thread (before events / render). Keep it
+    /// light — it fires every frame. Intended for cheap per-frame work like
+    /// polling a hot-reload flag and swapping the tree via [`App::set_children`].
+    /// Replaces any previous tick handler.
+    pub fn on_tick<F>(&mut self, handler: F) -> &mut Self
+    where
+        F: FnMut() + 'static,
+    {
+        let state = Box::new(TickState {
+            handler: Box::new(handler),
+        });
+        let userdata = Box::as_ref(&state) as *const TickState as *mut c_void;
+        unsafe {
+            sys::UIApp_OnTick(self.ptr, Some(tick_trampoline), userdata);
+        }
+        self.tick_cb = Some(state);
+        self
+    }
+
     /// Registers a callback for a mocida event.
     pub fn on_event<F>(&mut self, event: crate::event::Event, handler: F) -> &mut Self
     where
@@ -467,6 +512,16 @@ extern "C" fn resize_trampoline(width: c_int, height: c_int, userdata: *mut c_vo
     // payload, kept alive on the owning App.
     let state = unsafe { &mut *(userdata as *mut ResizeState) };
     (state.handler)(width, height);
+}
+
+extern "C" fn tick_trampoline(userdata: *mut c_void) {
+    if userdata.is_null() {
+        return;
+    }
+    // Safety: `userdata` is the address of `Box<TickState>`'s heap payload,
+    // kept alive on the owning App for its whole lifetime.
+    let state = unsafe { &mut *(userdata as *mut TickState) };
+    (state.handler)();
 }
 
 thread_local! {

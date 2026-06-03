@@ -7,6 +7,7 @@ use mocida_sys as sys;
 use crate::color::Color;
 use crate::cursor::Cursor;
 use crate::error::{Error, Result};
+use crate::text::FontStyle;
 use crate::widget::Widget;
 
 /// Single-line editable text input.
@@ -55,7 +56,10 @@ impl TextField {
         if p.is_null() {
             None
         } else {
-            unsafe { CStr::from_ptr(p) }.to_str().ok().map(str::to_owned)
+            unsafe { CStr::from_ptr(p) }
+                .to_str()
+                .ok()
+                .map(str::to_owned)
         }
     }
 
@@ -115,11 +119,53 @@ impl TextField {
         self
     }
 
+    /// Sets the placeholder glyph color (shown when the field is empty).
+    pub fn placeholder_color(self, color: Color) -> Self {
+        unsafe { sys::UITextField_SetPlaceholderColor(self.ptr, color.into_raw()) };
+        self
+    }
+
+    /// Sets the caret (text cursor) color.
+    pub fn caret_color(self, color: Color) -> Self {
+        unsafe { sys::UITextField_SetCaretColor(self.ptr, color.into_raw()) };
+        self
+    }
+
+    /// Sets the highlight color drawn behind selected glyphs.
+    pub fn selection_color(self, color: Color) -> Self {
+        unsafe { sys::UITextField_SetSelectionColor(self.ptr, color.into_raw()) };
+        self
+    }
+
+    /// Sets the font style bitmask (e.g. `FontStyle::BOLD | FontStyle::ITALIC`).
+    pub fn font_style(self, style: FontStyle) -> Self {
+        unsafe { sys::UITextField_SetFontStyle(self.ptr, style.bits()) };
+        self
+    }
+
     /// Sets border (normal, focused, width).
     pub fn border(self, normal: Color, focused: Color, width: f32) -> Self {
         unsafe {
             sys::UITextField_SetBorder(self.ptr, normal.into_raw(), focused.into_raw(), width)
         };
+        self
+    }
+
+    /// Sets only the unfocused border color.
+    pub fn border_color(self, color: Color) -> Self {
+        unsafe { sys::UITextField_SetBorderColor(self.ptr, color.into_raw()) };
+        self
+    }
+
+    /// Sets only the focused border color.
+    pub fn border_color_focused(self, color: Color) -> Self {
+        unsafe { sys::UITextField_SetBorderColorFocused(self.ptr, color.into_raw()) };
+        self
+    }
+
+    /// Sets the border thickness in pixels.
+    pub fn border_width(self, width: f32) -> Self {
+        unsafe { sys::UITextField_SetBorderWidth(self.ptr, width) };
         self
     }
 

@@ -89,9 +89,11 @@ impl Children {
         self.ptr
     }
 
-    /// Consume the wrapper and return the raw pointer. Used when
-    /// handing ownership to an [`App`](crate::App).
-    pub(crate) fn into_raw(mut self) -> *mut sys::UIChildren {
+    /// Consume the wrapper and return the raw pointer, transferring ownership
+    /// to the caller (typically handed to an [`App`](crate::App) via
+    /// `UIApp_SetChildren`). Public so a hot-reload loop can swap the tree
+    /// from a context that only holds the raw `*mut UIApp`.
+    pub fn into_raw(mut self) -> *mut sys::UIChildren {
         self.moved = true;
         self.ptr
     }

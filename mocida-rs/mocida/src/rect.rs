@@ -83,6 +83,35 @@ impl Rectangle {
         self
     }
 
+    /// Adds a child widget, turning the rectangle into a container. The
+    /// rectangle takes ownership of `child` and lays its children out
+    /// top-to-bottom inside its padding box, separated by [`gap`].
+    ///
+    /// [`gap`]: Rectangle::gap
+    pub fn add_child(&mut self, child: Widget) {
+        let raw = child.into_raw();
+        unsafe {
+            sys::UIRectangle_AddChild(self.ptr, raw);
+        }
+    }
+
+    /// Sets the inner padding applied to the rectangle's children
+    /// (left, top, right, bottom).
+    pub fn padding(self, left: f32, top: f32, right: f32, bottom: f32) -> Self {
+        unsafe {
+            sys::UIRectangle_SetPadding(self.ptr, left, top, right, bottom);
+        }
+        self
+    }
+
+    /// Sets the vertical gap inserted between consecutive children.
+    pub fn gap(self, gap: f32) -> Self {
+        unsafe {
+            sys::UIRectangle_SetGap(self.ptr, gap);
+        }
+        self
+    }
+
     /// Consume the wrapper and hand the raw `UIRectangle*` to a C API
     /// that takes ownership (e.g. `UIText_SetBackground`). Suppresses
     /// the Rust-side destructor.

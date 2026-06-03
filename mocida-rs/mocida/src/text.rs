@@ -35,6 +35,16 @@ impl FontStyle {
         self.0
     }
 
+    /// Build a `FontStyle` from a raw bitmask (the inverse of [`bits`]). Bits
+    /// outside the four known flags are masked off. Useful for callers that
+    /// compute the style as an integer (e.g. MUI's style extraction).
+    ///
+    /// [`bits`]: FontStyle::bits
+    #[inline]
+    pub const fn from_bits(bits: i32) -> FontStyle {
+        FontStyle(bits & 0b1111)
+    }
+
     /// `true` if every flag in `other` is set.
     #[inline]
     pub const fn contains(self, other: FontStyle) -> bool {
@@ -179,7 +189,7 @@ impl Text {
     /// Selects the wrap strategy.
     pub fn wrap_mode(self, mode: WrapMode) -> Self {
         unsafe {
-            sys::UIText_SetWrapMode(self.ptr, sys::UIWrapMode(mode as u32));
+            sys::UIText_SetWrapMode(self.ptr, sys::UIWrapMode(mode as i32));
         }
         self
     }
@@ -195,7 +205,7 @@ impl Text {
     /// Sets horizontal alignment within the widget bounds.
     pub fn h_align(self, align: TextHAlign) -> Self {
         unsafe {
-            sys::UIText_SetHAlign(self.ptr, sys::UITextHAlign(align as u32));
+            sys::UIText_SetHAlign(self.ptr, sys::UITextHAlign(align as i32));
         }
         self
     }
@@ -203,7 +213,7 @@ impl Text {
     /// Sets vertical alignment within the widget bounds.
     pub fn v_align(self, align: TextVAlign) -> Self {
         unsafe {
-            sys::UIText_SetVAlign(self.ptr, sys::UITextVAlign(align as u32));
+            sys::UIText_SetVAlign(self.ptr, sys::UITextVAlign(align as i32));
         }
         self
     }

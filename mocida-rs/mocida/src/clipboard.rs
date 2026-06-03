@@ -14,7 +14,10 @@ pub fn get_text() -> Option<String> {
         return None;
     }
     // Safety: mocida hands us an owned buffer; we copy it out then free.
-    let s = unsafe { CStr::from_ptr(raw) }.to_str().ok().map(str::to_owned);
+    let s = unsafe { CStr::from_ptr(raw) }
+        .to_str()
+        .ok()
+        .map(str::to_owned);
     unsafe { sys::UIClipboard_FreeText(raw) };
     s
 }
@@ -35,4 +38,3 @@ pub fn clear() {
 pub fn has_text() -> bool {
     unsafe { sys::UIClipboard_HasText() != 0 }
 }
-

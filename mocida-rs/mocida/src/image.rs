@@ -63,12 +63,7 @@ impl Image {
     }
 
     /// Creates an image with a full configuration.
-    pub fn new(
-        source: &str,
-        animated: bool,
-        fill_mode: FillMode,
-        tint: Color,
-    ) -> Result<Self> {
+    pub fn new(source: &str, animated: bool, fill_mode: FillMode, tint: Color) -> Result<Self> {
         let c = CString::new(source)?;
         let ptr = unsafe {
             sys::UIImage_Create(

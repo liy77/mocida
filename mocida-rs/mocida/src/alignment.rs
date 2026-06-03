@@ -84,7 +84,10 @@ impl Align {
     fn into_raw(self) -> sys::UIAlign {
         sys::UIAlign {
             value: self.value,
-            target_widget: self.target.map(|p| p as *mut c_void).unwrap_or(std::ptr::null_mut()),
+            target_widget: self
+                .target
+                .map(|p| p as *mut c_void)
+                .unwrap_or(std::ptr::null_mut()),
         }
     }
 }
@@ -126,7 +129,9 @@ impl Widget {
 
     /// Aligns against the parent using vertical + horizontal masks.
     pub fn align_to_parent(&self, vertical: VerticalAlign, horizontal: HorizontalAlign) -> &Self {
-        unsafe { sys::UIWidget_SetAlignmentByParent(self.as_ptr(), vertical.bits(), horizontal.bits()) };
+        unsafe {
+            sys::UIWidget_SetAlignmentByParent(self.as_ptr(), vertical.bits(), horizontal.bits())
+        };
         self
     }
 }

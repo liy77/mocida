@@ -250,9 +250,7 @@ impl<T: SignalValue> Signal<T> {
         });
         let state = Box::new(TrampolineState { handler: erased });
         let userdata = Box::as_ref(&state) as *const TrampolineState as *mut c_void;
-        let raw = unsafe {
-            sys::UISignal_Subscribe(self.ptr, Some(signal_trampoline), userdata)
-        };
+        let raw = unsafe { sys::UISignal_Subscribe(self.ptr, Some(signal_trampoline), userdata) };
         if raw.is_null() {
             return Err(Error::Null("UISignal_Subscribe"));
         }

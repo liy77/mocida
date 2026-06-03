@@ -58,9 +58,7 @@ impl WebViewDComp {
             b: corner_color.b,
             a: corner_color.a,
         };
-        unsafe {
-            sys::UIWebViewDComp_SetBounds(self.ptr, x, y, w, h, border_w, radius, raw)
-        };
+        unsafe { sys::UIWebViewDComp_SetBounds(self.ptr, x, y, w, h, border_w, radius, raw) };
     }
 
     /// Forces a DComp commit.
@@ -118,7 +116,10 @@ impl WebViewDComp {
                 self.ptr,
                 handle,
                 text_c.as_ptr(),
-                family_c.as_ref().map(|c| c.as_ptr()).unwrap_or(std::ptr::null()),
+                family_c
+                    .as_ref()
+                    .map(|c| c.as_ptr())
+                    .unwrap_or(std::ptr::null()),
                 font_size,
                 raw,
                 padding,

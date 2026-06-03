@@ -183,12 +183,7 @@ impl Slider {
     /// Sets all three slider colors at once.
     pub fn colors(self, track: Color, fill: Color, knob: Color) -> Self {
         unsafe {
-            sys::UISlider_SetColors(
-                self.ptr,
-                track.into_raw(),
-                fill.into_raw(),
-                knob.into_raw(),
-            )
+            sys::UISlider_SetColors(self.ptr, track.into_raw(), fill.into_raw(), knob.into_raw())
         };
         self
     }
@@ -651,6 +646,13 @@ impl RadioButton {
     /// Cursor shown while hovering.
     pub fn cursor(self, cursor: Cursor) -> Self {
         unsafe { sys::UIRadio_SetCursor(self.ptr, cursor.into_raw()) };
+        self
+    }
+
+    /// Enables / disables interaction. A disabled radio ignores hover + clicks
+    /// (pair with a reduced widget opacity to grey it out).
+    pub fn enabled(self, enabled: bool) -> Self {
+        unsafe { sys::UIRadio_SetEnabled(self.ptr, enabled as i32) };
         self
     }
 

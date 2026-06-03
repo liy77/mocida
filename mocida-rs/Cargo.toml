@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "mocida-sys",
     "mocida",
+    "mui-runtime",
+    "mui-dev",
 ]
 
 [workspace.package]

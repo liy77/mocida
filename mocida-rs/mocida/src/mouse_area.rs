@@ -138,15 +138,33 @@ impl MouseArea {
         let userdata = Box::as_ref(&state) as *const TrampolineState as *mut c_void;
         unsafe {
             match event {
-                MouseAreaEvent::HoverEnter => sys::UIMouseArea_OnHoverEnter(self.ptr, Some(trampoline), userdata),
-                MouseAreaEvent::HoverExit => sys::UIMouseArea_OnHoverExit(self.ptr, Some(trampoline), userdata),
-                MouseAreaEvent::MouseDown => sys::UIMouseArea_OnMouseDown(self.ptr, Some(trampoline), userdata),
-                MouseAreaEvent::MouseUp => sys::UIMouseArea_OnMouseUp(self.ptr, Some(trampoline), userdata),
-                MouseAreaEvent::MouseMove => sys::UIMouseArea_OnMouseMove(self.ptr, Some(trampoline), userdata),
-                MouseAreaEvent::DoubleClick => sys::UIMouseArea_OnDoubleClick(self.ptr, Some(trampoline), userdata),
-                MouseAreaEvent::DragStart => sys::UIMouseArea_OnDragStart(self.ptr, Some(trampoline), userdata),
-                MouseAreaEvent::Drag => sys::UIMouseArea_OnDrag(self.ptr, Some(trampoline), userdata),
-                MouseAreaEvent::DragEnd => sys::UIMouseArea_OnDragEnd(self.ptr, Some(trampoline), userdata),
+                MouseAreaEvent::HoverEnter => {
+                    sys::UIMouseArea_OnHoverEnter(self.ptr, Some(trampoline), userdata)
+                }
+                MouseAreaEvent::HoverExit => {
+                    sys::UIMouseArea_OnHoverExit(self.ptr, Some(trampoline), userdata)
+                }
+                MouseAreaEvent::MouseDown => {
+                    sys::UIMouseArea_OnMouseDown(self.ptr, Some(trampoline), userdata)
+                }
+                MouseAreaEvent::MouseUp => {
+                    sys::UIMouseArea_OnMouseUp(self.ptr, Some(trampoline), userdata)
+                }
+                MouseAreaEvent::MouseMove => {
+                    sys::UIMouseArea_OnMouseMove(self.ptr, Some(trampoline), userdata)
+                }
+                MouseAreaEvent::DoubleClick => {
+                    sys::UIMouseArea_OnDoubleClick(self.ptr, Some(trampoline), userdata)
+                }
+                MouseAreaEvent::DragStart => {
+                    sys::UIMouseArea_OnDragStart(self.ptr, Some(trampoline), userdata)
+                }
+                MouseAreaEvent::Drag => {
+                    sys::UIMouseArea_OnDrag(self.ptr, Some(trampoline), userdata)
+                }
+                MouseAreaEvent::DragEnd => {
+                    sys::UIMouseArea_OnDragEnd(self.ptr, Some(trampoline), userdata)
+                }
             };
         }
         let slot = event as usize;
@@ -202,7 +220,11 @@ impl MouseAreaEvent {
     }
 }
 
-extern "C" fn trampoline(area: *mut sys::UIMouseArea, ev: sys::UIMouseEvent, userdata: *mut c_void) {
+extern "C" fn trampoline(
+    area: *mut sys::UIMouseArea,
+    ev: sys::UIMouseEvent,
+    userdata: *mut c_void,
+) {
     let _ = area; // not needed; the wrapper would have to be reborrowed and we don't expose mutation here
     if userdata.is_null() {
         return;

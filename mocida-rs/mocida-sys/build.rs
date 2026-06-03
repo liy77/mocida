@@ -34,9 +34,7 @@ fn main() {
 
     // docs.rs / `--features docs-only`: skip everything, ship the
     // pre-generated bindings shipped in src/bindings_prebuilt.rs.
-    if env::var_os("CARGO_FEATURE_DOCS_ONLY").is_some()
-        || env::var_os("DOCS_RS").is_some()
-    {
+    if env::var_os("CARGO_FEATURE_DOCS_ONLY").is_some() || env::var_os("DOCS_RS").is_some() {
         println!("cargo:warning=mocida-sys: docs-only build, skipping bindgen and link.");
         return;
     }
@@ -49,18 +47,17 @@ fn main() {
     //      missed the update),
     //   3. otherwise fall back to the standard installer location
     //      (%LOCALAPPDATA%\Programs\Mocida\include).
-    let include_dir = resolve_dir("MOCIDA_INCLUDE_DIR", "include")
-        .unwrap_or_else(|| {
-            panic!(
-                "MOCIDA_INCLUDE_DIR could not be resolved.\n\n\
+    let include_dir = resolve_dir("MOCIDA_INCLUDE_DIR", "include").unwrap_or_else(|| {
+        panic!(
+            "MOCIDA_INCLUDE_DIR could not be resolved.\n\n\
                  Tried (in order):\n\
                  - $env:MOCIDA_INCLUDE_DIR\n\
                  - HKCU:\\Environment\\MOCIDA_INCLUDE_DIR (Windows)\n\
                  - %LOCALAPPDATA%\\Programs\\Mocida\\include\n\n\
                  Point any of these at the directory containing the `uikit/` header tree, \
                  or build with `--features docs-only` to skip native wiring."
-            )
-        });
+        )
+    });
 
     let lib_dir = resolve_dir("MOCIDA_LIB_DIR", "lib");
     let lib_name = env::var("MOCIDA_LIB_NAME").unwrap_or_else(|_| "mocida".to_string());
@@ -87,14 +84,51 @@ fn main() {
     let link_kind = if link_static { "static" } else { "dylib" };
     println!("cargo:rustc-link-lib={}={}", link_kind, lib_name);
 
+    // A few SDL symbols are part of the generated bindings (timing helpers in
+    // `profile.rs`: SDL_GetPerformanceCounter / *Frequency / GetTicks). When
+    // mocida is a shared lib, its import lib does NOT re-export SDL — SDL is
+    // linked into mocida.dll privately — so those FFI calls are unresolved
+    // unless we also link SDL3's own import lib. A source/`--shared` build
+    // drops it at `<lib_dir>/SDL/SDL3.lib`; the installer layout keeps SDL3.dll
+    // beside mocida.dll with the import lib next to it. Search both and link
+    // SDL3 by name (harmless if the linker finds the symbols elsewhere).
+    if let Some(lib_dir) = &lib_dir {
+        let sdl_subdir = lib_dir.join("SDL");
+        if sdl_subdir.join("SDL3.lib").exists() {
+            println!("cargo:rustc-link-search=native={}", sdl_subdir.display());
+        }
+        // Only add the SDL3 link when an import lib is actually reachable, so a
+        // pure-static mocida (SDL baked in, no separate SDL3.lib) isn't forced
+        // to find one.
+        let has_sdl3_import =
+            lib_dir.join("SDL3.lib").exists() || sdl_subdir.join("SDL3.lib").exists();
+        if !link_static && has_sdl3_import {
+            println!("cargo:rustc-link-lib=dylib=SDL3");
+        }
+    }
+
     // Mocida pulls in WebView2, Media Foundation, DirectComposition, ...
     // Surface the most common Win32 system libs so consumers don't have
     // to repeat them. Harmless when unused (the linker drops them).
     if cfg!(target_os = "windows") {
         for lib in [
-            "user32", "gdi32", "shell32", "ole32", "oleaut32", "uuid",
-            "shcore", "advapi32", "dwmapi", "imm32", "version", "winmm",
-            "setupapi", "mfplat", "mfreadwrite", "mfuuid", "mf",
+            "user32",
+            "gdi32",
+            "shell32",
+            "ole32",
+            "oleaut32",
+            "uuid",
+            "shcore",
+            "advapi32",
+            "dwmapi",
+            "imm32",
+            "version",
+            "winmm",
+            "setupapi",
+            "mfplat",
+            "mfreadwrite",
+            "mfuuid",
+            "mf",
         ] {
             println!("cargo:rustc-link-lib=dylib={}", lib);
         }
@@ -247,7 +281,9 @@ fn stage_runtime_dlls(lib_dir: &PathBuf) {
 
     for src in &dlls {
         println!("cargo:rerun-if-changed={}", src.display());
-        let Some(name) = src.file_name() else { continue };
+        let Some(name) = src.file_name() else {
+            continue;
+        };
         for dest_dir in &dest_dirs {
             let dest = dest_dir.join(name);
             // Only copy when the destination is missing or older —

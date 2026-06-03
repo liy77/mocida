@@ -38,8 +38,7 @@ where
         handler: &mut visitor as &mut dyn FnMut(*mut sys::UIWidget, i32) -> WalkResult,
     };
     let userdata = &mut state as *mut TrampolineState<'_> as *mut c_void;
-    let rc =
-        unsafe { sys::UIWidget_WalkTree(root.as_ptr(), Some(walk_trampoline), userdata) };
+    let rc = unsafe { sys::UIWidget_WalkTree(root.as_ptr(), Some(walk_trampoline), userdata) };
     rc != 0
 }
 

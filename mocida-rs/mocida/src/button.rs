@@ -148,7 +148,11 @@ impl Button {
     /// Replaces the style of a specific state.
     pub fn state_style(self, state: ButtonState, style: ButtonStyle) -> Self {
         unsafe {
-            sys::UIButton_SetStateStyle(self.ptr, sys::UIButtonState(state as i32), style.into_raw());
+            sys::UIButton_SetStateStyle(
+                self.ptr,
+                sys::UIButtonState(state as i32),
+                style.into_raw(),
+            );
         }
         self
     }

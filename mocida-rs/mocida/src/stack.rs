@@ -15,6 +15,33 @@ pub enum StackOrientation {
     Horizontal = 1,
 }
 
+/// Cross-axis alignment of a [`Stack`]'s items within its content box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum StackAlign {
+    /// Left (vertical) / top (horizontal) — the default.
+    Start = 0,
+    /// Centered on the cross axis.
+    Center = 1,
+    /// Right (vertical) / bottom (horizontal).
+    End = 2,
+}
+
+/// Main-axis distribution of a [`Stack`]'s items. Needs the stack to be larger
+/// than its content on the main axis (explicit size or runtime parent-fill).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum StackJustify {
+    /// Packed at the start — the default.
+    Start = 0,
+    /// Packed, centered on the main axis.
+    Center = 1,
+    /// Packed at the end.
+    End = 2,
+    /// First/last item at the edges, even gaps between.
+    SpaceBetween = 3,
+}
+
 /// Linear container that lays children sequentially along one axis.
 pub struct Stack {
     ptr: *mut sys::UIStack,
@@ -40,6 +67,37 @@ impl Stack {
     /// Sets inner padding (left, top, right, bottom).
     pub fn padding(self, left: f32, top: f32, right: f32, bottom: f32) -> Self {
         unsafe { sys::UIStack_SetPadding(self.ptr, left, top, right, bottom) };
+        self
+    }
+
+    /// Sets the cross-axis alignment of items (start / center / end).
+    pub fn align(self, align: StackAlign) -> Self {
+        unsafe { sys::UIStack_SetAlign(self.ptr, sys::UIStackAlign(align as i32)) };
+        self
+    }
+
+    /// Sets the main-axis distribution of items (start / center / end /
+    /// space-between).
+    pub fn justify(self, justify: StackJustify) -> Self {
+        unsafe { sys::UIStack_SetJustify(self.ptr, sys::UIStackJustify(justify as i32)) };
+        self
+    }
+
+    /// Sets a background fill drawn behind the stack's items.
+    pub fn background(self, color: crate::Color) -> Self {
+        unsafe { sys::UIStack_SetBackground(self.ptr, color.into_raw()) };
+        self
+    }
+
+    /// Sets the corner radius of the background fill / border.
+    pub fn radius(self, radius: f32) -> Self {
+        unsafe { sys::UIStack_SetRadius(self.ptr, radius) };
+        self
+    }
+
+    /// Sets a border (color + thickness in pixels) drawn around the stack.
+    pub fn border(self, color: crate::Color, width: f32) -> Self {
+        unsafe { sys::UIStack_SetBorder(self.ptr, color.into_raw(), width) };
         self
     }
 

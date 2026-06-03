@@ -36,7 +36,10 @@ pub fn log_file() -> Option<String> {
     if p.is_null() {
         None
     } else {
-        unsafe { CStr::from_ptr(p) }.to_str().ok().map(str::to_owned)
+        unsafe { CStr::from_ptr(p) }
+            .to_str()
+            .ok()
+            .map(str::to_owned)
     }
 }
 

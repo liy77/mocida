@@ -62,11 +62,7 @@ impl Widget {
     ///
     /// # Safety
     /// Same contract as [`Widget::new`].
-    pub unsafe fn with_size(
-        data: *mut std::ffi::c_void,
-        width: f32,
-        height: f32,
-    ) -> Result<Self> {
+    pub unsafe fn with_size(data: *mut std::ffi::c_void, width: f32, height: f32) -> Result<Self> {
         let ptr = unsafe { sys::widgcs(data, width, height) };
         if ptr.is_null() {
             return Err(Error::Null("UIWidget_Create"));
@@ -127,6 +123,87 @@ impl Widget {
     pub fn position(self, x: f32, y: f32) -> Self {
         unsafe {
             sys::UIWidget_SetPosition(self.ptr, x, y);
+        }
+        self
+    }
+
+    /// Sets the opacity multiplier in `[0.0, 1.0]` applied to the whole
+    /// subtree's alpha. mocida has no dedicated C setter, so this writes
+    /// the public `UIWidget.opacity` field directly.
+    pub fn opacity(self, opacity: f32) -> Self {
+        unsafe {
+            (*self.ptr).opacity = opacity.clamp(0.0, 1.0);
+        }
+        self
+    }
+
+    /// Per-child cross-axis alignment inside a parent Stack (overrides the
+    /// stack's `align` for this child): 0 = inherit, 1 = start, 2 = center,
+    /// 3 = end. Mirrors `UIWidget_SetSelfAlign`.
+    pub fn self_align(self, align: i32) -> Self {
+        unsafe {
+            sys::UIWidget_SetSelfAlign(self.ptr, align);
+        }
+        self
+    }
+
+    /// Outer margins (left, top, right, bottom), honoured by container layout
+    /// (a Stack offsets the item by the leading margin and advances its cursor
+    /// past the trailing one). Mirrors `UIWidget_SetMargin`.
+    pub fn margin(self, left: f32, top: f32, right: f32, bottom: f32) -> Self {
+        unsafe {
+            sys::UIWidget_SetMargin(self.ptr, left, top, right, bottom);
+        }
+        self
+    }
+
+    /// Registers a key-down handler on this widget. It fires on EVERY key press
+    /// (keyboard isn't spatial) with the SDL key name (`"A"`, `"Return"`,
+    /// `"Escape"`, `"Space"`, …) and the SDL keymod bitmask — the handler itself
+    /// decides which keys matter. Mirrors `UIWidget_SetOnKeyDown`.
+    ///
+    /// The closure is boxed and intentionally leaked so its address stays valid
+    /// for the C side for the rest of the program (one per `onKeyInput` widget —
+    /// the same trade-off the other callback setters make).
+    pub fn on_key_down<F>(self, handler: F) -> Self
+    where
+        F: FnMut(&str, i32) + 'static,
+    {
+        struct KeyState {
+            handler: Box<dyn FnMut(&str, i32) + 'static>,
+        }
+        unsafe extern "C" fn trampoline(
+            _self: *mut std::ffi::c_void,
+            key: *const std::os::raw::c_char,
+            mods: std::os::raw::c_int,
+            userdata: *mut std::ffi::c_void,
+        ) {
+            if userdata.is_null() {
+                return;
+            }
+            let state = &mut *(userdata as *mut KeyState);
+            let k = if key.is_null() {
+                ""
+            } else {
+                CStr::from_ptr(key).to_str().unwrap_or("")
+            };
+            (state.handler)(k, mods as i32);
+        }
+        let state = Box::new(KeyState {
+            handler: Box::new(handler),
+        });
+        let userdata = Box::into_raw(state) as *mut std::ffi::c_void;
+        unsafe {
+            sys::UIWidget_SetOnKeyDown(self.ptr, Some(trampoline), userdata);
+        }
+        self
+    }
+
+    /// Sets the rotation around the widget centre, in degrees. Writes the
+    /// public `UIWidget.rotation` field directly (no dedicated C setter).
+    pub fn rotation(self, degrees: f32) -> Self {
+        unsafe {
+            (*self.ptr).rotation = degrees;
         }
         self
     }

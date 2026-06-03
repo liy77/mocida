@@ -100,12 +100,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, _) in &PALETTE {
         dropdown.add_option(name)?;
     }
-    let dropdown = dropdown
-        .set_selected(0)
-        .on_change(move |idx, _label| {
-            let _ = color_signal_cb.borrow_mut().set(idx);
-        });
-    children.add(dropdown.into_widget_sized(220.0, 36.0)?.position(48.0, 170.0))?;
+    let dropdown = dropdown.set_selected(0).on_change(move |idx, _label| {
+        let _ = color_signal_cb.borrow_mut().set(idx);
+    });
+    children.add(
+        dropdown
+            .into_widget_sized(220.0, 36.0)?
+            .position(48.0, 170.0),
+    )?;
 
     let footer = Text::new(
         "Signal<String> drives the title text. Signal<i32> drives the color.",

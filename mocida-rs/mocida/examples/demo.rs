@@ -70,9 +70,7 @@ fn build_label(
     x: f32,
     y: f32,
 ) -> Result<(*mut mocida::sys::UIText, *mut mocida::sys::UIWidget), Box<dyn std::error::Error>> {
-    let label = Text::new(text, font_size)?
-        .font_family(font)?
-        .color(color);
+    let label = Text::new(text, font_size)?.font_family(font)?.color(color);
     let text_ptr = label.as_ptr();
     let widget = label.into_widget()?.position(x, y);
     let widget_ptr = widget.as_ptr();
@@ -392,7 +390,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .wrap_to_bounds(true)
             .wrap_mode(mocida::WrapMode::Fit);
         s.target_label = target_text.as_ptr();
-        let target_widget = target_text.into_widget_sized(170.0, 28.0)?.position(180.0, 90.0);
+        let target_widget = target_text
+            .into_widget_sized(170.0, 28.0)?
+            .position(180.0, 90.0);
         s.target_label_w = target_widget.as_ptr();
         children.add(target_widget)?;
 
@@ -402,7 +402,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .wrap_to_bounds(true)
             .wrap_mode(mocida::WrapMode::Fit);
         s.aa_label = aa_text.as_ptr();
-        let aa_widget = aa_text.into_widget_sized(160.0, 28.0)?.position(360.0, 90.0);
+        let aa_widget = aa_text
+            .into_widget_sized(160.0, 28.0)?
+            .position(360.0, 90.0);
         s.aa_label_w = aa_widget.as_ptr();
         children.add(aa_widget)?;
     }
@@ -410,10 +412,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Three static cards + one draggable orange card.
     {
         let mut s = state.borrow_mut();
-        s.cards[0] = build_card(&mut children, 48.0, 160.0, 240.0, 160.0, Color::rgb(59, 130, 246))?;
-        s.cards[1] = build_card(&mut children, 312.0, 160.0, 240.0, 160.0, Color::rgb(34, 197, 94))?;
-        s.cards[2] = build_card(&mut children, 576.0, 160.0, 240.0, 160.0, Color::rgb(168, 85, 247))?;
-        let orange = build_card(&mut children, 840.0, 160.0, 140.0, 160.0, Color::rgb(251, 146, 60))?;
+        s.cards[0] = build_card(
+            &mut children,
+            48.0,
+            160.0,
+            240.0,
+            160.0,
+            Color::rgb(59, 130, 246),
+        )?;
+        s.cards[1] = build_card(
+            &mut children,
+            312.0,
+            160.0,
+            240.0,
+            160.0,
+            Color::rgb(34, 197, 94),
+        )?;
+        s.cards[2] = build_card(
+            &mut children,
+            576.0,
+            160.0,
+            240.0,
+            160.0,
+            Color::rgb(168, 85, 247),
+        )?;
+        let orange = build_card(
+            &mut children,
+            840.0,
+            160.0,
+            140.0,
+            160.0,
+            Color::rgb(251, 146, 60),
+        )?;
         s.cards[3] = orange;
     }
 
@@ -474,9 +504,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut s = aa_state.borrow_mut();
             s.aa_idx = (s.aa_idx + 1) % AA_MODES.len();
             let (mode, label) = AA_MODES[s.aa_idx];
-            unsafe {
-                mocida::sys::UIApp_SetAAMode(aa_app_ptr, mocida::sys::UIAAMode(mode as u32))
-            };
+            unsafe { mocida::sys::UIApp_SetAAMode(aa_app_ptr, mocida::sys::UIAAMode(mode as i32)) };
             set_label_text(s.aa_label, &format!("AA: {}", label));
             let _ = btn.set_text(&format!("AA Mode: {}", label));
         },

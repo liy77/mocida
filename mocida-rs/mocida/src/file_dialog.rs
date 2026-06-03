@@ -41,8 +41,16 @@ where
     unsafe {
         sys::UIFileDialog_OpenFile(
             window,
-            if filter_desc.is_empty() { ptr::null() } else { desc.as_ptr() },
-            if filter_exts.is_empty() { ptr::null() } else { exts.as_ptr() },
+            if filter_desc.is_empty() {
+                ptr::null()
+            } else {
+                desc.as_ptr()
+            },
+            if filter_exts.is_empty() {
+                ptr::null()
+            } else {
+                exts.as_ptr()
+            },
             Some(trampoline),
             state as *mut c_void,
         );
@@ -71,8 +79,16 @@ where
     unsafe {
         sys::UIFileDialog_SaveFile(
             window,
-            if filter_desc.is_empty() { ptr::null() } else { desc.as_ptr() },
-            if filter_exts.is_empty() { ptr::null() } else { exts.as_ptr() },
+            if filter_desc.is_empty() {
+                ptr::null()
+            } else {
+                desc.as_ptr()
+            },
+            if filter_exts.is_empty() {
+                ptr::null()
+            } else {
+                exts.as_ptr()
+            },
             Some(trampoline),
             state as *mut c_void,
         );
@@ -94,7 +110,10 @@ extern "C" fn trampoline(path: *const std::ffi::c_char, userdata: *mut c_void) {
     let outcome: Outcome = if path.is_null() {
         None
     } else {
-        unsafe { CStr::from_ptr(path) }.to_str().ok().map(str::to_owned)
+        unsafe { CStr::from_ptr(path) }
+            .to_str()
+            .ok()
+            .map(str::to_owned)
     };
     if let Some(h) = state.handler.take() {
         h(outcome);

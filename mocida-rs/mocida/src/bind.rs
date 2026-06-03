@@ -41,8 +41,7 @@ impl Binding {
         fmt: &str,
     ) -> Result<Self> {
         let c = CString::new(fmt)?;
-        let ptr =
-            unsafe { sys::UIBind_TextToFormat(target.as_ptr(), signal.as_ptr(), c.as_ptr()) };
+        let ptr = unsafe { sys::UIBind_TextToFormat(target.as_ptr(), signal.as_ptr(), c.as_ptr()) };
         Self::wrap(ptr, "UIBind_TextToFormat")
     }
 

@@ -185,10 +185,7 @@ impl ListView {
             return Err(Error::Null("UIListView_Create"));
         }
         Ok(Self {
-            inner: Scroll {
-                ptr,
-                moved: false,
-            },
+            inner: Scroll { ptr, moved: false },
         })
     }
 
@@ -231,10 +228,7 @@ impl GridView {
             return Err(Error::Null("UIGridView_Create"));
         }
         Ok(Self {
-            inner: Scroll {
-                ptr,
-                moved: false,
-            },
+            inner: Scroll { ptr, moved: false },
         })
     }
 
