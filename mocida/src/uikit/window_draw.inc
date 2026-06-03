@@ -147,7 +147,7 @@ static TTF_Font* GetFont(const char *path, float size) {
     // on every frame, which can rebuild internal glyph caches inside
     // SDL_ttf. Setting it once at load time and relying on persistence
     // removes that cost across the entire text-heavy hot path.
-    TTF_SetFontHinting(f, TTF_HINTING_NORMAL);
+    TTF_SetFontHinting(f, TTF_HINTING_LIGHT);
     return f;
 }
 

@@ -634,9 +634,12 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
                 if (!twid->__lineTextures[li]) continue;
                 float tw, th;
                 SDL_GetTextureSize(twid->__lineTextures[li], &tw, &th);
+                // Snap to the integer pixel grid (same reason as the button
+                // label / single-line text above): a 1:1 LINEAR blit at a
+                // fractional origin shaves the top/bottom rows of the glyphs.
                 SDL_FRect dst = {
-                    originX,
-                    originY + li * lineH,
+                    floorf(originX + 0.5f),
+                    floorf(originY + li * lineH + 0.5f),
                     tw, th
                 };
                 SDL_SetTextureAlphaMod(twid->__lineTextures[li], (Uint8)(op * 255.0f + 0.5f));
@@ -646,6 +649,11 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
             return;
         }
 
+        // Transparent border baked into every text texture (see the padding at
+        // texture-creation below) so a scaled/filtered blit can't shave the
+        // glyph's edge AA rows. Lives outside the logical glyph box.
+        const int TEXT_TEX_PAD = 3;
+
         // Rebuild the cached texture when the width that drives wrap
         // changes (e.g. parent resized and we're following bounds). FIT
         // keeps the natural-size texture - scaling happens at draw time.
@@ -653,7 +661,7 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
             effMode != UI_WRAP_FIT && effWrapW > 0) {
             float curW = 0.0f, curH = 0.0f;
             SDL_GetTextureSize(twid->__SDL_textTexture, &curW, &curH);
-            if ((int)curW > effWrapW + 1) {
+            if ((int)curW - 2 * TEXT_TEX_PAD > effWrapW + 1) {
                 SDL_DestroyTexture(twid->__SDL_textTexture);
                 twid->__SDL_textTexture = NULL;
             }
@@ -712,6 +720,25 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
                                                   twid->textLength, sc);
                 }
                 if (surf) {
+                    // Pad the glyph surface with a transparent border so the ink
+                    // is never flush against the texture edge. When the renderer
+                    // is scaled (HiDPI window, SSAA) the text texture is sampled
+                    // with LINEAR at a non-1:1 ratio; without a margin the top
+                    // (and other edge) AA rows bleed into the transparent border
+                    // and the glyph looks shaved by ~1px. The border lives
+                    // OUTSIDE the logical glyph box (drawn back out at the dst
+                    // rect), so layout/size are unaffected.
+                    SDL_Surface *psurf = SDL_CreateSurface(
+                        surf->w + 2 * TEXT_TEX_PAD, surf->h + 2 * TEXT_TEX_PAD,
+                        SDL_PIXELFORMAT_RGBA32);
+                    if (psurf) {
+                        SDL_FillSurfaceRect(psurf, NULL, 0); // transparent
+                        SDL_SetSurfaceBlendMode(surf, SDL_BLENDMODE_NONE);
+                        SDL_Rect d = {TEXT_TEX_PAD, TEXT_TEX_PAD, surf->w, surf->h};
+                        SDL_BlitSurface(surf, NULL, psurf, &d);
+                        SDL_DestroySurface(surf);
+                        surf = psurf;
+                    }
                     twid->__SDL_textTexture = SDL_CreateTextureFromSurface(
                         window->sdlRenderer, surf);
                     SDL_DestroySurface(surf);
@@ -723,6 +750,10 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
         SDL_SetTextureScaleMode(twid->__SDL_textTexture, SDL_SCALEMODE_LINEAR);
         float txw, txh;
         SDL_GetTextureSize(twid->__SDL_textTexture, &txw, &txh);
+        // Strip the transparent border back off so all layout below works in
+        // glyph (logical) units; the full padded texture is drawn at the end.
+        txw -= 2 * TEXT_TEX_PAD;
+        txh -= 2 * TEXT_TEX_PAD;
 
         // FIT: shrink the glyph block uniformly so it fits the
         // available width on a single line. Texture is rendered at the
@@ -736,10 +767,15 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
         float pw = txw + twid->paddingLeft + twid->paddingRight;
         float ph = txh + twid->paddingTop + twid->paddingBottom;
 
-        // Honor horizontal/vertical alignment when the widget has an
-        // explicit size larger than the natural glyph block.
+        // Honor horizontal alignment against the widget's box. The offset is
+        // applied even when the text is WIDER than the box (negative offset):
+        // a centred label whose width box was under-estimated (e.g. a reactive
+        // `${score}` that grew from "0" to "303" — the runtime sizes the box
+        // from the initial text) still centres on the box's midpoint instead of
+        // left-aligning and drifting right. Centre-on-midpoint keeps it aligned
+        // with the parent, which centres the box.
         float alignOffsetX = 0.0f;
-        if (el->width && *el->width > pw) {
+        if (el->width) {
             switch (twid->hAlign) {
                 case UI_TEXT_HALIGN_CENTER:
                     alignOffsetX = (*el->width - pw) * 0.5f;
@@ -802,10 +838,19 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
         // Apply opacity to the glyph texture via alpha mod.
         SDL_SetTextureAlphaMod(twid->__SDL_textTexture, (Uint8)(op * 255.0f + 0.5f));
 
-        g_tempRect2.x = g_tempRect1.x + twid->paddingLeft;
-        g_tempRect2.y = g_tempRect1.y + twid->paddingTop;
-        g_tempRect2.w = txw;
-        g_tempRect2.h = txh;
+        // Snap the glyph texture to integer pixels. It's blitted 1:1 (dst ==
+        // texel size) with LINEAR filtering; at a fractional dst.x/y the edge
+        // rows/cols sample half into the transparent border and look shaved —
+        // the long-standing "top/bottom of the font is slightly cut" artifact.
+        // Rounding the origin makes the 1:1 blit land on exact texel centers.
+        // Draw the FULL padded texture, offset back by the border so the glyph
+        // lands exactly at the (pixel-snapped) logical origin. The transparent
+        // border then sits just outside the glyph box, giving a scaled blit a
+        // margin to bleed into instead of shaving the glyph's top/edge.
+        g_tempRect2.x = floorf(g_tempRect1.x + twid->paddingLeft + 0.5f) - TEXT_TEX_PAD;
+        g_tempRect2.y = floorf(g_tempRect1.y + twid->paddingTop  + 0.5f) - TEXT_TEX_PAD;
+        g_tempRect2.w = txw + 2 * TEXT_TEX_PAD;
+        g_tempRect2.h = txh + 2 * TEXT_TEX_PAD;
 
         if (el->rotation != 0.0f) {
             SDL_FPoint pivot = { g_tempRect2.w * 0.5f, g_tempRect2.h * 0.5f };
@@ -1272,6 +1317,69 @@ static void RenderWidget_Video(UIWindow* window, UIWidget* el,
         needClip = (dst.x < bounds.x || dst.y < bounds.y ||
                     dst.x + dst.w > bounds.x + bounds.w ||
                     dst.y + dst.h > bounds.y + bounds.h);
+
+        // Rounded corners (mirrors the UIImage radius path): composite the
+        // frame into a scratch target, mask it to a rounded rect via a
+        // Porter-Duff DST_IN blend, then blit the result. Rebuilt every frame
+        // (the frame changes each tick), which is fine — video already decodes
+        // per frame. Cross-platform: pure SDL render-target work, no per-OS
+        // code, so it rounds the same on Windows / Linux / macOS.
+        const float radius = UIVideo_GetRadius(v);
+        if (radius > 0.0f) {
+            const int tw = (int)ceilf(bounds.w);
+            const int th = (int)ceilf(bounds.h);
+            SDL_Texture* scratch = (tw > 0 && th > 0)
+                ? SDL_CreateTexture(window->sdlRenderer, SDL_PIXELFORMAT_RGBA32,
+                                    SDL_TEXTUREACCESS_TARGET, tw, th)
+                : NULL;
+            if (scratch) {
+                const SDL_BlendMode kDstIn = SDL_ComposeCustomBlendMode(
+                    SDL_BLENDFACTOR_ZERO, SDL_BLENDFACTOR_SRC_ALPHA,
+                    SDL_BLENDOPERATION_ADD,
+                    SDL_BLENDFACTOR_ZERO, SDL_BLENDFACTOR_SRC_ALPHA,
+                    SDL_BLENDOPERATION_ADD);
+                SDL_SetTextureBlendMode(scratch, SDL_BLENDMODE_BLEND);
+                SDL_Texture* prevTarget = SDL_GetRenderTarget(window->sdlRenderer);
+
+                // (1) frame -> scratch (in scratch-local coords).
+                SDL_SetRenderTarget(window->sdlRenderer, scratch);
+                SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_NONE);
+                SDL_SetRenderDrawColor(window->sdlRenderer, 0, 0, 0, 0);
+                SDL_RenderClear(window->sdlRenderer);
+                SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_BLEND);
+                SDL_FRect localDst = { dst.x - bounds.x, dst.y - bounds.y, dst.w, dst.h };
+                SDL_SetTextureAlphaMod(tex, (Uint8)(op * 255.0f + 0.5f));
+                SDL_RenderTexture(window->sdlRenderer, tex, NULL, &localDst);
+                SDL_SetTextureAlphaMod(tex, 255);
+
+                // (2) rounded mask -> (3) apply via DST_IN.
+                SDL_Texture* mask = SDL_CreateTexture(window->sdlRenderer,
+                    SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, tw, th);
+                if (mask) {
+                    SDL_SetTextureBlendMode(mask, SDL_BLENDMODE_BLEND);
+                    SDL_SetRenderTarget(window->sdlRenderer, mask);
+                    SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_NONE);
+                    SDL_SetRenderDrawColor(window->sdlRenderer, 0, 0, 0, 0);
+                    SDL_RenderClear(window->sdlRenderer);
+                    SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_BLEND);
+                    SDL_FRect maskRect = { 0, 0, bounds.w, bounds.h };
+                    const UIColor white = { 255, 255, 255, 1.0f };
+                    DrawRoundedRectFill(window->sdlRenderer, maskRect, white, radius);
+
+                    SDL_SetRenderTarget(window->sdlRenderer, scratch);
+                    SDL_SetTextureBlendMode(mask, kDstIn);
+                    SDL_FRect full = { 0, 0, bounds.w, bounds.h };
+                    SDL_RenderTexture(window->sdlRenderer, mask, NULL, &full);
+                    SDL_DestroyTexture(mask);
+                }
+
+                // (4) blit the rounded result back to the screen.
+                SDL_SetRenderTarget(window->sdlRenderer, prevTarget);
+                SDL_RenderTexture(window->sdlRenderer, scratch, NULL, &bounds);
+                SDL_DestroyTexture(scratch);
+                return;
+            }
+        }
 
         if (needClip) {
             SDL_Rect clip = {
