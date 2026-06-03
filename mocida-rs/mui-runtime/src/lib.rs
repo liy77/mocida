@@ -2759,9 +2759,10 @@ fn key_handler_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn Fn
             ints: &ints,
             strs: &strs,
         };
-        for s in &block.stmts {
-            run_key_stmt(s, &kc);
-        }
+        // Run the WHOLE handler — stmts *and* the tail. A trailing
+        // `println!(event.key)` (or any last expression with no `;`) lands in
+        // `block.tail`, so iterating only `stmts` silently dropped it.
+        run_key_block(&block, &kc);
     }))
 }
 
@@ -2794,6 +2795,16 @@ fn run_key_stmt(s: &copper_syntax::expr::Stmt, kc: &KeyEvalCtx) {
             }
         }
         Stmt::BlockStmt(b) => run_key_block(b, kc),
+        // `score = 0` — Copper has no `let`, so a bare `name = expr` parses as a
+        // binding (`Stmt::Let`), NOT an assignment. In a key handler there are no
+        // locals to bind, so treat it as a plain reassignment of the existing
+        // signal (this is why `=` did nothing while `+=`/`-=` — which parse as
+        // `Assign` exprs — worked).
+        Stmt::Let {
+            name,
+            value: Some(v),
+            ..
+        } => key_set_signal(name, v, kc),
         Stmt::IncDec { target, inc, .. } => {
             if let ExprKind::Ident(name) = &target.kind {
                 if let Some(sig) = kc.ints.get(name) {
@@ -2821,7 +2832,137 @@ fn run_key_expr(e: &Expr, kc: &KeyEvalCtx) {
             }
         }
         ExprKind::Block(b) => run_key_block(b, kc),
+        // `println!("got {}", event.key)` etc. — a macro call parses as a plain
+        // Call (the `!` is consumed), so we dispatch on the callee name. Lets a
+        // handler print for debugging instead of being a silent no-op.
+        ExprKind::Call { callee, args, .. } => run_key_call(callee, args, kc),
         _ => {}
+    }
+}
+
+/// The handful of calls a key handler can usefully make: the print macros, so
+/// `println!("key = {}", event.key)` actually reaches the terminal (the prime
+/// way to debug which key name a press produces). Everything else is a no-op —
+/// the interpreter is mutation-only.
+fn run_key_call(callee: &Expr, args: &[Expr], kc: &KeyEvalCtx) {
+    use std::io::Write;
+    let name = match &callee.kind {
+        ExprKind::Ident(n) => n.as_str(),
+        ExprKind::Path { segments } => segments.last().map(String::as_str).unwrap_or(""),
+        _ => return,
+    };
+    match name {
+        "println" | "print" | "eprintln" | "eprint" => {
+            let text = key_format_args(args, kc);
+            let newline = name.ends_with("ln");
+            if name.starts_with('e') {
+                let mut e = std::io::stderr();
+                let _ = if newline {
+                    writeln!(e, "{text}")
+                } else {
+                    write!(e, "{text}")
+                };
+                let _ = e.flush();
+            } else {
+                let mut o = std::io::stdout();
+                let _ = if newline {
+                    writeln!(o, "{text}")
+                } else {
+                    write!(o, "{text}")
+                };
+                let _ = o.flush();
+            }
+        }
+        "dbg" => {
+            let joined = args
+                .iter()
+                .map(|a| key_eval_str(a, kc))
+                .collect::<Vec<_>>()
+                .join(", ");
+            eprintln!("[dbg] {joined}");
+        }
+        _ => {}
+    }
+}
+
+/// Render a print-macro's arguments Rust-style: `args[0]` is the format string
+/// (its literal text plus any Copper `${expr}` parts), and `{}` / `{:?}`
+/// placeholders are filled left-to-right from the remaining args. `{{`/`}}`
+/// escape to a literal brace; `{name}` resolves a named signal/param.
+fn key_format_args(args: &[Expr], kc: &KeyEvalCtx) -> String {
+    let Some((fmt_expr, rest)) = args.split_first() else {
+        return String::new();
+    };
+    let fmt = match &fmt_expr.kind {
+        ExprKind::Literal(Literal::Str(t)) => render_str_template(t, kc),
+        _ => key_eval_str(fmt_expr, kc),
+    };
+    let chars: Vec<char> = fmt.chars().collect();
+    let mut out = String::with_capacity(fmt.len());
+    let mut vals = rest.iter();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '{' if i + 1 < chars.len() && chars[i + 1] == '{' => {
+                out.push('{');
+                i += 2;
+            }
+            '}' if i + 1 < chars.len() && chars[i + 1] == '}' => {
+                out.push('}');
+                i += 2;
+            }
+            '{' => {
+                // Absolute index of the closing brace (find yields the matched
+                // value, i.e. the index itself — not a 0-based rank).
+                if let Some(close) = (i + 1..chars.len()).find(|&j| chars[j] == '}') {
+                    let spec: String = chars[i + 1..close].iter().collect();
+                    let name = spec.split(':').next().unwrap_or("");
+                    if name.is_empty() {
+                        if let Some(v) = vals.next() {
+                            out.push_str(&key_eval_str(v, kc));
+                        }
+                    } else {
+                        out.push_str(&key_lookup_ident(name, kc));
+                    }
+                    i = close + 1;
+                } else {
+                    out.push('{');
+                    i += 1;
+                }
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Concatenate a string template, rendering `${expr}` parts (unlike
+/// `str_template_lit`, which drops them).
+fn render_str_template(t: &StrTemplate, kc: &KeyEvalCtx) -> String {
+    let mut s = String::new();
+    for p in &t.parts {
+        match p {
+            StrPart::Lit(l) => s.push_str(l),
+            StrPart::Expr(e) => s.push_str(&key_eval_str(e, kc)),
+        }
+    }
+    s
+}
+
+/// Resolve a bare name to its string value: the handler param (the pressed key)
+/// or a signal's current value. Empty when unknown.
+fn key_lookup_ident(name: &str, kc: &KeyEvalCtx) -> String {
+    if name == kc.param {
+        kc.key.to_string()
+    } else if let Some(s) = kc.ints.get(name) {
+        s.borrow().get().to_string()
+    } else if let Some(s) = kc.strs.get(name) {
+        s.borrow().get()
+    } else {
+        String::new()
     }
 }
 
@@ -2835,11 +2976,14 @@ fn run_key_assign(
     let ExprKind::Ident(name) = &target.kind else {
         return;
     };
+    if matches!(op, AssignOp::Plain) {
+        key_set_signal(name, value, kc);
+        return;
+    }
     if let Some(sig) = kc.ints.get(name) {
         let rhs = key_eval_str(value, kc).parse::<i32>().unwrap_or(0);
         let cur = sig.borrow().get();
         let next = match op {
-            AssignOp::Plain => rhs,
             AssignOp::Add => cur + rhs,
             AssignOp::Sub => cur - rhs,
             AssignOp::Mul => cur * rhs,
@@ -2848,10 +2992,18 @@ fn run_key_assign(
             _ => return,
         };
         let _ = sig.borrow_mut().set(next);
+    }
+}
+
+/// Plain `name = value`: overwrite the signal of that name (int or string).
+/// Shared by the `Assign{Plain}` expr path and the bare-`name = expr` binding
+/// path (which Copper parses as a `Stmt::Let` since it has no `let` keyword).
+fn key_set_signal(name: &str, value: &Expr, kc: &KeyEvalCtx) {
+    if let Some(sig) = kc.ints.get(name) {
+        let rhs = key_eval_str(value, kc).parse::<i32>().unwrap_or(0);
+        let _ = sig.borrow_mut().set(rhs);
     } else if let Some(sig) = kc.strs.get(name) {
-        if matches!(op, AssignOp::Plain) {
-            let _ = sig.borrow_mut().set(key_eval_str(value, kc));
-        }
+        let _ = sig.borrow_mut().set(key_eval_str(value, kc));
     }
 }
 
@@ -4048,5 +4200,87 @@ mod tests {
         );
         // A param with no matching arg → None (caller falls back to default).
         assert_eq!(call_arg_string(card2, "other", 1, &outer), None);
+    }
+
+    /// The `onKeyInput` handler from keyboard.mui: an if/else-if chain followed
+    /// by a trailing `println!(…)`. Regression guard for two bugs:
+    ///   1. The trailing print (last expr, no `;`) lands in `block.tail`, which
+    ///      the old closure dropped (it iterated only `block.stmts`).
+    ///   2. `println!` was an unhandled call → silent no-op; now it formats.
+    #[test]
+    fn key_handler_tail_println_formats() {
+        let raw = "if event.key == \"Up\" { score += 1 } \
+                   else if event.key == \"R\" { score = 0 }\n\
+                   println!(\"Key pressed: {}\", event.key)";
+        let (block, _) = copper_syntax::expr::parse_stmts(raw);
+
+        // The if-chain is a statement; the println is the (dropped-by-old-code)
+        // tail.
+        assert!(!block.stmts.is_empty(), "if-chain should be a stmt");
+        let tail = block.tail.as_ref().expect("println should be the tail");
+
+        // It parses as a plain Call to `println` (the `!` is consumed).
+        let ExprKind::Call { callee, args, .. } = &tail.kind else {
+            panic!("tail should be a Call, got {:?}", tail.kind);
+        };
+        assert!(matches!(&callee.kind, ExprKind::Ident(n) if n == "println"));
+
+        // `{}` is filled from `event.key`, which resolves to the pressed key.
+        let ints = HashMap::new();
+        let strs = HashMap::new();
+        let kc = KeyEvalCtx {
+            param: "event",
+            key: "R",
+            ints: &ints,
+            strs: &strs,
+        };
+        assert_eq!(key_format_args(args, &kc), "Key pressed: R");
+
+        // Named + escaped placeholders, plus a different key.
+        let kc2 = KeyEvalCtx {
+            key: "Space",
+            ..kc
+        };
+        let raw2 = "println!(\"a {{}} {} b\", event.key)";
+        let (b2, _) = copper_syntax::expr::parse_stmts(raw2);
+        let ExprKind::Call { args: a2, .. } = &b2.tail.as_ref().unwrap().kind else {
+            panic!("call");
+        };
+        assert_eq!(key_format_args(a2, &kc2), "a {} Space b");
+    }
+
+    /// `score = 0` in a handler parses as a `Stmt::Let` (Copper has no `let`
+    /// keyword, so a bare `name = expr` is a binding), while `score += 1` parses
+    /// as an `Assign` expression. run_key_stmt now handles BOTH — this guards the
+    /// parse shapes the fix relies on (the `=`-does-nothing regression).
+    #[test]
+    fn plain_assign_parses_as_let_compound_as_assign() {
+        use copper_syntax::expr::{AssignOp, Stmt};
+
+        // `score = 0`: a bare binding (Stmt::Let), kept in `stmts`.
+        let (set, _) = copper_syntax::expr::parse_stmts("score = 0");
+        match set.stmts.first() {
+            Some(Stmt::Let { name, value, .. }) => {
+                assert_eq!(name, "score");
+                assert!(value.is_some(), "the `= 0` value must be captured");
+            }
+            other => panic!("`score = 0` should be Stmt::Let, got {other:?}"),
+        }
+
+        // `score += 1`: an Assign(Add) expression (a trailing value → tail).
+        let (add, _) = copper_syntax::expr::parse_stmts("score += 1");
+        let e = add
+            .tail
+            .as_deref()
+            .or_else(|| match add.stmts.first() {
+                Some(Stmt::Expr(e)) => Some(e),
+                _ => None,
+            })
+            .expect("an expression");
+        assert!(
+            matches!(&e.kind, ExprKind::Assign { op: AssignOp::Add, .. }),
+            "`score += 1` should be Assign(Add), got {:?}",
+            e.kind
+        );
     }
 }
