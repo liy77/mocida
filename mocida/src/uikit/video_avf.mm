@@ -75,6 +75,7 @@ struct UIVideo {
     int        eof;
     float      volume;
     UIFillMode fillMode;
+    float      radius;   /**< Corner radius for the rendered surface (0 = square). */
 
     // ---- Callbacks ----
     UIVideoCallback onEnded;
@@ -239,6 +240,11 @@ UIVideo* UIVideo_SetFillMode(UIVideo* v, UIFillMode m) {
     if (v) v->fillMode = m;
     return v;
 }
+UIVideo* UIVideo_SetRadius(UIVideo* v, float radius) {
+    if (v) v->radius = radius < 0.0f ? 0.0f : radius;
+    return v;
+}
+float UIVideo_GetRadius(UIVideo* v) { return v ? v->radius : 0.0f; }
 UIVideo* UIVideo_OnEnded(UIVideo* v, UIVideoCallback cb, void* userdata) {
     if (v) { v->onEnded = cb; v->userdata = userdata; }
     return v;

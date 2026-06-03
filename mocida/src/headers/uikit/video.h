@@ -73,6 +73,8 @@ UIVideo* UIVideo_SetLoop  (UIVideo* v, int loop);
 UIVideo* UIVideo_SetVolume(UIVideo* v, float volume);
 UIVideo* UIVideo_SetFillMode(UIVideo* v, UIFillMode mode);
 UIVideo* UIVideo_SetMuted (UIVideo* v, int muted);
+UIVideo* UIVideo_SetRadius(UIVideo* v, float radius); /**< corner radius in px (0 = square) */
+float    UIVideo_GetRadius(UIVideo* v);
 
 UIVideo* UIVideo_OnEnded  (UIVideo* v, UIVideoCallback cb, void* userdata);
 

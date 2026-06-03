@@ -51,6 +51,7 @@ struct UIVideo {
     int      eof;
     float    volume;
     UIFillMode fillMode;
+    float    radius;   /**< Corner radius for the rendered surface (0 = square). */
 
     // Clock (seconds since start of playback / last seek).
     double   clockSec;
@@ -380,6 +381,12 @@ UIVideo* UIVideo_SetFillMode(UIVideo* v, UIFillMode mode) {
     if (v) v->fillMode = mode;
     return v;
 }
+
+UIVideo* UIVideo_SetRadius(UIVideo* v, float radius) {
+    if (v) v->radius = radius < 0.0f ? 0.0f : radius;
+    return v;
+}
+float UIVideo_GetRadius(UIVideo* v) { return v ? v->radius : 0.0f; }
 
 UIVideo* UIVideo_OnEnded(UIVideo* v, UIVideoCallback cb, void* userdata) {
     if (!v) return v;
@@ -744,6 +751,7 @@ struct UIVideo {
     int      eof;
     float    volume;
     UIFillMode fillMode;
+    float    radius;   /**< Corner radius for the rendered surface (0 = square). */
 
     // ----- Callbacks -----
     UIVideoCallback onEnded;
@@ -1022,6 +1030,12 @@ UIVideo* UIVideo_SetFillMode(UIVideo* v, UIFillMode m) {
     return v;
 }
 
+UIVideo* UIVideo_SetRadius(UIVideo* v, float radius) {
+    if (v) v->radius = radius < 0.0f ? 0.0f : radius;
+    return v;
+}
+float UIVideo_GetRadius(UIVideo* v) { return v ? v->radius : 0.0f; }
+
 UIVideo* UIVideo_OnEnded(UIVideo* v, UIVideoCallback cb, void* userdata) {
     if (v) { v->onEnded = cb; v->userdata = userdata; }
     return v;
@@ -1184,6 +1198,8 @@ UIVideo* UIVideo_SetLoop(UIVideo* v, int l){ (void)l; return v; }
 UIVideo* UIVideo_SetVolume(UIVideo* v, float g){ (void)g; return v; }
 UIVideo* UIVideo_SetMuted (UIVideo* v, int m){ (void)m; return v; }
 UIVideo* UIVideo_SetFillMode(UIVideo* v, UIFillMode m){ (void)m; return v; }
+UIVideo* UIVideo_SetRadius(UIVideo* v, float r){ (void)r; return v; }
+float UIVideo_GetRadius(UIVideo* v){ (void)v; return 0.0f; }
 UIVideo* UIVideo_OnEnded (UIVideo* v, UIVideoCallback c, void* u){ (void)c; (void)u; return v; }
 int UIVideo_IsPlaying (UIVideo* v){ (void)v; return 0; }
 int UIVideo_GetWidth  (UIVideo* v){ (void)v; return 0; }

@@ -75,6 +75,13 @@ impl Video {
         self
     }
 
+    /// Rounds the rendered surface's corners (px). `0` = square. Works on every
+    /// platform — the rounding is done in the shared SDL render path.
+    pub fn radius(self, radius: f32) -> Self {
+        unsafe { sys::UIVideo_SetRadius(self.ptr, radius) };
+        self
+    }
+
     /// Registers a callback fired when playback reaches the end.
     pub fn on_ended<F>(mut self, handler: F) -> Self
     where

@@ -39,7 +39,7 @@ use mocida::{
     Button, Checkbox, Children, Color, Cursor, FillMode, FontStyle, Grid, GridView, HorizontalAlign,
     Image, ListView, MouseArea, MouseAreaEvent, ProgressBar, RadioButton, Rectangle, Scroll, Shadow,
     Signal, Slider, Spinner, Stack, StackAlign, StackJustify, StackOrientation, Switch, Text, TextArea,
-    TextField, TextHAlign, TextVAlign, VerticalAlign, Widget, WrapMode,
+    TextField, TextHAlign, TextVAlign, Video, VerticalAlign, WebView, Widget, WrapMode,
 };
 use mui_syntax::ast::{Element, Handler, HandlerAction, MuiValue, Node, Prop, PropValue, View};
 use mui_syntax::loader::Registry;
@@ -865,6 +865,8 @@ fn build_element(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wid
             "ProgressBar" => build_progressbar(ctx, el, layout)?,
             "Spinner" => build_spinner(ctx, el, layout)?,
             "Image" => build_image(ctx, el, layout)?,
+            "Video" => build_video(ctx, el, layout)?,
+            "WebView" | "Webview" => build_webview(ctx, el, layout)?,
             "MouseArea" => build_mouse_area(ctx, el, layout)?,
             _ if !el.children.is_empty() => build_stack(ctx, el, layout)?,
             other => build_placeholder(ctx, other, el, layout)?,
@@ -927,6 +929,9 @@ fn is_builtin(name: &str) -> bool {
             | "ProgressBar"
             | "Spinner"
             | "Image"
+            | "Video"
+            | "WebView"
+            | "Webview"
             | "MouseArea"
     )
 }
@@ -2091,6 +2096,84 @@ fn build_image(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     let h = dim_prop(ctx, el, "height").unwrap_or(120.0);
     let (x, y) = layout.next_sized(w, h);
     let widget = img.into_widget_sized(w, h)?.position(x, y);
+    Ok(apply_anchor(widget, style::anchor(el)))
+}
+
+/// `Video("clip.mp4", width:, height:, fillMode:, autoplay:, loop:, muted:,
+/// volume:)` — a hardware-decoded video surface (mocida's `UIVideo`). The
+/// positional arg (or `source:`/`src:`) is the file path / `mocida://` bundle
+/// key. `autoplay: true` starts playback immediately; `loop`, `muted` and
+/// `volume` (0..1) tune it; `fillMode:` matches Image (stretch/scale/tile/
+/// center). Defaults to a 320x180 box.
+fn build_video(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
+    let source = el
+        .positional
+        .as_ref()
+        .map(|e| render_text_expr(e, ctx))
+        .filter(|s| !s.is_empty())
+        .or_else(|| prop_string_value(ctx, el, "source"))
+        .or_else(|| prop_string_value(ctx, el, "src"))
+        .unwrap_or_default();
+    let mut video = Video::load(&source)?;
+    if let Some(fm) = style::enum_member(el, "fillMode") {
+        video = video.fill_mode(fill_mode_from(Some(&fm)));
+    }
+    // `loop` is a Copper keyword so it never reaches us as a prop name — accept
+    // `repeat:` as the keyword-safe spelling (and still honour `loop:` for the
+    // rare context where it does parse).
+    if prop_bool(el, "loop")
+        .or_else(|| prop_bool(el, "repeat"))
+        .unwrap_or(false)
+    {
+        video = video.loop_playback(true);
+    }
+    if prop_bool(el, "muted").unwrap_or(false) {
+        video = video.muted(true);
+    }
+    if let Some(v) = style::f32_prop(el, "volume") {
+        video = video.volume(v);
+    }
+    if let Some(r) = style::f32_prop(el, "radius") {
+        video = video.radius(r);
+    }
+    if prop_bool(el, "autoplay").unwrap_or(false) {
+        video.play();
+    }
+    let w = dim_prop(ctx, el, "width").unwrap_or(320.0);
+    let h = dim_prop(ctx, el, "height").unwrap_or(180.0);
+    let (x, y) = layout.next_sized(w, h);
+    let widget = video.into_widget_sized(w, h)?.position(x, y);
+    Ok(apply_anchor(widget, style::anchor(el)))
+}
+
+/// `WebView("https://…", width:, height:, radius:, borderColor:, borderWidth:)`
+/// — an embedded browser surface (mocida's `UIWebView`, WebView2 on Windows).
+/// The positional arg (or `url:`/`src:`) is the initial URL. `radius:` rounds
+/// the corners and `borderColor:`+`borderWidth:` draw a frame. Defaults to a
+/// 640x400 box.
+fn build_webview(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
+    let url = el
+        .positional
+        .as_ref()
+        .map(|e| render_text_expr(e, ctx))
+        .filter(|s| !s.is_empty())
+        .or_else(|| prop_string_value(ctx, el, "url"))
+        .or_else(|| prop_string_value(ctx, el, "src"))
+        .unwrap_or_default();
+    let mut wv = WebView::new(if url.is_empty() { None } else { Some(&url) })?;
+    if let Some(r) = style::f32_prop(el, "radius") {
+        wv = wv.radius(r);
+    }
+    if let (Some(bc), Some(bw)) = (
+        style::color_prop(el, "borderColor"),
+        style::f32_prop(el, "borderWidth"),
+    ) {
+        wv = wv.border(to_color(bc), bw);
+    }
+    let w = dim_prop(ctx, el, "width").unwrap_or(640.0);
+    let h = dim_prop(ctx, el, "height").unwrap_or(400.0);
+    let (x, y) = layout.next_sized(w, h);
+    let widget = wv.into_widget_sized(w, h)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
 }
 
