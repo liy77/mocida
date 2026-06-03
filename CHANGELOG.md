@@ -2,6 +2,48 @@
 
 All notable changes to this monorepo.
 
+## [v0.5.0] - 2026-06-03
+
+This release introduces **MUI**, a declarative UI layer over mocida — write a
+`.mui`/`.crm` file and render it as a live mocida window — plus media
+components (Video, WebView) and a round of text-rendering quality fixes.
+
+### Added
+- **MUI runtime + `mui-dev` host**: render declarative `.mui`/`.crm` documents
+  as real mocida UIs (`cforge run x.mui`). Reactive `signal()` state with live
+  text/structural updates, hot-reload on save, components with params +
+  cross-file `import`, styling + anchors, and an `app { … }` window/bundle
+  block. Widget parity for the visible widget set.
+- **`onKeyInput` keyboard handlers** on any widget (`{ |event| … }`), keyed off
+  SDL key names; supports signal mutations and `println!` debugging.
+- **MUI `Video` component** wrapping `UIVideo` — `source`, `width`/`height`,
+  `fillMode`, `autoplay`, `repeat` (looping; `loop` is a reserved word),
+  `muted`, `volume`.
+- **MUI `WebView` component** wrapping `UIWebView` (WebView2 / WKWebView /
+  WebKitGTK) — initial `url`, `radius`, `border`.
+- **Cross-platform `Video` corner radius** (`UIVideo_SetRadius` /
+  `UIVideo_GetRadius` across the Windows / Linux / macOS / fallback backends);
+  the rounded composite runs in the shared SDL render path, so it looks the
+  same on every platform.
+- Expanded Rust bindings for the new C surface (stack justify, margins, key
+  callbacks, min/max size, renderer selection).
+
+### Changed
+- **Text rendering quality**: glyph textures are snapped to the integer pixel
+  grid and carry a transparent border, so a fractional or scaled (HiDPI/SSAA)
+  blit no longer shaves descenders or edge AA rows; centered text now stays
+  centered when a reactive label grows past its estimated width box; default
+  font hinting is `LIGHT` (rounder glyph apexes, still crisp).
+- Split the 5063-line `window.c` into focused include units.
+- Registered the vendored SDL/SDL_image/SDL_ttf trees as git submodules.
+
+### Fixed
+- **macOS**: disabled mimalloc's `MI_OVERRIDE` (process-wide malloc-zone
+  interpose) which was hijacking the Rust side's allocations and aborting every
+  `.mui` with "pointer being freed was not allocated" (SIGABRT). mimalloc stays
+  enabled for the C library on all platforms.
+- Rust bindings: use inferred casts for bindgen newtype enums.
+
 ## [v0.4.1] - 2026-05-30
 
 Mocida agora é verdadeiramente multiplataforma: além do Windows, esta release
