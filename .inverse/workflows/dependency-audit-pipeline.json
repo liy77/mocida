@@ -1,0 +1,21 @@
+{
+  "id": "dependency-audit-pipeline",
+  "name": "Dependency Audit",
+  "description": "Audits all project dependencies for vulnerabilities and outdated packages.",
+  "trigger": "manual",
+  "enabled": true,
+  "replaces": "Manual npm audit runs",
+  "steps": [
+    {
+      "id": "audit",
+      "agentId": "dependency-auditor",
+      "role": "executor",
+      "allowedTools": [
+        "readFile",
+        "listDirectory",
+        "runCommand"
+      ],
+      "maxIterations": 6
+    }
+  ]
+}

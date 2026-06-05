@@ -1,0 +1,37 @@
+{
+  "id": "refactor-and-test-pipeline",
+  "name": "Safe Refactoring",
+  "description": "Refactor code + generate tests to verify the refactoring didn't break anything.",
+  "trigger": "manual",
+  "enabled": true,
+  "replaces": "Manual refactoring",
+  "steps": [
+    {
+      "id": "refactor",
+      "agentId": "refactor-assistant",
+      "role": "executor",
+      "allowedTools": [
+        "readFile",
+        "searchCode",
+        "editFile",
+        "rewriteFile",
+        "gitDiff"
+      ],
+      "maxIterations": 12
+    },
+    {
+      "id": "verify-tests",
+      "agentId": "test-generator",
+      "role": "executor",
+      "dependsOn": [
+        "refactor"
+      ],
+      "allowedTools": [
+        "readFile",
+        "writeFile",
+        "runCommand"
+      ],
+      "maxIterations": 10
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "id": "performance-optimization-pipeline",
+  "name": "Performance Optimization",
+  "description": "Identify bottlenecks → optimize → verify improvements → document changes.",
+  "trigger": "manual",
+  "enabled": true,
+  "replaces": "Manual performance tuning",
+  "steps": [
+    {
+      "id": "analyze",
+      "agentId": "performance-optimizer",
+      "role": "executor",
+      "allowedTools": [
+        "readFile",
+        "searchCode",
+        "runCommand"
+      ],
+      "maxIterations": 10
+    },
+    {
+      "id": "apply-fixes",
+      "agentId": "performance-optimizer",
+      "role": "executor",
+      "dependsOn": [
+        "analyze"
+      ],
+      "allowedTools": [
+        "editFile",
+        "rewriteFile",
+        "gitDiff"
+      ],
+      "maxIterations": 12
+    },
+    {
+      "id": "document",
+      "agentId": "docs-generator",
+      "role": "executor",
+      "dependsOn": [
+        "apply-fixes"
+      ],
+      "allowedTools": [
+        "readFile",
+        "writeFile"
+      ],
+      "maxIterations": 5
+    }
+  ]
+}

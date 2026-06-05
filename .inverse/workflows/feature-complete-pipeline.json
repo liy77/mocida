@@ -1,0 +1,50 @@
+{
+  "id": "feature-complete-pipeline",
+  "name": "Feature Completion",
+  "description": "Code review → generate tests → update docs → verify GRC compliance.",
+  "trigger": "manual",
+  "enabled": true,
+  "replaces": "Manual feature finalization",
+  "steps": [
+    {
+      "id": "review",
+      "agentId": "code-reviewer",
+      "role": "reviewer",
+      "allowedTools": [
+        "readFile",
+        "gitDiff",
+        "searchCode"
+      ],
+      "maxIterations": 8
+    },
+    {
+      "id": "tests",
+      "agentId": "test-generator",
+      "role": "executor",
+      "dependsOn": [
+        "review"
+      ],
+      "allowedTools": [
+        "readFile",
+        "writeFile",
+        "searchCode",
+        "runCommand"
+      ],
+      "maxIterations": 12
+    },
+    {
+      "id": "docs",
+      "agentId": "docs-generator",
+      "role": "executor",
+      "dependsOn": [
+        "tests"
+      ],
+      "allowedTools": [
+        "readFile",
+        "writeFile",
+        "searchCode"
+      ],
+      "maxIterations": 8
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "id": "release-pipeline",
+  "name": "Release Pipeline",
+  "description": "Full release workflow: review open changes, generate changelog, bump version, create release commit.",
+  "trigger": "manual",
+  "enabled": true,
+  "replaces": "Manual release process",
+  "steps": [
+    {
+      "id": "review",
+      "agentId": "code-reviewer",
+      "role": "reviewer",
+      "allowedTools": [
+        "gitStatus",
+        "gitDiff",
+        "readFile"
+      ],
+      "maxIterations": 6
+    },
+    {
+      "id": "release",
+      "agentId": "release-manager",
+      "role": "executor",
+      "dependsOn": [
+        "review"
+      ],
+      "allowedTools": [
+        "readFile",
+        "writeFile",
+        "gitLog",
+        "gitStatus",
+        "gitAdd",
+        "gitCommit"
+      ],
+      "maxIterations": 10
+    }
+  ]
+}

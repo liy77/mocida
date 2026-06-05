@@ -1,0 +1,22 @@
+{
+  "id": "test-generation-pipeline",
+  "name": "Test Generation",
+  "description": "Generates unit tests for specified source files following existing project patterns.",
+  "trigger": "manual",
+  "enabled": true,
+  "replaces": "Manual test writing",
+  "steps": [
+    {
+      "id": "generate",
+      "agentId": "test-generator",
+      "role": "executor",
+      "allowedTools": [
+        "readFile",
+        "writeFile",
+        "listDirectory",
+        "searchCode"
+      ],
+      "maxIterations": 12
+    }
+  ]
+}

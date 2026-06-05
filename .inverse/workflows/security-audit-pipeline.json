@@ -1,0 +1,32 @@
+{
+  "id": "security-audit-pipeline",
+  "name": "Full Security Audit",
+  "description": "Complete security review: code vulnerabilities + dependency audit + GRC compliance check.",
+  "trigger": "manual",
+  "enabled": true,
+  "replaces": "Manual security review",
+  "steps": [
+    {
+      "id": "code-security",
+      "agentId": "security-auditor",
+      "role": "reviewer",
+      "allowedTools": [
+        "readFile",
+        "searchCode",
+        "listDirectory"
+      ],
+      "maxIterations": 15
+    },
+    {
+      "id": "dependencies",
+      "agentId": "dependency-auditor",
+      "role": "executor",
+      "allowedTools": [
+        "readFile",
+        "listDirectory",
+        "runCommand"
+      ],
+      "maxIterations": 6
+    }
+  ]
+}

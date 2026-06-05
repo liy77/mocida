@@ -1,0 +1,50 @@
+{
+  "id": "bug-fix-pipeline",
+  "name": "Bug Investigation & Fix",
+  "description": "Hunt down bug → propose fix → generate regression test → review changes.",
+  "trigger": "manual",
+  "enabled": true,
+  "replaces": "Manual debugging",
+  "steps": [
+    {
+      "id": "investigate",
+      "agentId": "bug-hunter",
+      "role": "executor",
+      "allowedTools": [
+        "readFile",
+        "searchCode",
+        "gitLog",
+        "gitDiff",
+        "runCommand"
+      ],
+      "maxIterations": 15
+    },
+    {
+      "id": "test",
+      "agentId": "test-generator",
+      "role": "executor",
+      "dependsOn": [
+        "investigate"
+      ],
+      "allowedTools": [
+        "readFile",
+        "writeFile",
+        "runCommand"
+      ],
+      "maxIterations": 8
+    },
+    {
+      "id": "review",
+      "agentId": "code-reviewer",
+      "role": "reviewer",
+      "dependsOn": [
+        "test"
+      ],
+      "allowedTools": [
+        "readFile",
+        "gitDiff"
+      ],
+      "maxIterations": 5
+    }
+  ]
+}

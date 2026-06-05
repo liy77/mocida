@@ -1,0 +1,22 @@
+{
+  "id": "code-review-pipeline",
+  "name": "Code Review Pipeline",
+  "description": "Runs the Code Reviewer agent on staged changes before commit.",
+  "trigger": "manual",
+  "enabled": true,
+  "replaces": "Manual PR review / Linter gate",
+  "steps": [
+    {
+      "id": "review",
+      "agentId": "code-reviewer",
+      "role": "reviewer",
+      "allowedTools": [
+        "gitStatus",
+        "gitDiff",
+        "readFile",
+        "searchCode"
+      ],
+      "maxIterations": 8
+    }
+  ]
+}

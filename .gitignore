@@ -31,3 +31,6 @@ mocida_crash_*.log
 /dist/
 # --- vendored SDL source copied for the C tests (build fixture, not ours) ---
 /mocida/tests/SDL/
+
+# --- accidental file ---
+/-
