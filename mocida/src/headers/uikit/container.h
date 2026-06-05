@@ -118,11 +118,25 @@ typedef struct {
 
     float wheelSpeed;           /**< Pixels per wheel notch. Default 60. */
 
+    int showScrollbar;          /**< 1 draws a scrollbar when content overflows (default). 0 hides it. */
+    UIColor scrollbarColor;     /**< Thumb color. */
+    UIColor scrollbarTrackColor;/**< Track color (alpha 0 = no track). */
+    float scrollbarWidth;       /**< Scrollbar thickness in pixels. Default 8. */
+
+    int   __barDragging;        /**< Internal: 1 while the user is dragging the vertical scrollbar thumb. */
+    float __barGrabDY;          /**< Internal: cursor offset within the thumb at grab time. */
+
     /** Optional background drawn behind the content (NULL = none). */
     void* background;           /**< UIRectangle* */
 } UIScroll;
 
 UIScroll* UIScroll_Create(void);
+
+/** Show (1) or hide (0) the scrollbar. Shown by default when content overflows. */
+UIScroll* UIScroll_SetScrollbar(UIScroll* s, int show);
+
+/** Style the scrollbar: thumb color, track color (alpha 0 = none), thickness. */
+UIScroll* UIScroll_SetScrollbarStyle(UIScroll* s, UIColor thumb, UIColor track, float width);
 
 /**
  * Sets the single content widget rendered inside the viewport. The

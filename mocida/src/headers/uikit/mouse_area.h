@@ -85,7 +85,18 @@ struct UIMouseArea {
     UIMouseAreaCallback onDragStart;   /**< Fires once when a drag is initiated. */
     UIMouseAreaCallback onDrag;        /**< Fires repeatedly while dragging. */
     UIMouseAreaCallback onDragEnd;     /**< Fires once when the drag completes. */
-    void* userdata;                    /**< Opaque pointer passed to every callback. */
+    void* userdata;                    /**< Legacy shared userdata (last setter wins). */
+    /* Per-callback userdata — each setter stores its own, so multiple callbacks
+     * with different closures (e.g. onMouseDown + onDrag) work independently. */
+    void* onHoverEnterUd;
+    void* onHoverExitUd;
+    void* onMouseDownUd;
+    void* onMouseUpUd;
+    void* onMouseMoveUd;
+    void* onDoubleClickUd;
+    void* onDragStartUd;
+    void* onDragUd;
+    void* onDragEndUd;
 };
 
 /**

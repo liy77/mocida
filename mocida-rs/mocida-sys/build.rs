@@ -94,14 +94,23 @@ fn main() {
     // SDL3 by name (harmless if the linker finds the symbols elsewhere).
     if let Some(lib_dir) = &lib_dir {
         let sdl_subdir = lib_dir.join("SDL");
-        if sdl_subdir.join("SDL3.lib").exists() {
+        // Register both candidate SDL3 import-lib paths as rerun triggers so
+        // that when a `--shared` mocida rebuild *drops a new* SDL3.lib next to
+        // (or under SDL/) the install, this build script re-runs and emits the
+        // link below. Without this, a build that first ran when SDL3.lib was
+        // absent caches "no SDL3" forever (none of the other triggers change),
+        // and the consuming binary fails to link SDL_GetPerformanceCounter.
+        let sdl3_direct = lib_dir.join("SDL3.lib");
+        let sdl3_nested = sdl_subdir.join("SDL3.lib");
+        println!("cargo:rerun-if-changed={}", sdl3_direct.display());
+        println!("cargo:rerun-if-changed={}", sdl3_nested.display());
+        if sdl3_nested.exists() {
             println!("cargo:rustc-link-search=native={}", sdl_subdir.display());
         }
         // Only add the SDL3 link when an import lib is actually reachable, so a
         // pure-static mocida (SDL baked in, no separate SDL3.lib) isn't forced
         // to find one.
-        let has_sdl3_import =
-            lib_dir.join("SDL3.lib").exists() || sdl_subdir.join("SDL3.lib").exists();
+        let has_sdl3_import = sdl3_direct.exists() || sdl3_nested.exists();
         if !link_static && has_sdl3_import {
             println!("cargo:rustc-link-lib=dylib=SDL3");
         }

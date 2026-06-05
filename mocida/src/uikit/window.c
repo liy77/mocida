@@ -64,6 +64,25 @@ static int g_aaHintsApplied   = 0;
 static int   g_aaMode   = 1;
 static float g_taaBlend = 0.5f;
 
+// Text supersampling factor. Glyphs are ALWAYS rasterized at g_textSS× the
+// logical point size and drawn into a logical-sized destination rect. The
+// caller lays out in logical units (it divides the rasterized texture size by
+// g_textSS), never letting SDL upscale a small glyph texture - SDL's scaled
+// blit shaves/crops glyph edge rows. Net effect:
+//   * Coverage mode (frame drawn 1:1): the 2x glyph is LINEAR-downscaled to
+//     the logical box -> supersampled, crisper text (helps synthetic bold).
+//   * SSAA modes (frame drawn at 2x via SetRenderScale): the logical box maps
+//     to 2x physical px, so the 2x glyph lands ~1:1 -> stays crisp instead of
+//     being upscaled and blurred.
+// Kept constant (not tied to the AA mode) so cached text textures never need
+// rebuilding when the AA mode changes at runtime.
+// 2 = glyphs rasterized at 2x and laid out in logical units → supersampled,
+// crisper text (helps synthetic bold). The flicker that was once blamed on this
+// turned out to be the line-number gutter rebuilding a texture every frame (now
+// cached — see GetLineNumTexture); text textures are cached, so 2x rasterizes
+// once and does not churn. Safe to keep on.
+static int   g_textSS   = 2;
+
 // TAA state. The implementation history is in the GIT log:
 //
 //   v1: uniform lerp on a GPU history texture - ghosting on motion.

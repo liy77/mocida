@@ -227,6 +227,11 @@ UIWidget* UIWidget_GetFocused(void);
 /** Clears focus from whatever widget currently owns it. */
 void      UIWidget_ClearFocus(void);
 
+/** Drops the cached focus owner WITHOUT dereferencing it. Call before freeing
+ *  the widget tree (e.g. in UIApp_SetChildren) so a later focus change can't
+ *  blur a now-freed widget. */
+void      UIWidget_InvalidateFocus(void);
+
 /**
  * Reverse-lookup: finds the UIWidget in the active window's children
  * whose `data` matches the given pointer. Returns NULL when not found.

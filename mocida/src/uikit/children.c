@@ -20,8 +20,20 @@ UIChildren* UIChildren_Create(int capacity) {
 }
 
 int UIChildren_Add(UIChildren* children, UIWidget* child) {
-    if (children == NULL || child == NULL || children->count >= children->capacity) {
+    if (children == NULL || child == NULL) {
         return 0;
+    }
+    // Grow the backing array on demand. It used to be a hard cap (default 16),
+    // which silently dropped any child past it — e.g. a file list or scene with
+    // more than 16 rows. Doubling keeps amortized O(1) appends.
+    if (children->count >= children->capacity) {
+        int newCap = children->capacity > 0 ? children->capacity * 2 : 16;
+        UIWidget** grown = (UIWidget**)realloc(children->children,
+                                               (size_t)newCap * sizeof(UIWidget*));
+        if (grown == NULL) return 0;
+        for (int i = children->capacity; i < newCap; i++) grown[i] = NULL;
+        children->children = grown;
+        children->capacity = newCap;
     }
 
     // Fix negative z-index

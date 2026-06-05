@@ -151,6 +151,32 @@ static TTF_Font* GetFont(const char *path, float size) {
     return f;
 }
 
+// Build a text texture from a freshly-rendered glyph surface WITHOUT using
+// SDL_CreateTextureFromSurface — that call drops the coverage alpha of an
+// SDL_ttf `_Blended` (ARGB8888) glyph on some Vulkan drivers, painting the
+// whole glyph box opaque (the "white text rectangle" glitch). Instead we
+// convert to a known RGBA32 layout and upload it with SDL_CreateTexture +
+// SDL_UpdateTexture — the SAME explicit path the coverage-circle cache
+// (RasterizeCoverageCircle) uses, which is proven to keep its alpha on those
+// drivers (rounded corners render correctly there). Consumes `surf`.
+// Returns a LINEAR + BLEND texture, or NULL.
+static SDL_Texture* MakeTextTexture(SDL_Renderer* r, SDL_Surface* surf) {
+    if (!surf) return NULL;
+    // Use SDL_CreateTextureFromSurface — the path text used in the build where
+    // it was confirmed clean. (An earlier experiment built the texture via
+    // SDL_CreateTexture(STATIC) + SDL_UpdateTexture to dodge a suspected
+    // alpha-drop; on the reporting GPU that path made text FLICKER as a solid
+    // colour rectangle each frame, so it's reverted here.) BLEND is set
+    // explicitly so the glyph's coverage alpha is honoured.
+    SDL_Texture* tex = SDL_CreateTextureFromSurface(r, surf);
+    SDL_DestroySurface(surf);
+    if (tex) {
+        SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
+        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+    }
+    return tex;
+}
+
 UI_FORCE_INLINE void ApplyMargins(SDL_FRect* r, float ml, float mt, float mr, float mb) {
     // Fast single-instruction margin application
     r->x += ml;

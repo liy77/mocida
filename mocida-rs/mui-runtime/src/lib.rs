@@ -36,15 +36,17 @@ use std::rc::Rc;
 use copper_syntax::expr::{BinOp, Expr, ExprKind, Literal, StrPart, StrTemplate};
 use mocida::text::by_ptr;
 use mocida::{
-    Button, Checkbox, Children, Color, Cursor, FillMode, FontStyle, Grid, GridView, HorizontalAlign,
-    Image, ListView, MouseArea, MouseAreaEvent, ProgressBar, RadioButton, Rectangle, Scroll, Shadow,
-    Signal, Slider, Spinner, Stack, StackAlign, StackJustify, StackOrientation, Switch, Text, TextArea,
-    TextField, TextHAlign, TextVAlign, Video, VerticalAlign, WebView, Widget, WrapMode,
+    Button, Checkbox, Children, Color, Cursor, Dialog, FillMode, FontStyle, Grid, GridView,
+    HorizontalAlign, Image, ListView, MouseArea, MouseAreaEvent, ProgressBar, RadioButton,
+    Rectangle, Scroll, Shadow, Signal, Slider, Sound, Spinner, Stack, StackAlign, StackJustify,
+    StackOrientation, Switch, Text, TextArea, TextField, TextHAlign, TextVAlign, VerticalAlign,
+    Video, WebView, Widget, WrapMode,
 };
 use mui_syntax::ast::{Element, Handler, HandlerAction, MuiValue, Node, Prop, PropValue, View};
 use mui_syntax::loader::Registry;
 use mui_syntax::style::{self, Anchor, HAnchor, Rgba, ShadowSpec, VAnchor};
 
+mod highlight;
 mod layout;
 use layout::Layout;
 
@@ -94,6 +96,9 @@ pub struct Reactive {
     lists: HashMap<String, Rc<RefCell<Vec<String>>>>,
     /// Live subscriptions — kept alive so the text widgets keep updating.
     _subs: Vec<mocida::Subscription>,
+    /// Loaded `Audio` clips — kept alive so a one-shot sound finishes playing
+    /// (dropping a `Sound` stops it). They live for the document's lifetime.
+    _sounds: Vec<Sound>,
     /// Flipped whenever a *structural* signal (one read by an `if`/`for`) changes,
     /// so a host loop knows to rebuild + swap the tree. Shared so the per-signal
     /// subscriptions can set it.
@@ -107,6 +112,7 @@ impl Reactive {
             strings: HashMap::new(),
             lists: HashMap::new(),
             _subs: Vec::new(),
+            _sounds: Vec::new(),
             dirty: Rc::new(std::cell::Cell::new(false)),
         }
     }
@@ -379,6 +385,34 @@ pub fn build_view(view: &View) -> Result<(Children, Reactive)> {
     build_view_with(view, &Registry::new())
 }
 
+/// Walk the view tree and record the literal `width` / `height` of every
+/// `id:`-tagged widget, so `width: left_panel.width` on a sibling resolves to
+/// that widget's declared size. Only literal dimensions are captured (an `id`
+/// widget sized by another expression contributes `None` for that axis).
+fn collect_id_dims(nodes: &[Node], out: &mut HashMap<String, (Option<f32>, Option<f32>)>) {
+    for node in nodes {
+        match node {
+            Node::Element(el) => {
+                if let Some(id) = id_name(el) {
+                    out.insert(
+                        id,
+                        (style::f32_prop(el, "width"), style::f32_prop(el, "height")),
+                    );
+                }
+                collect_id_dims(&el.children, out);
+            }
+            Node::If { then, els, .. } => {
+                collect_id_dims(then, out);
+                if let Some(e) = els {
+                    collect_id_dims(e, out);
+                }
+            }
+            Node::For { body, .. } => collect_id_dims(body, out),
+            _ => {}
+        }
+    }
+}
+
 /// Build a view with a component [`Registry`] in scope, so elements whose name
 /// matches an imported view (`Card(...)`) are instantiated by inlining that
 /// view's body with the call's args bound to its params. Use
@@ -437,6 +471,10 @@ pub fn build_view_seeded(
         ctx.avail_h = h as f32;
     }
 
+    // Collect each `id:`-tagged widget's literal size so a sibling can size
+    // against it (`width: left_panel.width`).
+    collect_id_dims(&view.body, &mut ctx.id_dims);
+
     let mut children = Children::new(16)?;
     let mut layout = Layout::root();
     for node in &view.body {
@@ -459,7 +497,8 @@ pub fn build_view_seeded(
 fn subscribe_structural(ctx: &mut Ctx, nodes: &[Node]) {
     let mut conds: Vec<String> = Vec::new();
     let mut for_names: Vec<String> = Vec::new();
-    collect_structural(nodes, &mut conds, &mut for_names);
+    let mut visited: Vec<String> = Vec::new();
+    collect_structural(nodes, &mut conds, &mut for_names, ctx.components, &mut visited);
     conds.sort();
     conds.dedup();
     for cond in &conds {
@@ -470,12 +509,18 @@ fn subscribe_structural(ctx: &mut Ctx, nodes: &[Node]) {
     for name in for_names {
         if let Some(sig) = ctx.reactive.signals.get(&name) {
             let dirty = ctx.reactive.dirty.clone();
-            if let Ok(sub) = sig.borrow_mut().subscribe(move |_: &Signal<i32>| dirty.set(true)) {
+            if let Ok(sub) = sig
+                .borrow_mut()
+                .subscribe(move |_: &Signal<i32>| dirty.set(true))
+            {
                 ctx.reactive._subs.push(sub);
             }
         } else if let Some(sig) = ctx.reactive.strings.get(&name) {
             let dirty = ctx.reactive.dirty.clone();
-            if let Ok(sub) = sig.borrow_mut().subscribe(move |_: &Signal<String>| dirty.set(true)) {
+            if let Ok(sub) = sig
+                .borrow_mut()
+                .subscribe(move |_: &Signal<String>| dirty.set(true))
+            {
                 ctx.reactive._subs.push(sub);
             }
         }
@@ -495,21 +540,29 @@ fn subscribe_condition(ctx: &mut Ctx, cond_raw: &str) {
         .collect();
     let str_ptrs: Vec<(String, *mut mocida::sys::UISignal)> = names
         .iter()
-        .filter_map(|n| ctx.string_signal(n).map(|s| (n.clone(), s.borrow().as_ptr())))
+        .filter_map(|n| {
+            ctx.string_signal(n)
+                .map(|s| (n.clone(), s.borrow().as_ptr()))
+        })
         .collect();
     if int_ptrs.is_empty() && str_ptrs.is_empty() {
         return;
     }
     let base = ctx.env.clone();
     let cond = cond_raw.to_string();
-    let last = Rc::new(std::cell::Cell::new(eval_condition_env(&cond, &ctx.live_env())));
+    let last = Rc::new(std::cell::Cell::new(eval_condition_env(
+        &cond,
+        &ctx.live_env(),
+    )));
     let dirty = ctx.reactive.dirty.clone();
     // One shared re-evaluator, fanned out to every dependency signal.
     let updater = Rc::new(move || {
         let mut live = base.clone();
         for (n, p) in &int_ptrs {
-            live.vars
-                .insert(n.clone(), unsafe { mocida::sys::UISignal_GetInt(*p) }.to_string());
+            live.vars.insert(
+                n.clone(),
+                unsafe { mocida::sys::UISignal_GetInt(*p) }.to_string(),
+            );
         }
         for (n, p) in &str_ptrs {
             live.vars.insert(n.clone(), unsafe { str_from_signal(*p) });
@@ -536,22 +589,49 @@ fn subscribe_condition(ctx: &mut Ctx, cond_raw: &str) {
 }
 
 /// Walk the tree collecting `if` condition strings + `for` iterator names,
-/// recursing through branches / bodies / element children.
-fn collect_structural(nodes: &[Node], conds: &mut Vec<String>, for_names: &mut Vec<String>) {
+/// recursing through branches / bodies / element children — AND into the
+/// bodies of imported components, so a structural `if`/`for` declared INSIDE a
+/// component (e.g. `if editing != ""` in `ui/editor.mui`) still subscribes its
+/// signals to the dirty flag. Without the component recursion, a host/UI signal
+/// that only an in-component `if` reads never flags dirty, so the host never
+/// rebuilds and the branch (e.g. the opened file's editor) never appears.
+/// `visited` guards against a component that references itself (cycle).
+fn collect_structural(
+    nodes: &[Node],
+    conds: &mut Vec<String>,
+    for_names: &mut Vec<String>,
+    components: &Registry,
+    visited: &mut Vec<String>,
+) {
     for n in nodes {
         match n {
-            Node::If { cond_raw, then, els, .. } => {
+            Node::If {
+                cond_raw,
+                then,
+                els,
+                ..
+            } => {
                 conds.push(cond_raw.clone());
-                collect_structural(then, conds, for_names);
+                collect_structural(then, conds, for_names, components, visited);
                 if let Some(els) = els {
-                    collect_structural(els, conds, for_names);
+                    collect_structural(els, conds, for_names, components, visited);
                 }
             }
             Node::For { iter, body, .. } => {
                 collect_idents(iter, for_names);
-                collect_structural(body, conds, for_names);
+                collect_structural(body, conds, for_names, components, visited);
             }
-            Node::Element(el) => collect_structural(&el.children, conds, for_names),
+            Node::Element(el) => {
+                collect_structural(&el.children, conds, for_names, components, visited);
+                // Recurse into an imported component's own view body too.
+                if let Some(view) = components.get(&el.name) {
+                    if !visited.iter().any(|v| v == &el.name) {
+                        visited.push(el.name.clone());
+                        collect_structural(&view.body, conds, for_names, components, visited);
+                        visited.pop();
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -612,6 +692,10 @@ struct Ctx<'a> {
     /// fillable when the parent doesn't pack along it — a vertical stack may fill
     /// width unless its parent is horizontal (where width is the main axis).
     parent_horizontal: Option<bool>,
+    /// Literal `width` / `height` of every `id:`-tagged widget in the view, so a
+    /// sibling can size against it (`width: left_panel.width`). Collected once
+    /// before the build from the source props.
+    id_dims: HashMap<String, (Option<f32>, Option<f32>)>,
 }
 
 impl<'a> Ctx<'a> {
@@ -624,6 +708,7 @@ impl<'a> Ctx<'a> {
             avail_w: 0.0,
             avail_h: 0.0,
             parent_horizontal: None,
+            id_dims: HashMap::new(),
         }
     }
 
@@ -694,7 +779,8 @@ impl<'a> Ctx<'a> {
     fn live_env(&self) -> Env {
         let mut env = self.env.clone();
         for (name, sig) in &self.reactive.signals {
-            env.vars.insert(name.clone(), sig.borrow().get().to_string());
+            env.vars
+                .insert(name.clone(), sig.borrow().get().to_string());
         }
         for (name, sig) in &self.reactive.strings {
             env.vars.insert(name.clone(), sig.borrow().get());
@@ -707,7 +793,24 @@ impl<'a> Ctx<'a> {
 /// directly (state bindings, effects).
 fn build_node(ctx: &mut Ctx, node: &Node, layout: &mut Layout) -> Result<Option<Widget>> {
     match node {
-        Node::Element(el) => Ok(Some(build_element(ctx, el, layout)?)),
+        // `Audio` is non-visual: it loads + plays a clip and contributes no
+        // widget (so it doesn't disturb the layout cursor).
+        Node::Element(el) if el.name == "Audio" || el.name == "Sound" => {
+            build_audio(ctx, el)?;
+            Ok(None)
+        }
+        // A `Popup` with `visible: false` renders nothing (and doesn't disturb
+        // the layout). Otherwise it builds like a floating card.
+        Node::Element(el) if el.name == "Popup" && prop_bool(el, "visible") == Some(false) => {
+            Ok(None)
+        }
+        Node::Element(el) => {
+            let w = build_element(ctx, el, layout)?;
+            // Live width/height: a signal-bound dimension updates the widget in
+            // place (no rebuild) — see subscribe_reactive_size.
+            subscribe_reactive_size(ctx, el, w.as_ptr());
+            Ok(Some(w))
+        }
         // Bindings created their signals in `declare_signals`; no widget here.
         Node::Let { .. } => Ok(None),
         // `effect { ... }` — run its interpretable statements once on mount, and
@@ -774,13 +877,63 @@ fn build_for(
         return Ok(None);
     }
 
+    // If the loop body positions items absolutely (its root element has both
+    // `x:` and `y:`), use free layout so the stack keeps each item's own x/y
+    // (canvas game objects) instead of flowing them top-to-bottom.
+    let absolute = body
+        .iter()
+        .find_map(|n| match n {
+            Node::Element(el) => Some(el),
+            _ => None,
+        })
+        .map(|el| find_prop(el, "x").is_some() && find_prop(el, "y").is_some())
+        .unwrap_or(false);
     let mut stack = Stack::new(StackOrientation::Vertical)?.spacing(4.0);
+    if absolute {
+        stack = stack.free_layout(true);
+    }
     let saved = ctx.env.vars.get(pattern).cloned();
+    // Aux bindings a structured item adds (cleared after the loop).
+    let aux = [
+        format!("{pattern}_label"),
+        format!("{pattern}_kind"),
+        format!("{pattern}_depth"),
+        format!("{pattern}_icon"),
+    ];
     let mut content_w: f32 = 0.0;
     let mut content_h: f32 = 0.0;
     let mut count: usize = 0;
     for item in &items {
-        ctx.env.vars.insert(pattern.to_string(), item.clone());
+        // A "structured" row encodes several fields separated by U+0001 (SOH,
+        // which can't occur in a normal string/filename): `key␁label␁kind␁depth`.
+        // The loop var binds to `key` (the stable click target), and three aux
+        // vars `<var>_label` / `<var>_kind` / `<var>_depth` bind the rest — so a
+        // `for` body can vary its icon (`if row_kind == "dir"`), indentation
+        // (`width: row_depth * 14`) and click target per item. A plain string
+        // (no U+0001) binds only the loop var, exactly as before — fully
+        // back-compatible with existing `for x in list` loops.
+        match item.split_once('\u{1}') {
+            Some((key, rest)) => {
+                let mut f = rest.split('\u{1}');
+                ctx.env.vars.insert(pattern.to_string(), key.to_string());
+                ctx.env
+                    .vars
+                    .insert(aux[0].clone(), f.next().unwrap_or("").to_string());
+                ctx.env
+                    .vars
+                    .insert(aux[1].clone(), f.next().unwrap_or("").to_string());
+                ctx.env
+                    .vars
+                    .insert(aux[2].clone(), f.next().unwrap_or("0").to_string());
+                // Optional 5th field: a per-row icon asset (e.g. `mocida://rust.svg`).
+                ctx.env
+                    .vars
+                    .insert(aux[3].clone(), f.next().unwrap_or("").to_string());
+            }
+            None => {
+                ctx.env.vars.insert(pattern.to_string(), item.clone());
+            }
+        }
         let mut item_layout = Layout::root();
         if let Some(w) = build_first(ctx, body, &mut item_layout)? {
             stack.add(w)?;
@@ -789,7 +942,7 @@ fn build_for(
             count += 1;
         }
     }
-    // Restore the loop variable's prior binding (if any).
+    // Restore the loop variable's prior binding (if any) and drop the aux vars.
     match saved {
         Some(v) => {
             ctx.env.vars.insert(pattern.to_string(), v);
@@ -797,6 +950,9 @@ fn build_for(
         None => {
             ctx.env.vars.remove(pattern);
         }
+    }
+    for a in &aux {
+        ctx.env.vars.remove(a);
     }
 
     let h = (content_h + 4.0 * (count.saturating_sub(1) as f32)).max(1.0);
@@ -838,6 +994,21 @@ fn child_margin(node: &Node) -> (f32, f32, f32, f32) {
 
 /// Build one element, recursing into children. An imported component (a view
 /// in the registry) is instantiated; built-ins map to mocida widgets.
+/// Advance the layout cursor for a widget, then honor explicit `x:` / `y:`
+/// overrides. Every widget accepts these common props; each given axis replaces
+/// the stacked-cursor value while a missing axis keeps the auto-flow position,
+/// so `x: 100` alone pins the column but the widget still flows down vertically.
+fn place(el: &Element, layout: &mut Layout, w: f32, h: f32) -> (f32, f32) {
+    let (mut x, mut y) = layout.next_sized(w, h);
+    if let Some(px) = style::f32_prop(el, "x") {
+        x = px;
+    }
+    if let Some(py) = style::f32_prop(el, "y") {
+        y = py;
+    }
+    (x, y)
+}
+
 fn build_element(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
     // A user/imported component takes precedence over the built-in fallbacks
     // (but not over a core widget name, which can't be shadowed).
@@ -867,6 +1038,8 @@ fn build_element(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wid
             "Image" => build_image(ctx, el, layout)?,
             "Video" => build_video(ctx, el, layout)?,
             "WebView" | "Webview" => build_webview(ctx, el, layout)?,
+            "Dialog" => build_dialog(ctx, el, layout)?,
+            "Popup" => build_popup(ctx, el, layout)?,
             "MouseArea" => build_mouse_area(ctx, el, layout)?,
             _ if !el.children.is_empty() => build_stack(ctx, el, layout)?,
             other => build_placeholder(ctx, other, el, layout)?,
@@ -883,7 +1056,7 @@ fn build_element(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wid
     // on ANY widget. Fires for every key press (keyboard isn't spatial); the
     // body decides which key matters. Wired here so it works on every element.
     let widget = match key_handler_closure(ctx, el, "onKeyInput") {
-        Some(mut f) => widget.on_key_down(move |k, _mods| f(k)),
+        Some(mut f) => widget.on_key_down(move |k, mods| f(k, mods as i32)),
         None => widget,
     };
     Ok(widget)
@@ -932,6 +1105,10 @@ fn is_builtin(name: &str) -> bool {
             | "Video"
             | "WebView"
             | "Webview"
+            | "Dialog"
+            | "Popup"
+            | "Audio"
+            | "Sound"
             | "MouseArea"
     )
 }
@@ -1059,9 +1236,12 @@ fn build_rectangle(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
     let mut rect = Rectangle::new()?;
 
     // Fill color: `fill` is the natural name on a rectangle; `background`/`bg`/
-    // `color` also accepted for consistency with the other widgets.
-    let fill = style::color_prop(el, "fill")
-        .or_else(|| style::background(el))
+    // `color` also accepted. `color_eval` resolves a literal OR an expression/
+    // bound variable (e.g. `background: cell_color` in a game-object loop).
+    let fill = color_eval(ctx, el, "fill")
+        .or_else(|| color_eval(ctx, el, "background"))
+        .or_else(|| color_eval(ctx, el, "bg"))
+        .or_else(|| color_eval(ctx, el, "color"))
         .unwrap_or(Rgba {
             r: 255,
             g: 255,
@@ -1144,7 +1324,16 @@ fn build_rectangle(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
         }
     });
 
-    let (x, y) = layout.next_sized(w, h);
+    // Absolute placement: `x:`/`y:` override the flow position. Resolved via
+    // dim_prop so they can be *expressions/bound vars* (e.g. `x: cell` in a
+    // game-object loop), not just literals like the plain `place()` honours.
+    let (mut x, mut y) = place(el, layout, w, h);
+    if let Some(px) = dim_prop(ctx, el, "x") {
+        x = px;
+    }
+    if let Some(py) = dim_prop(ctx, el, "y") {
+        y = py;
+    }
     let mut widget = rect.into_widget_sized(w, h)?.position(x, y);
     if let Some(op) = style::f32_prop(el, "opacity") {
         widget = widget.opacity(op);
@@ -1194,6 +1383,20 @@ fn build_stack(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     if let Some(j) = justify {
         stack = stack.justify(j);
     }
+    // Free layout: if any direct child positions itself absolutely (`x:`+`y:`,
+    // e.g. a floating popup card anchored at the caret), render children at their
+    // own x/y instead of flowing them — otherwise this stack's normal layout
+    // would overwrite the child's position with the flow cursor. Mirrors the
+    // for-loop's free-layout detection.
+    let child_absolute = el.children.iter().any(|n| match n {
+        Node::Element(child) => {
+            find_prop(child, "x").is_some() && find_prop(child, "y").is_some()
+        }
+        _ => false,
+    });
+    if child_absolute {
+        stack = stack.free_layout(true);
+    }
     // A non-start `align` fills the cross axis; a non-start `justify` fills the
     // main axis — so the stack is bigger than its content and has room to
     // center/distribute. Cross axis: width for a vertical stack, height for a
@@ -1220,7 +1423,10 @@ fn build_stack(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
         stack = stack.radius(r);
     }
     if let Some(bc) = style::color_prop(el, "borderColor") {
-        stack = stack.border(to_color(bc), style::f32_prop(el, "borderWidth").unwrap_or(1.0));
+        stack = stack.border(
+            to_color(bc),
+            style::f32_prop(el, "borderWidth").unwrap_or(1.0),
+        );
     } else if let Some(bw) = style::f32_prop(el, "borderWidth") {
         stack = stack.border(Color::rgb(0, 0, 0), bw);
     }
@@ -1300,7 +1506,12 @@ fn build_stack(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     // padding (explicit width/height already folded into `self_*_known`).
     let w = self_w_known.unwrap_or((inner_w + pl + pr).max(1.0));
     let h = self_h_known.unwrap_or((inner_h + pt + pb).max(1.0));
-    let (x, y) = layout.next_sized(w, h);
+    // Absolute placement: `x:`/`y:` override the flow position, resolved via
+    // dim_prop so they can be bound vars/signals (e.g. a floating popup container
+    // positioned from `ac_x`/`ac_y`), not just literals like plain `place()`.
+    let (mut x, mut y) = place(el, layout, w, h);
+    if let Some(px) = dim_prop(ctx, el, "x") { x = px; }
+    if let Some(py) = dim_prop(ctx, el, "y") { y = py; }
     let mut widget = stack.into_widget_sized(w, h)?.position(x, y);
     if let Some(op) = style::f32_prop(el, "opacity") {
         widget = widget.opacity(op);
@@ -1374,7 +1585,7 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
         text = text.margins(l, t, r, b);
     }
     let text_ptr = text.as_ptr();
-    let (x, y) = layout.next_sized(w, h);
+    let (x, y) = place(el, layout, w, h);
     let widget = text.into_widget_sized(w, h)?.position(x, y);
 
     if !reads.is_empty() {
@@ -1398,7 +1609,10 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
             .collect();
         let str_ptrs: Vec<(String, *mut mocida::sys::UISignal)> = reads
             .iter()
-            .filter_map(|n| ctx.string_signal(n).map(|s| (n.clone(), s.borrow().as_ptr())))
+            .filter_map(|n| {
+                ctx.string_signal(n)
+                    .map(|s| (n.clone(), s.borrow().as_ptr()))
+            })
             .collect();
 
         // The updater reads current values via raw ptr, re-renders, sets text.
@@ -1481,6 +1695,16 @@ fn build_button(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
     if let Some(c) = style::enum_member(el, "cursor") {
         button = button.cursor(cursor_from(&c));
     }
+    // `textAlign: left | center | right` aligns the label inside the button
+    // (default center). Useful for list/tree rows that should read left-aligned.
+    if let Some(a) = style::enum_member(el, "textAlign") {
+        let align = match a.as_str() {
+            "left" | "start" => 1,
+            "right" | "end" => 2,
+            _ => 0,
+        };
+        button = button.text_align(align);
+    }
     // Label typography: weight / fontStyle / font family.
     let bits = style::font_style_bits(el);
     if bits != 0 {
@@ -1512,7 +1736,16 @@ fn build_button(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
     let (tw, th) = text_extent(&label, size);
     let bw = dim_prop(ctx, el, "width").unwrap_or((tw + 24.0).max(48.0));
     let bh = dim_prop(ctx, el, "height").unwrap_or((th + 12.0).max(32.0));
-    let (x, y) = layout.next_sized(bw, bh);
+    let (mut x, mut y) = place(el, layout, bw, bh);
+    // `place` only honors *literal* x/y; resolve a bound/aux-var x/y (e.g. a
+    // free-layout overlay positioned from signals, like the autocomplete popup)
+    // via dim_prop, matching build_rectangle.
+    if let Some(px) = dim_prop(ctx, el, "x") {
+        x = px;
+    }
+    if let Some(py) = dim_prop(ctx, el, "y") {
+        y = py;
+    }
     let widget = button.into_widget_sized(bw, bh)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
 }
@@ -1590,7 +1823,8 @@ fn build_textfield(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
     if let Some(ml) = style::f32_prop(el, "maxLength") {
         tf = tf.max_length(ml as i32);
     }
-    if let Some(ms) = style::f32_prop(el, "caretBlink").or_else(|| style::f32_prop(el, "caretBlinkRate"))
+    if let Some(ms) =
+        style::f32_prop(el, "caretBlink").or_else(|| style::f32_prop(el, "caretBlinkRate"))
     {
         tf = tf.caret_blink_rate(ms as i32);
     }
@@ -1621,6 +1855,12 @@ fn build_textfield(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
                 });
             }
         }
+    }
+
+    // Enter in the field fires `onSubmit` (e.g. create the typed file) — runs
+    // the same increment/assign actions a Button `onClick` would.
+    if let Some(mut f) = handler_apply_closure(ctx, el, "onSubmit") {
+        tf = tf.on_submit(move |_| f());
     }
 
     // Reactive display: when the bound `value:` string signal changes
@@ -1663,9 +1903,26 @@ fn build_textfield(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
 
     let w = dim_prop(ctx, el, "width").unwrap_or(240.0);
     let h = dim_prop(ctx, el, "height").unwrap_or(size + 20.0);
-    let (x, y) = layout.next_sized(w, h);
+    let (x, y) = place(el, layout, w, h);
     let widget = tf.into_widget_sized(w, h)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
+}
+
+thread_local! {
+    /// Raw pointer to the most-recently-built `UITextArea`. A host that needs
+    /// caret access (e.g. OndaEngine's autocomplete) reads it via
+    /// [`editor_textarea_ptr`]. It stays valid until the next structural rebuild
+    /// recreates the widget and is refreshed by every rebuild that includes a
+    /// TextArea — OndaEngine has exactly one (the code editor), so "last built"
+    /// is unambiguous.
+    static EDITOR_TA: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The most-recently-built `UITextArea` (null until one is built). Hosts that
+/// drive caret-relative UI (autocomplete popups, programmatic edits) use it with
+/// the `UITextArea_GetCaretByte` / `_InsertText` / `_GetCaretScreenPos` C API.
+pub fn editor_textarea_ptr() -> *mut mocida::sys::UITextArea {
+    EDITOR_TA.with(|c| c.get() as *mut mocida::sys::UITextArea)
 }
 
 /// `TextArea` — multi-line editable input (Enter inserts a newline). Uses the
@@ -1678,8 +1935,12 @@ fn build_textarea(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
     let initial = prop_string_value(ctx, el, "value")
         .or_else(|| prop_string_value(ctx, el, "text"))
         .unwrap_or_default();
-    let size = style::f32_prop(el, "size")
-        .or_else(|| style::f32_prop(el, "fontSize"))
+    // `size`/`fontSize` may be a literal (`size: 13`) OR a signal ident
+    // (`size: editor_font`) — `dim_prop` resolves both (a signal yields its
+    // current value), so the area opens at the live, seeded font size and a
+    // rebuild preserves the zoom level.
+    let size = dim_prop(ctx, el, "size")
+        .or_else(|| dim_prop(ctx, el, "fontSize"))
         .unwrap_or(16.0);
     let mut ta = TextArea::new(&initial, size)?;
     if let Some(ph) = prop_string_value(ctx, el, "placeholder") {
@@ -1691,6 +1952,11 @@ fn build_textarea(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
     }
     if let Some(c) = style::color_prop(el, "textColor").or_else(|| style::color_prop(el, "color")) {
         ta = ta.text_color(to_color(c));
+    }
+    // `selectionColor` (honours alpha) — a translucent highlight keeps glyphs
+    // readable instead of the opaque default washing the text out.
+    if let Some(c) = style::color_prop(el, "selectionColor") {
+        ta = ta.selection_color(to_color(c));
     }
     // TextArea's border takes (normal, focused, width) together; synthesize from
     // whichever of borderColor/borderWidth was given.
@@ -1717,12 +1983,138 @@ fn build_textarea(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
     if let Some(ml) = style::f32_prop(el, "maxLength") {
         ta = ta.max_length(ml as i32);
     }
+    // `lineNumbers: true` → draw the left line-number gutter (code editors).
+    if prop_bool(el, "lineNumbers").unwrap_or(false) {
+        ta = ta.line_numbers(true);
+    }
     if let Some(c) = style::enum_member(el, "cursor") {
         ta = ta.cursor(cursor_from(&c));
     }
+
+    // Syntax highlighting: `highlight: <lang>` (a literal or a signal, e.g. a
+    // host-driven `code_lang`) installs a tokenizer for that language. mocida
+    // calls it on every line-cache rebuild, so colors track edits. Empty /
+    // unsupported language → plain text.
+    // When the value is a bare signal ident (e.g. host-driven `code_lang`), read
+    // it LIVE on every line-cache rebuild so the language never freezes to a
+    // stale structural-rebuild snapshot (that was the "Rust colors sometimes
+    // don't work" bug). A literal (`highlight: "rs"`) stays a constant.
+    if let Some(p) = find_prop(el, "highlight") {
+        if let PropValue::Expr(e) = &p.value {
+            let live_sig = match &e.kind {
+                ExprKind::Ident(name) => ctx.string_signal(name).cloned(),
+                _ => None,
+            };
+            if let Some(sig) = live_sig {
+                ta = ta.highlighter(move |text| {
+                    let lang = sig.borrow().get();
+                    if highlight::is_supported(&lang) {
+                        highlight::spans(text, &lang)
+                    } else {
+                        Vec::new()
+                    }
+                });
+            } else {
+                let lang = render_text_expr(e, ctx);
+                if highlight::is_supported(&lang) {
+                    ta = ta.highlighter(move |text| highlight::spans(text, &lang));
+                }
+            }
+        }
+    }
+
+    // `onSave: { save_n += 1 }` — fired on Ctrl+S inside the editor.
+    if let Some(mut f) = handler_apply_closure(ctx, el, "onSave") {
+        ta = ta.on_save(move || f());
+    }
+
+    // Two-way binding: `onChange: { |v| content = v }` writes every edit into the
+    // bound string signal, so a Save button can read the edited text and the
+    // editor stays in sync with `${content}` elsewhere. Mirrors `TextField`.
+    if let Some(PropValue::Handler(h)) = find_prop(el, "onChange").map(|p| &p.value) {
+        let two_way = parse_str_actions(h).into_iter().find_map(|a| match a {
+            StrAction::TwoWay { name } => Some(name),
+            _ => None,
+        });
+        if let Some(name) = two_way {
+            if let Some(sig) = ctx.string_signal(&name).cloned() {
+                ta = ta.on_change(move |s| {
+                    if let Ok(mut g) = sig.try_borrow_mut() {
+                        let _ = g.set(s.to_string());
+                    }
+                });
+            }
+        }
+    }
+
+    // Reactive display: when the bound `value:` signal changes EXTERNALLY (e.g.
+    // the host loads a new file into `file_content`), push it into the area —
+    // guarded by a text compare so the user's own typing doesn't reset it.
+    let value_name: Option<String> = find_prop(el, "value")
+        .and_then(|p| match &p.value {
+            PropValue::Expr(e) => Some(names_read(e)),
+            _ => None,
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .find(|n| ctx.string_signal(n).is_some());
+    let ta_ptr = ta.as_ptr();
+    // Record this TextArea so the host can drive caret-relative autocomplete.
+    EDITOR_TA.with(|c| c.set(ta_ptr as usize));
+    if let Some(name) = &value_name {
+        if let Some(sig) = ctx.reactive.strings.get(name) {
+            let sptr = sig.borrow().as_ptr();
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_: &Signal<String>| {
+                let want = unsafe { str_from_signal(sptr) };
+                let cur = unsafe {
+                    let p = mocida::sys::UITextArea_GetText(ta_ptr);
+                    if p.is_null() {
+                        String::new()
+                    } else {
+                        std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
+                    }
+                };
+                if cur != want {
+                    if let Ok(c) = std::ffi::CString::new(want) {
+                        unsafe { mocida::sys::UITextArea_SetText(ta_ptr, c.as_ptr()) };
+                    }
+                }
+            }) {
+                ctx.reactive._subs.push(sub);
+            }
+        }
+    }
+
+    // Reactive font size: when `size:`/`fontSize:` is bound to an int signal
+    // (e.g. OndaEngine's `editor_font`, bumped by Ctrl+/Ctrl- in onKeyInput),
+    // resize the area's font IN PLACE via UITextArea_SetFontSize whenever it
+    // changes. That invalidates the line cache (re-renders) WITHOUT a structural
+    // rebuild, so the editor keeps focus/caret/scroll while zooming. Mirrors the
+    // progress-bar reactive value; disjoint field access (`signals` vs `_subs`)
+    // keeps the subscribe + push from conflicting.
+    let size_name: Option<String> = ["size", "fontSize"].iter().find_map(|p| {
+        match find_prop(el, p).map(|pr| &pr.value) {
+            Some(PropValue::Expr(e)) => names_read(e).into_iter().find(|n| ctx.signal(n).is_some()),
+            _ => None,
+        }
+    });
+    if let Some(name) = &size_name {
+        if let Some(sig) = ctx.reactive.signals.get(name) {
+            let sig_ptr = sig.borrow().as_ptr();
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_: &Signal<i32>| {
+                let v = unsafe { mocida::sys::UISignal_GetInt(sig_ptr) } as f32;
+                if v > 0.0 {
+                    unsafe { mocida::sys::UITextArea_SetFontSize(ta_ptr, v) };
+                }
+            }) {
+                ctx.reactive._subs.push(sub);
+            }
+        }
+    }
+
     let w = dim_prop(ctx, el, "width").unwrap_or(280.0);
     let h = dim_prop(ctx, el, "height").unwrap_or(120.0);
-    let (x, y) = layout.next_sized(w, h);
+    let (x, y) = place(el, layout, w, h);
     let widget = ta.into_widget_sized(w, h)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
 }
@@ -1748,7 +2140,10 @@ fn build_checkbox(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
         (None, None) => {}
     }
     if let Some(bc) = style::color_prop(el, "borderColor") {
-        cb = cb.border(to_color(bc), style::f32_prop(el, "borderWidth").unwrap_or(1.0));
+        cb = cb.border(
+            to_color(bc),
+            style::f32_prop(el, "borderWidth").unwrap_or(1.0),
+        );
     } else if let Some(bw) = style::f32_prop(el, "borderWidth") {
         cb = cb.border(Color::rgb(148, 163, 184), bw);
     }
@@ -1834,7 +2229,10 @@ fn build_radio(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
         (None, None) => {}
     }
     if let Some(bc) = style::color_prop(el, "borderColor") {
-        radio = radio.border(to_color(bc), style::f32_prop(el, "borderWidth").unwrap_or(1.0));
+        radio = radio.border(
+            to_color(bc),
+            style::f32_prop(el, "borderWidth").unwrap_or(1.0),
+        );
     } else if let Some(bw) = style::f32_prop(el, "borderWidth") {
         radio = radio.border(Color::rgb(148, 163, 184), bw);
     }
@@ -1898,7 +2296,10 @@ fn build_switch(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
         }
     }
     if let Some(bc) = style::color_prop(el, "borderColor") {
-        sw = sw.border(to_color(bc), style::f32_prop(el, "borderWidth").unwrap_or(1.0));
+        sw = sw.border(
+            to_color(bc),
+            style::f32_prop(el, "borderWidth").unwrap_or(1.0),
+        );
     } else if let Some(bw) = style::f32_prop(el, "borderWidth") {
         sw = sw.border(Color::rgb(148, 163, 184), bw);
     }
@@ -1962,7 +2363,7 @@ fn build_slider(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
 
     let w = dim_prop(ctx, el, "width").unwrap_or(200.0);
     let h = dim_prop(ctx, el, "height").unwrap_or(24.0);
-    let (x, y) = layout.next_sized(w, h);
+    let (x, y) = place(el, layout, w, h);
     let widget = sl.into_widget_sized(w, h)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
 }
@@ -1984,7 +2385,10 @@ fn build_progressbar(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result
         .into_iter()
         .find(|n| ctx.signal(n).is_some());
     let raw_val = match &value_signal {
-        Some(n) => ctx.signal(n).map(|s| s.borrow().get() as f32).unwrap_or(0.0),
+        Some(n) => ctx
+            .signal(n)
+            .map(|s| s.borrow().get() as f32)
+            .unwrap_or(0.0),
         None => style::f32_prop(el, "value").unwrap_or(0.0),
     };
     let mut pb = ProgressBar::new((raw_val / max).clamp(0.0, 1.0))?;
@@ -2033,7 +2437,7 @@ fn build_progressbar(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result
 
     let w = dim_prop(ctx, el, "width").unwrap_or(200.0);
     let h = dim_prop(ctx, el, "height").unwrap_or(8.0);
-    let (x, y) = layout.next_sized(w, h);
+    let (x, y) = place(el, layout, w, h);
     let widget = pb.into_widget_sized(w, h)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
 }
@@ -2053,7 +2457,7 @@ fn build_spinner(_ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
         sp = sp.speed(s);
     }
     let d = r * 2.0;
-    let (x, y) = layout.next_sized(d, d);
+    let (x, y) = place(el, layout, d, d);
     let widget = sp.into_widget_sized(d, d)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
 }
@@ -2091,10 +2495,14 @@ fn build_image(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
         .map(to_color)
         .unwrap_or(Color::WHITE);
     let animated = prop_bool(el, "animated").unwrap_or(false);
-    let img = Image::new(&source, animated, fill, tint)?;
+    let mut img = Image::new(&source, animated, fill, tint)?;
+    // `cache:` toggles the in-memory cache for http/https sources (default on).
+    if prop_bool(el, "cache") == Some(false) {
+        img = img.cache(false);
+    }
     let w = dim_prop(ctx, el, "width").unwrap_or(120.0);
     let h = dim_prop(ctx, el, "height").unwrap_or(120.0);
-    let (x, y) = layout.next_sized(w, h);
+    let (x, y) = place(el, layout, w, h);
     let widget = img.into_widget_sized(w, h)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
 }
@@ -2141,7 +2549,7 @@ fn build_video(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     }
     let w = dim_prop(ctx, el, "width").unwrap_or(320.0);
     let h = dim_prop(ctx, el, "height").unwrap_or(180.0);
-    let (x, y) = layout.next_sized(w, h);
+    let (x, y) = place(el, layout, w, h);
     let widget = video.into_widget_sized(w, h)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
 }
@@ -2172,9 +2580,96 @@ fn build_webview(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wid
     }
     let w = dim_prop(ctx, el, "width").unwrap_or(640.0);
     let h = dim_prop(ctx, el, "height").unwrap_or(400.0);
-    let (x, y) = layout.next_sized(w, h);
+    let (x, y) = place(el, layout, w, h);
     let widget = wv.into_widget_sized(w, h)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
+}
+
+/// `Audio("clip.wav", volume:, gain:, autoplay:)` — a non-visual one-shot sound
+/// (mocida's `UISound`). The positional arg (or `source:`/`src:`) is the WAV
+/// path. `volume:`/`gain:` sets the gain (1.0 = original). It plays on load
+/// unless `autoplay: false`. The clip is stashed in the reactive state so it
+/// outlives this build and finishes playing (a dropped `Sound` stops). Returns
+/// no widget — handled in `build_node`, so it never disturbs the layout.
+fn build_audio(ctx: &mut Ctx, el: &Element) -> Result<()> {
+    let source = el
+        .positional
+        .as_ref()
+        .map(|e| render_text_expr(e, ctx))
+        .filter(|s| !s.is_empty())
+        .or_else(|| prop_string_value(ctx, el, "source"))
+        .or_else(|| prop_string_value(ctx, el, "src"))
+        .unwrap_or_default();
+    if source.is_empty() {
+        return Ok(());
+    }
+    let mut sound = Sound::load_wav(&source)?;
+    if let Some(g) = style::f32_prop(el, "volume").or_else(|| style::f32_prop(el, "gain")) {
+        sound.set_gain(g);
+    }
+    if prop_bool(el, "autoplay").unwrap_or(true) {
+        sound.play();
+    }
+    ctx.reactive._sounds.push(sound);
+    Ok(())
+}
+
+/// `Dialog(cardWidth:, cardHeight:, radius:, cardColor:/background:,
+/// backdropColor:, dismissOnBackdrop:, visible:) { children }` — a modal-ish
+/// overlay (mocida's `UIDialog`): a translucent backdrop plus a centered card
+/// holding the children. Children are positioned relative to the card's
+/// top-left (use `x:`/`y:` to place them). `visible: false` builds it hidden.
+fn build_dialog(ctx: &mut Ctx, el: &Element, _layout: &mut Layout) -> Result<Widget> {
+    let card_w = dim_prop(ctx, el, "cardWidth")
+        .or_else(|| dim_prop(ctx, el, "width"))
+        .unwrap_or(360.0);
+    let card_h = dim_prop(ctx, el, "cardHeight")
+        .or_else(|| dim_prop(ctx, el, "height"))
+        .unwrap_or(200.0);
+    let mut dlg = Dialog::new(card_w, card_h)?;
+    if let Some(c) = style::color_prop(el, "cardColor").or_else(|| style::background(el)) {
+        dlg = dlg.card_color(to_color(c));
+    }
+    if let Some(c) = style::color_prop(el, "backdropColor") {
+        dlg = dlg.backdrop_color(to_color(c));
+    }
+    if let Some(r) = style::f32_prop(el, "radius") {
+        dlg = dlg.radius(r);
+    }
+    if prop_bool(el, "dismissOnBackdrop").unwrap_or(false) {
+        dlg = dlg.dismiss_on_backdrop(true);
+    }
+
+    // Children live inside the card; position them against a fresh cursor so
+    // their `x:`/`y:` are relative to the card's top-left, not the window.
+    let mut card_layout = Layout::root();
+    for child in &el.children {
+        if let Some(w) = build_node(ctx, child, &mut card_layout)? {
+            dlg.add_content(w)?;
+        }
+    }
+
+    if prop_bool(el, "visible").unwrap_or(true) {
+        dlg.show();
+    }
+    // The dialog paints its own fullscreen backdrop + centered card, so it isn't
+    // placed by the layout cursor; it's returned as-is for `build_element` to
+    // attach `id:` / `onKeyInput:`.
+    Ok(dlg.into_widget()?)
+}
+
+/// `Popup(x:, y:, width:, height:, background:, radius:, shadow:, padding:,
+/// gap:, borderColor:, borderWidth:, zIndex:, visible:) { children }` — a
+/// non-modal floating card. It builds exactly like a `Rectangle` container but
+/// draws above its siblings via a high `zIndex` (default 1000), so it can sit at
+/// an absolute `x`/`y` as an overlay. `visible: false` is handled in
+/// `build_node` (renders nothing).
+fn build_popup(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
+    let z = style::f32_prop(el, "zIndex")
+        .map(|z| z as i32)
+        .unwrap_or(1000);
+    let widget = build_rectangle(ctx, el, layout)?;
+    Ok(widget.z_index(z))
 }
 
 /// `MouseArea(onClick:, onEnter:, …) { children }` — a transparent interaction
@@ -2244,6 +2739,49 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
     if prop_bool(el, "draggable").unwrap_or(false) {
         area = area.draggable(true);
     }
+    // Drag-to-resize splitter: `dragXSignal`/`dragYSignal: "name"` accumulate the
+    // per-tick drag delta into an int signal, then flag the tree dirty so the host
+    // rebuilds with the new size (numeric props are evaluated at build time, so a
+    // rebuild is how a width/height change takes effect). `dragInvertX/Y: true`
+    // flips the sign for a handle on the far edge of the resized element (e.g. a
+    // panel docked on the right grows as its LEFT-edge handle moves left). The host
+    // clamps the signal to a sane range.
+    let drag_x_sig = prop_string_value(ctx, el, "dragXSignal").and_then(|n| ctx.signal(&n).cloned());
+    let drag_y_sig = prop_string_value(ctx, el, "dragYSignal").and_then(|n| ctx.signal(&n).cloned());
+    if drag_x_sig.is_some() || drag_y_sig.is_some() {
+        area = area.draggable(true);
+        // A resize handle gets the matching resize cursor automatically (↔ for a
+        // horizontal/width drag, ↕ for a vertical/height drag) — like a browser —
+        // unless an explicit `cursor:` already set a non-default one.
+        if drag_x_sig.is_some() {
+            area = area.cursor(Cursor::EwResize);
+        } else {
+            area = area.cursor(Cursor::NsResize);
+        }
+        let inv_x: f32 = if prop_bool(el, "dragInvertX").unwrap_or(false) { -1.0 } else { 1.0 };
+        let inv_y: f32 = if prop_bool(el, "dragInvertY").unwrap_or(false) { -1.0 } else { 1.0 };
+        // Accumulate the delta into the signal each drag tick. We DON'T flag the
+        // tree dirty (no rebuild): a rebuild mid-drag would recreate — and thus
+        // cancel — this MouseArea. Instead, signal-bound `width`/`height` props are
+        // reactive (subscribe_reactive_size), so setting the signal resizes the
+        // affected widgets LIVE this frame. Smooth drag, no rebuild.
+        area = area.on(MouseAreaEvent::Drag, move |ev| {
+            if let Some(s) = &drag_x_sig {
+                let cur = s.borrow().get();
+                let next = cur + (ev.dx * inv_x).round() as i32;
+                if next != cur {
+                    let _ = s.borrow_mut().set(next);
+                }
+            }
+            if let Some(s) = &drag_y_sig {
+                let cur = s.borrow().get();
+                let next = cur + (ev.dy * inv_y).round() as i32;
+                if next != cur {
+                    let _ = s.borrow_mut().set(next);
+                }
+            }
+        });
+    }
     const EVENTS: &[(&str, MouseAreaEvent)] = &[
         ("onClick", MouseAreaEvent::MouseUp),
         ("onRelease", MouseAreaEvent::MouseUp),
@@ -2273,7 +2811,7 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
         .margin(0.0, -content_h, 0.0, 0.0);
     rect.add_child(area_widget);
 
-    let (x, y) = layout.next_sized(w, h);
+    let (x, y) = place(el, layout, w, h);
     Ok(apply_anchor(
         rect.into_widget_sized(w, h)?.position(x, y),
         style::anchor(el),
@@ -2282,7 +2820,10 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
 
 /// `Grid(columns:, gap:) { children }` — fixed-column grid container.
 fn build_grid(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
-    let columns = style::f32_prop(el, "columns").map(|c| c as i32).unwrap_or(2).max(1);
+    let columns = style::f32_prop(el, "columns")
+        .map(|c| c as i32)
+        .unwrap_or(2)
+        .max(1);
     let gap = style::f32_prop(el, "gap").unwrap_or(8.0);
     let mut grid = Grid::new(columns)?.gap(gap, gap);
     ctx.declare_signals(&el.children);
@@ -2301,7 +2842,7 @@ fn build_grid(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
     // A grid arranges into `columns`; reserve roughly content_h / columns rows.
     let w = (content_w * columns as f32 + gap * (columns as f32)).max(1.0);
     let h = (content_h / columns as f32 + gap).max(1.0);
-    let (x, y) = layout.next_sized(w, h);
+    let (x, y) = place(el, layout, w, h);
     let widget = grid.into_widget_sized(w, h)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
 }
@@ -2323,6 +2864,23 @@ fn build_scroll(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
     }
     if prop_bool(el, "dragScroll").unwrap_or(false) {
         scroll = scroll.drag_scroll(true);
+    }
+    // `scrollbar: false` hides the scrollbar; `scrollbarColor` / `trackColor` /
+    // `scrollbarWidth` customize it (shown by default when content overflows).
+    if prop_bool(el, "scrollbar") == Some(false) {
+        scroll = scroll.scrollbar(false);
+    }
+    let bar_thumb = style::color_prop(el, "scrollbarColor");
+    let bar_track = style::color_prop(el, "scrollbarTrackColor");
+    let bar_width = style::f32_prop(el, "scrollbarWidth");
+    if bar_thumb.is_some() || bar_track.is_some() || bar_width.is_some() {
+        let thumb = bar_thumb
+            .map(to_color)
+            .unwrap_or_else(|| Color::rgba(150, 155, 168, 0.55));
+        let track = bar_track
+            .map(to_color)
+            .unwrap_or_else(|| Color::rgba(255, 255, 255, 0.04));
+        scroll = scroll.scrollbar_style(thumb, track, bar_width.unwrap_or(8.0));
     }
 
     let gap = style::f32_prop(el, "gap").unwrap_or(8.0);
@@ -2348,7 +2906,7 @@ fn build_scroll(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
 
     let w = dim_prop(ctx, el, "width").unwrap_or_else(|| iw.max(120.0));
     let h = dim_prop(ctx, el, "height").unwrap_or(200.0);
-    let (x, y) = layout.next_sized(w, h);
+    let (x, y) = place(el, layout, w, h);
     let widget = scroll.into_widget_sized(w, h)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
 }
@@ -2370,9 +2928,9 @@ fn build_listview(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
         }
     }
     let w = dim_prop(ctx, el, "width").unwrap_or_else(|| content_w.max(200.0));
-    let h = dim_prop(ctx, el, "height")
-        .unwrap_or_else(|| (item_h * count as f32).clamp(item_h, 360.0));
-    let (x, y) = layout.next_sized(w, h);
+    let h =
+        dim_prop(ctx, el, "height").unwrap_or_else(|| (item_h * count as f32).clamp(item_h, 360.0));
+    let (x, y) = place(el, layout, w, h);
     let widget = lv.into_widget_sized(w, h)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
 }
@@ -2404,9 +2962,12 @@ fn build_gridview(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
     let gap = 8.0;
     let w = dim_prop(ctx, el, "width")
         .unwrap_or_else(|| (cell_w * columns as f32 + gap * columns as f32).max(1.0));
-    let h = dim_prop(ctx, el, "height")
-        .unwrap_or_else(|| (cell_h * rows as f32 + gap * rows as f32).min(420.0).max(cell_h));
-    let (x, y) = layout.next_sized(w, h);
+    let h = dim_prop(ctx, el, "height").unwrap_or_else(|| {
+        (cell_h * rows as f32 + gap * rows as f32)
+            .min(420.0)
+            .max(cell_h)
+    });
+    let (x, y) = place(el, layout, w, h);
     let widget = gv.into_widget_sized(w, h)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
 }
@@ -2432,11 +2993,26 @@ fn decode_color_ident(name: &str) -> Option<Rgba> {
     })
 }
 
-/// Resolve an expression to a color: a color-literal ident, or a conditional
-/// (`if cond { #a } else { #b }` / `cond ? #a : #b`) evaluated against `env`.
+/// Parse a `#rrggbb` / `#rrggbbaa` string into [`Rgba`]. Lets a bound variable
+/// (e.g. a per-row `cell_color = "#4c8ed8"`) drive a `background:`.
+fn parse_hex_color(s: &str) -> Option<Rgba> {
+    let h = s.strip_prefix('#')?;
+    let byte = |i: usize| u8::from_str_radix(h.get(i..i + 2)?, 16).ok();
+    match h.len() {
+        6 => Some(Rgba { r: byte(0)?, g: byte(2)?, b: byte(4)?, a: 255 }),
+        8 => Some(Rgba { r: byte(0)?, g: byte(2)?, b: byte(4)?, a: byte(6)? }),
+        _ => None,
+    }
+}
+
+/// Resolve an expression to a color: a color-literal ident, a bound variable
+/// holding a `#rrggbb` string, or a conditional (`if cond { #a } else { #b }` /
+/// `cond ? #a : #b`) evaluated against `env`.
 fn color_from_expr(e: &Expr, env: &Env) -> Option<Rgba> {
     match &e.kind {
-        ExprKind::Ident(n) => decode_color_ident(n),
+        ExprKind::Ident(n) => {
+            decode_color_ident(n).or_else(|| env.vars.get(n).and_then(|s| parse_hex_color(s)))
+        }
         ExprKind::If { cond, then, els } => {
             if eval_bool_expr_env(cond, env).unwrap_or(false) {
                 color_from_expr(then, env)
@@ -2492,9 +3068,12 @@ fn apply_anchor(widget: Widget, a: Anchor) -> Widget {
 
 /// Map a `cursor:` enum member to mocida's [`Cursor`].
 fn cursor_from(name: &str) -> Cursor {
-    match name {
+    // Case-insensitive: `enum_member` normalises `cursor: ewResize` to lowercase.
+    match name.to_ascii_lowercase().as_str() {
         "pointer" | "hand" => Cursor::Pointer,
         "text" => Cursor::Text,
+        "ewresize" | "colresize" | "ew-resize" | "horizontalresize" => Cursor::EwResize,
+        "nsresize" | "rowresize" | "ns-resize" | "verticalresize" => Cursor::NsResize,
         _ => Cursor::Default,
     }
 }
@@ -2526,7 +3105,12 @@ fn label_color(el: &Element) -> Option<Rgba> {
 /// sized to `box_h` and **vertically centered** so the text lines up with the
 /// control's center (the control and caption share the row height). Returns the
 /// widget and its measured width.
-fn build_caption(el: &Element, label: &str, default_size: f32, box_h: f32) -> Result<(Widget, f32)> {
+fn build_caption(
+    el: &Element,
+    label: &str,
+    default_size: f32,
+    box_h: f32,
+) -> Result<(Widget, f32)> {
     let size = style::f32_prop(el, "labelSize")
         .or_else(|| style::f32_prop(el, "size"))
         .unwrap_or(default_size);
@@ -2556,7 +3140,7 @@ fn control_with_caption(
         .or_else(|| el.positional.as_ref().map(|e| render_text_expr(e, ctx)))
         .filter(|s| !s.is_empty());
     let Some(label) = label else {
-        let (x, y) = layout.next_sized(cw, ch);
+        let (x, y) = place(el, layout, cw, ch);
         return Ok(apply_anchor(control.position(x, y), style::anchor(el)));
     };
     // Caption shares the control's height + is vertically centered, so the text
@@ -2567,7 +3151,7 @@ fn control_with_caption(
     row.add(caption)?;
     let w = cw + 8.0 + tw;
     let h = ch;
-    let (x, y) = layout.next_sized(w, h);
+    let (x, y) = place(el, layout, w, h);
     Ok(apply_anchor(
         row.into_widget_sized(w, h)?.position(x, y),
         style::anchor(el),
@@ -2722,7 +3306,11 @@ fn handler_apply_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn 
     let int_pair: Option<(HandlerAction, Rc<RefCell<Signal<i32>>>)> = handler
         .action()
         .and_then(|a| ctx.signal(a.name()).cloned().map(|s| (a, s)));
-    type StrSet = (StrAction, Rc<RefCell<Signal<String>>>, Option<Rc<RefCell<Signal<String>>>>);
+    type StrSet = (
+        StrAction,
+        Rc<RefCell<Signal<String>>>,
+        Option<Rc<RefCell<Signal<String>>>>,
+    );
     let mut str_sets: Vec<StrSet> = Vec::new();
     for a in parse_str_actions(handler) {
         match &a {
@@ -2803,6 +3391,7 @@ fn handler_apply_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn 
 struct KeyEvalCtx<'a> {
     param: &'a str,
     key: &'a str,
+    mods: i32, // SDL keymod bitmask for this press (`event.ctrl`/`.shift`/`.alt`)
     ints: &'a HashMap<String, Rc<RefCell<Signal<i32>>>>,
     strs: &'a HashMap<String, Rc<RefCell<Signal<String>>>>,
 }
@@ -2812,7 +3401,7 @@ struct KeyEvalCtx<'a> {
 /// bound to the pressed key name, so `if event.key == "A" { count += 1 }` works.
 /// Applies signal mutations (`= += -= *= /=`, `++`/`--`) inside matching
 /// branches; anything it doesn't recognise is ignored.
-fn key_handler_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn FnMut(&str)>> {
+fn key_handler_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn FnMut(&str, i32)>> {
     let handler = match &find_prop(el, prop)?.value {
         PropValue::Handler(h) => h,
         _ => return None,
@@ -2835,10 +3424,11 @@ fn key_handler_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn Fn
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    Some(Box::new(move |key: &str| {
+    Some(Box::new(move |key: &str, mods: i32| {
         let kc = KeyEvalCtx {
             param: &param,
             key,
+            mods,
             ints: &ints,
             strs: &strs,
         };
@@ -3049,12 +3639,7 @@ fn key_lookup_ident(name: &str, kc: &KeyEvalCtx) -> String {
     }
 }
 
-fn run_key_assign(
-    target: &Expr,
-    op: copper_syntax::expr::AssignOp,
-    value: &Expr,
-    kc: &KeyEvalCtx,
-) {
+fn run_key_assign(target: &Expr, op: copper_syntax::expr::AssignOp, value: &Expr, kc: &KeyEvalCtx) {
     use copper_syntax::expr::AssignOp;
     let ExprKind::Ident(name) = &target.kind else {
         return;
@@ -3148,8 +3733,16 @@ fn key_eval_str(e: &Expr, kc: &KeyEvalCtx) -> String {
         }
         ExprKind::Member { base, field, .. } => {
             if let ExprKind::Ident(b) = &base.kind {
-                if b == kc.param && field == "key" {
-                    return kc.key.to_string();
+                if b == kc.param {
+                    // `event.key` + the modifier flags (`event.ctrl`/`.shift`/
+                    // `.alt`) as "1"/"0" so a handler can gate on Ctrl/Shift.
+                    match field.as_str() {
+                        "key" => return kc.key.to_string(),
+                        "ctrl" => return if kc.mods & 0x00C0 != 0 { "1" } else { "0" }.into(),
+                        "shift" => return if kc.mods & 0x0003 != 0 { "1" } else { "0" }.into(),
+                        "alt" => return if kc.mods & 0x0300 != 0 { "1" } else { "0" }.into(),
+                        _ => {}
+                    }
                 }
             }
             String::new()
@@ -3211,7 +3804,10 @@ where
         .collect();
     let str_ptrs: Vec<(String, *mut mocida::sys::UISignal)> = names
         .iter()
-        .filter_map(|n| ctx.string_signal(n).map(|s| (n.clone(), s.borrow().as_ptr())))
+        .filter_map(|n| {
+            ctx.string_signal(n)
+                .map(|s| (n.clone(), s.borrow().as_ptr()))
+        })
         .collect();
     if int_ptrs.is_empty() && str_ptrs.is_empty() {
         return;
@@ -3221,8 +3817,10 @@ where
     let updater = move || {
         let mut live = base.clone();
         for (n, p) in &int_ptrs {
-            live.vars
-                .insert(n.clone(), unsafe { mocida::sys::UISignal_GetInt(*p) }.to_string());
+            live.vars.insert(
+                n.clone(),
+                unsafe { mocida::sys::UISignal_GetInt(*p) }.to_string(),
+            );
         }
         for (n, p) in &str_ptrs {
             live.vars.insert(n.clone(), unsafe { str_from_signal(*p) });
@@ -3509,9 +4107,9 @@ fn eval_f32(e: &Expr, ctx: &Ctx) -> Option<f32> {
     match &e.kind {
         ExprKind::Literal(Literal::Int(i)) => Some(*i as f32),
         ExprKind::Literal(Literal::Float(f)) => Some(*f as f32),
-        ExprKind::Member { base, field, .. } => {
-            screen_member(base, field).and_then(|s| s.parse::<f32>().ok())
-        }
+        ExprKind::Member { base, field, .. } => screen_member(base, field)
+            .and_then(|s| s.parse::<f32>().ok())
+            .or_else(|| id_member_dim(base, field, ctx)),
         ExprKind::Binary { op, lhs, rhs } => {
             let a = eval_f32(lhs, ctx)?;
             let b = eval_f32(rhs, ctx)?;
@@ -3526,9 +4124,133 @@ fn eval_f32(e: &Expr, ctx: &Ctx) -> Option<f32> {
         ExprKind::Ident(n) => ctx
             .signal(n)
             .map(|s| s.borrow().get() as f32)
+            // String signals (e.g. a host-set `ac_x` = "60") parse to a number,
+            // so they can drive `x:`/`y:`/`width:` like int signals or aux vars.
+            .or_else(|| ctx.string_signal(n).and_then(|s| s.borrow().get().parse::<f32>().ok()))
             .or_else(|| ctx.env.get(n).and_then(|v| v.parse::<f32>().ok())),
         _ => None,
     }
+}
+
+/// Numeric expr eval against a flat `name → f32` map of live values (signal
+/// values + baked env vars). Mirrors [`eval_f32`] but resolves idents from the
+/// map, so it can run inside a signal subscription with no `Ctx` borrow.
+fn eval_f32_live(e: &Expr, vals: &HashMap<String, f32>) -> Option<f32> {
+    match &e.kind {
+        ExprKind::Literal(Literal::Int(i)) => Some(*i as f32),
+        ExprKind::Literal(Literal::Float(f)) => Some(*f as f32),
+        ExprKind::Member { base, field, .. } => {
+            screen_member(base, field).and_then(|s| s.parse::<f32>().ok())
+        }
+        ExprKind::Binary { op, lhs, rhs } => {
+            let a = eval_f32_live(lhs, vals)?;
+            let b = eval_f32_live(rhs, vals)?;
+            match op {
+                BinOp::Add => Some(a + b),
+                BinOp::Sub => Some(a - b),
+                BinOp::Mul => Some(a * b),
+                BinOp::Div if b != 0.0 => Some(a / b),
+                _ => None,
+            }
+        }
+        ExprKind::Ident(n) => vals.get(n).copied(),
+        _ => None,
+    }
+}
+
+/// Make a widget's `width`/`height` REACTIVE: if either is an expression that
+/// references a live signal (e.g. `width: files_w`, `height: Window.height - 114
+/// - scene_h`), subscribe to those signals and, on change, re-evaluate the
+/// dimension and write it straight into the widget's `*mut f32` size pointer.
+/// mocida re-lays-out from child sizes every render frame, so the change applies
+/// LIVE — no tree rebuild (which is what makes drag-resize smooth, and avoids
+/// cancelling an in-flight MouseArea drag). Called once per element at build.
+fn subscribe_reactive_size(ctx: &mut Ctx, el: &Element, ptr: *mut mocida::sys::UIWidget) {
+    if ptr.is_null() {
+        return;
+    }
+    let expr_of = |name: &str| match find_prop(el, name).map(|p| &p.value) {
+        Some(PropValue::Expr(e)) => Some(e.clone()),
+        _ => None,
+    };
+    let w_expr = expr_of("width");
+    let h_expr = expr_of("height");
+    if w_expr.is_none() && h_expr.is_none() {
+        return;
+    }
+    let mut reads: Vec<String> = Vec::new();
+    if let Some(e) = &w_expr {
+        reads.extend(names_read(e));
+    }
+    if let Some(e) = &h_expr {
+        reads.extend(names_read(e));
+    }
+    reads.retain(|n| ctx.signal(n).is_some() || ctx.string_signal(n).is_some());
+    reads.sort();
+    reads.dedup();
+    if reads.is_empty() {
+        return; // a constant expr (e.g. `Window.height - 40`) needs no subscription
+    }
+    // Baked env numerics (non-signal idents like a `for`-loop's `row_depth`).
+    let baked: HashMap<String, f32> = ctx
+        .env
+        .vars
+        .iter()
+        .filter_map(|(k, v)| v.parse::<f32>().ok().map(|f| (k.clone(), f)))
+        .collect();
+    let int_ptrs: Vec<(String, *mut mocida::sys::UISignal)> = reads
+        .iter()
+        .filter_map(|n| ctx.signal(n).map(|s| (n.clone(), s.borrow().as_ptr())))
+        .collect();
+    let str_ptrs: Vec<(String, *mut mocida::sys::UISignal)> = reads
+        .iter()
+        .filter_map(|n| ctx.string_signal(n).map(|s| (n.clone(), s.borrow().as_ptr())))
+        .collect();
+    let updater = move || {
+        let mut vals = baked.clone();
+        for (n, p) in &int_ptrs {
+            vals.insert(n.clone(), unsafe { mocida::sys::UISignal_GetInt(*p) } as f32);
+        }
+        for (n, p) in &str_ptrs {
+            if let Ok(f) = unsafe { str_from_signal(*p) }.parse::<f32>() {
+                vals.insert(n.clone(), f);
+            }
+        }
+        // SAFETY: `ptr` is a live UIWidget owned by the tree (outlives these subs);
+        // `*width`/`*height` are its f32 size cells. UI loop is single-threaded.
+        unsafe {
+            if let Some(e) = &w_expr {
+                if let Some(v) = eval_f32_live(e, &vals) {
+                    let wp = (*ptr).width;
+                    if !wp.is_null() {
+                        *wp = v;
+                    }
+                }
+            }
+            if let Some(e) = &h_expr {
+                if let Some(v) = eval_f32_live(e, &vals) {
+                    let hp = (*ptr).height;
+                    if !hp.is_null() {
+                        *hp = v;
+                    }
+                }
+            }
+        }
+    };
+    let mut subs = Vec::new();
+    for n in &reads {
+        let u = updater.clone();
+        if let Some(sig) = ctx.signal(n) {
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_| u()) {
+                subs.push(sub);
+            }
+        } else if let Some(sig) = ctx.string_signal(n) {
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_| u()) {
+                subs.push(sub);
+            }
+        }
+    }
+    ctx.reactive._subs.extend(subs);
 }
 
 /// A numeric prop (width/height/size/…) that may be a literal OR a runtime
@@ -3541,10 +4263,33 @@ fn dim_prop(ctx: &Ctx, el: &Element, name: &str) -> Option<f32> {
     match &find_prop(el, name)?.value {
         PropValue::Expr(e) => eval_f32(e, ctx),
         // `width: Window.width` (no arithmetic) parses as a `Type.Member` enum,
-        // not an expression — resolve it as a screen/window metric.
-        PropValue::Mui(MuiValue::Enum { ty: Some(ty), member }) => {
-            screen_metric(ty, member).map(|n| n as f32)
-        }
+        // not an expression — resolve it as a screen/window metric, or another
+        // widget's size (`width: left_panel.width`).
+        PropValue::Mui(MuiValue::Enum {
+            ty: Some(ty),
+            member,
+        }) => screen_metric(ty, member)
+            .map(|n| n as f32)
+            .or_else(|| id_dim(ctx, ty, member)),
+        _ => None,
+    }
+}
+
+/// Resolve `<id>.width` / `<id>.height` to the literal size of the `id:`-tagged
+/// widget, from the map collected before the build.
+fn id_dim(ctx: &Ctx, id: &str, field: &str) -> Option<f32> {
+    let (w, h) = ctx.id_dims.get(id)?;
+    match field {
+        "width" => *w,
+        "height" => *h,
+        _ => None,
+    }
+}
+
+/// Like [`id_dim`] but takes the member's base expression (must be a bare ident).
+fn id_member_dim(base: &Expr, field: &str, ctx: &Ctx) -> Option<f32> {
+    match &base.kind {
+        ExprKind::Ident(id) => id_dim(ctx, id, field),
         _ => None,
     }
 }
@@ -3628,9 +4373,10 @@ fn dispatch_host_call(field: &str, args: &[Expr]) {
             }
         }
         "setSize" => {
-            if let (Some(w), Some(h)) =
-                (args.first().and_then(lit_i32), args.get(1).and_then(lit_i32))
-            {
+            if let (Some(w), Some(h)) = (
+                args.first().and_then(lit_i32),
+                args.get(1).and_then(lit_i32),
+            ) {
                 unsafe { mocida::sys::UIApp_SetSizeG(w, h) };
             }
         }
@@ -4054,8 +4800,14 @@ mod tests {
         assert!(!eval_condition(&ctx, "phase == \"prereqs\""));
         assert!(eval_condition(&ctx, "phase != \"prereqs\""));
         assert!(!eval_condition(&ctx, "source_dir != \"\""));
-        assert!(eval_condition(&ctx, "phase == \"config\" && source_dir == \"\""));
-        assert!(eval_condition(&ctx, "phase == \"x\" || phase == \"config\""));
+        assert!(eval_condition(
+            &ctx,
+            "phase == \"config\" && source_dir == \"\""
+        ));
+        assert!(eval_condition(
+            &ctx,
+            "phase == \"x\" || phase == \"config\""
+        ));
         assert!(eval_condition(&ctx, "true"));
         assert!(!eval_condition(&ctx, "false"));
     }
@@ -4175,7 +4927,12 @@ mod tests {
         };
 
         // The `+` button's action, applied like clicks (pure i32 logic).
-        let PropValue::Handler(h) = &button.props.iter().find(|p| p.name == "onClick").unwrap().value
+        let PropValue::Handler(h) = &button
+            .props
+            .iter()
+            .find(|p| p.name == "onClick")
+            .unwrap()
+            .value
         else {
             panic!("onClick handler");
         };
@@ -4197,7 +4954,11 @@ mod tests {
         };
         let pos = t.positional.as_ref().expect("positional");
         let s = render_text_expr_env(pos, &Env::default());
-        assert_eq!(s, "YES", "conditional text; positional kind = {:?}", pos.kind);
+        assert_eq!(
+            s, "YES",
+            "conditional text; positional kind = {:?}",
+            pos.kind
+        );
     }
 
     #[test]
@@ -4226,12 +4987,18 @@ mod tests {
         let Node::Element(inp) = &v2.body[0] else {
             panic!("Input");
         };
-        let PropValue::Handler(h2) =
-            &inp.props.iter().find(|p| p.name == "onChange").unwrap().value
+        let PropValue::Handler(h2) = &inp
+            .props
+            .iter()
+            .find(|p| p.name == "onChange")
+            .unwrap()
+            .value
         else {
             panic!("handler");
         };
-        assert!(matches!(parse_str_actions(h2).as_slice(), [StrAction::TwoWay { name }] if name == "source_dir"));
+        assert!(
+            matches!(parse_str_actions(h2).as_slice(), [StrAction::TwoWay { name }] if name == "source_dir")
+        );
     }
 
     #[test]
@@ -4320,10 +5087,7 @@ mod tests {
         assert_eq!(key_format_args(args, &kc), "Key pressed: R");
 
         // Named + escaped placeholders, plus a different key.
-        let kc2 = KeyEvalCtx {
-            key: "Space",
-            ..kc
-        };
+        let kc2 = KeyEvalCtx { key: "Space", ..kc };
         let raw2 = "println!(\"a {{}} {} b\", event.key)";
         let (b2, _) = copper_syntax::expr::parse_stmts(raw2);
         let ExprKind::Call { args: a2, .. } = &b2.tail.as_ref().unwrap().kind else {
@@ -4361,7 +5125,13 @@ mod tests {
             })
             .expect("an expression");
         assert!(
-            matches!(&e.kind, ExprKind::Assign { op: AssignOp::Add, .. }),
+            matches!(
+                &e.kind,
+                ExprKind::Assign {
+                    op: AssignOp::Add,
+                    ..
+                }
+            ),
             "`score += 1` should be Assign(Add), got {:?}",
             e.kind
         );

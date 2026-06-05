@@ -92,6 +92,13 @@ static void WalkFontsDir(const char* dirPath, int* count) {
 #endif // !_WIN32
 
 void UISearchFonts() {
+    // Idempotent: if the registry is already populated, don't rescan. Rescanning
+    // clears UIFonts to NULL first (below) and repopulates incrementally, which
+    // opens a window where renders see no fonts and text disappears. A host that
+    // genuinely needs to refresh must call UIFonts_Destroy() first (which NULLs
+    // the registry), after which this repopulates normally.
+    if (UIFonts != NULL) return;
+
     int fontCount = 0;
     UIFonts = NULL;
 
@@ -276,14 +283,26 @@ const char* UIGetDefaultFontPath(void) {
 }
 
 char* UIGetFont(const char* family_name) {
-    if (UIFonts == NULL || sizeof(UIFonts) == 0) {
-        UI_WARN(UI_CAT_FONT, "fonts not initialized — call UISearchFonts() first");
-        return NULL;
+    // Lazily build the font registry on first use. Hosts that drive mocida
+    // directly (e.g. onda-launcher / mui-runtime) never call UISearchFonts(),
+    // so UIFonts stayed NULL and every font-family lookup returned NULL — which
+    // left those widgets' text undrawn, rendering buttons/labels as empty boxes.
+    // Populating here (idempotent: UISearchFonts no-ops once filled) makes real
+    // families resolve and the registry persists for the rest of the run, so the
+    // glitch can't recur. (The old `sizeof(UIFonts) == 0` check was dead code —
+    // sizeof a pointer is never 0.)
+    if (UIFonts == NULL) {
+        UISearchFonts();
+    }
+    if (UIFonts == NULL) {
+        // No fonts found at all (TTF_Init failed / empty system dir) — draw with
+        // the platform default path so text never disappears.
+        UI_WARN(UI_CAT_FONT, "fonts unavailable — using default font path");
+        return (char*)UIGetDefaultFontPath();
     }
 
     if (family_name == NULL) {
-        UI_WARN(UI_CAT_FONT, "family name is NULL");
-        return NULL;
+        return (char*)UIGetDefaultFontPath();
     }
 
     for (int i = 0; UIFonts[i] != NULL; i++) {
@@ -298,8 +317,9 @@ char* UIGetFont(const char* family_name) {
         }
     }
 
-    UI_WARN(UI_CAT_FONT, "font family '%s' not found", family_name);
-    return NULL; 
+    // Unknown family: draw with the default font rather than dropping the text.
+    UI_WARN(UI_CAT_FONT, "font family '%s' not found — falling back to default font", family_name);
+    return (char*)UIGetDefaultFontPath();
 }
 
 void UIFont_Destroy(FontEntry* font) {

@@ -109,6 +109,20 @@ impl Image {
         Ok(Self { ptr, moved: false })
     }
 
+    /// Enables (the default) or disables the in-memory cache for a remote
+    /// (`http://` / `https://`) source.
+    ///
+    /// With caching on, the bytes downloaded for the URL are kept in a
+    /// process-wide cache keyed by that URL and reused across widget
+    /// rebuilds instead of being refetched. The cache is never persisted to
+    /// disk, so a fresh launch always refetches (picking up a changed server
+    /// image). With caching off the image always refetches and stores
+    /// nothing. Has no effect on local-file images.
+    pub fn cache(self, enabled: bool) -> Self {
+        unsafe { sys::UIImage_SetCache(self.ptr, enabled as i32) };
+        self
+    }
+
     /// Borrow the raw `UIImage*`.
     #[inline]
     pub fn as_ptr(&self) -> *mut sys::UIImage {

@@ -65,6 +65,12 @@ static void RenderWidget_Stack(UIWindow* window, UIWidget* el,
         for (int i = 0; i < s->items->count; i++) {
             UIWidget* item = s->items->children[i];
             if (!item || !item->visible) continue;
+            // Free layout: don't flow — render each item at its own explicit
+            // x/y (e.g. game objects on a canvas). No cursor advance.
+            if (s->freeLayout) {
+                RenderSingleWidget(window, item);
+                continue;
+            }
             const float iw = item->width  ? *item->width  : 0.0f;
             const float ih = item->height ? *item->height : 0.0f;
             const float mL = item->marginLeft, mT = item->marginTop;
@@ -158,8 +164,10 @@ static void RenderWidget_TabView(UIWindow* window, UIWidget* el,
 
         // Header row.
         const float tabW = W / (float)tv->tabCount;
+        // Rasterize labels at g_textSS× (laid out in logical units below) so
+        // they stay crisp under SSAA.
         TTF_Font* font = (tv->fontFamily && tv->fontSize > 0.0f)
-            ? GetFont(tv->fontFamily, tv->fontSize) : NULL;
+            ? GetFont(tv->fontFamily, tv->fontSize * g_textSS) : NULL;
         // Cached fonts are shared across all widgets — reset the style
         // bits so a Bold/Italic UIText rendered earlier doesn't leak
         // into these labels (TabView has no fontStyle field).
@@ -220,11 +228,7 @@ static void RenderWidget_TabView(UIWindow* window, UIWidget* el,
                     const size_t len = strlen(tv->titles[i]);
                     SDL_Surface* surf = TTF_RenderText_Blended(font, tv->titles[i], len, sc);
                     if (surf) {
-                        tv->__titleTex[i] = SDL_CreateTextureFromSurface(
-                            window->sdlRenderer, surf);
-                        SDL_DestroySurface(surf);
-                        if (tv->__titleTex[i])
-                            SDL_SetTextureScaleMode(tv->__titleTex[i], SDL_SCALEMODE_LINEAR);
+                        tv->__titleTex[i] = MakeTextTexture(window->sdlRenderer, surf);
                     }
                     tv->__titleActiveCached[i] = active;
                     tv->__titleStrCached[i] = tv->titles[i];
@@ -233,6 +237,7 @@ static void RenderWidget_TabView(UIWindow* window, UIWidget* el,
                 if (tex) {
                     float tw = 0, th = 0;
                     SDL_GetTextureSize(tex, &tw, &th);
+                    tw /= g_textSS; th /= g_textSS;   // texture is g_textSS×
                     SDL_FRect dst = { h.x + (tabW - tw) * 0.5f,
                                       h.y + (headerH - th) * 0.5f,
                                       tw, th };
@@ -502,12 +507,8 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
                             SDL_Surface* surf = TTF_RenderText_Blended(
                                 font, twid->text + segStart, (size_t)segLen, sc);
                             if (surf) {
-                                twid->__lineTextures[li] = SDL_CreateTextureFromSurface(
-                                    window->sdlRenderer, surf);
-                                SDL_DestroySurface(surf);
-                                if (twid->__lineTextures[li]) {
-                                    SDL_SetTextureScaleMode(twid->__lineTextures[li], SDL_SCALEMODE_LINEAR);
-                                }
+                                twid->__lineTextures[li] =
+                                    MakeTextTexture(window->sdlRenderer, surf);
                             }
                         } else {
                             twid->__lineTextures[li] = NULL;
@@ -661,14 +662,22 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
             effMode != UI_WRAP_FIT && effWrapW > 0) {
             float curW = 0.0f, curH = 0.0f;
             SDL_GetTextureSize(twid->__SDL_textTexture, &curW, &curH);
-            if ((int)curW - 2 * TEXT_TEX_PAD > effWrapW + 1) {
+            // Texture is rasterized at g_textSS× (see g_textSS); compare in
+            // logical units.
+            if ((int)(curW / g_textSS) - 2 * TEXT_TEX_PAD > effWrapW + 1) {
                 SDL_DestroyTexture(twid->__SDL_textTexture);
                 twid->__SDL_textTexture = NULL;
             }
         }
 
         if (!twid->__SDL_textTexture) {
-            TTF_Font *font = GetFont(twid->fontFamily, twid->fontSize);
+            // Rasterize the glyphs at g_textSS× the logical point size; the
+            // texture is laid out in logical units below (its size is divided
+            // by g_textSS). Keeps text crisp under SSAA without letting SDL
+            // upscale (which shaves glyph edges). effWrapW is scaled to match.
+            const int ss = g_textSS;
+            const int effWrapWss = (effWrapW > 0) ? effWrapW * ss : effWrapW;
+            TTF_Font *font = GetFont(twid->fontFamily, twid->fontSize * ss);
             if (font) {
                 // Hinting set once at font load (GetFont).
                 TTF_SetFontStyle(font, (TTF_FontStyleFlags)twid->fontStyle);
@@ -679,7 +688,7 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
                 SDL_Surface *surf = NULL;
                 if (effMode == UI_WRAP_WORD && effWrapW > 0) {
                     surf = TTF_RenderText_Blended_Wrapped(font, twid->text,
-                                                          twid->textLength, sc, effWrapW);
+                                                          twid->textLength, sc, effWrapWss);
                 } else if (effMode == UI_WRAP_FIT) {
                     // FIT renders single-line at natural size; the draw
                     // step below shrinks the dest rect to fit effWrapW.
@@ -703,7 +712,7 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
                             int ww = 0, hh = 0;
                             TTF_GetStringSize(font, prepared + lineStart,
                                               (size_t)(outLen - lineStart + 1), &ww, &hh);
-                            if (ww > effWrapW && outLen > lineStart) {
+                            if (ww > effWrapWss && outLen > lineStart) {
                                 prepared[outLen++] = '\n';
                                 lineStart = outLen;
                                 prepared[outLen] = ch;
@@ -728,13 +737,14 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
                     // and the glyph looks shaved by ~1px. The border lives
                     // OUTSIDE the logical glyph box (drawn back out at the dst
                     // rect), so layout/size are unaffected.
+                    const int padHi = TEXT_TEX_PAD * ss;
                     SDL_Surface *psurf = SDL_CreateSurface(
-                        surf->w + 2 * TEXT_TEX_PAD, surf->h + 2 * TEXT_TEX_PAD,
+                        surf->w + 2 * padHi, surf->h + 2 * padHi,
                         SDL_PIXELFORMAT_RGBA32);
                     if (psurf) {
                         SDL_FillSurfaceRect(psurf, NULL, 0); // transparent
                         SDL_SetSurfaceBlendMode(surf, SDL_BLENDMODE_NONE);
-                        SDL_Rect d = {TEXT_TEX_PAD, TEXT_TEX_PAD, surf->w, surf->h};
+                        SDL_Rect d = {padHi, padHi, surf->w, surf->h};
                         SDL_BlitSurface(surf, NULL, psurf, &d);
                         SDL_DestroySurface(surf);
                         surf = psurf;
@@ -748,8 +758,19 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
         if (!twid->__SDL_textTexture) return;
 
         SDL_SetTextureScaleMode(twid->__SDL_textTexture, SDL_SCALEMODE_LINEAR);
+        // Force alpha blending. The glyph texture is built from a surface we
+        // create with SDL_CreateSurface (the transparent-border pad), and
+        // SDL_CreateTextureFromSurface inherits THAT surface's blend mode — on
+        // some drivers a fresh surface defaults to BLENDMODE_NONE, which draws
+        // the glyph box as an opaque (white) rectangle. Setting BLEND here is
+        // the driver-independent guard against that regression.
+        SDL_SetTextureBlendMode(twid->__SDL_textTexture, SDL_BLENDMODE_BLEND);
         float txw, txh;
         SDL_GetTextureSize(twid->__SDL_textTexture, &txw, &txh);
+        // The texture is rasterized at g_textSS×; bring it back to logical
+        // units so all layout below (and the dst rect) work in points.
+        txw /= g_textSS;
+        txh /= g_textSS;
         // Strip the transparent border back off so all layout below works in
         // glyph (logical) units; the full padded texture is drawn at the end.
         txw -= 2 * TEXT_TEX_PAD;
@@ -898,7 +919,11 @@ static void RenderWidget_Button(UIWindow* window, UIWidget* el,
         if (btn->label && btn->label->text && *btn->label->text &&
             btn->label->fontFamily && btn->label->fontSize > 0.0f) {
             if (!btn->label->__SDL_textTexture) {
-                TTF_Font* font = GetFont(btn->label->fontFamily, btn->label->fontSize);
+                // Rasterize at g_textSS× and lay out in logical units below
+                // (texture size divided by g_textSS) - keeps the label crisp
+                // under SSAA without SDL upscaling a small glyph texture.
+                TTF_Font* font = GetFont(btn->label->fontFamily,
+                                         btn->label->fontSize * g_textSS);
                 if (font) {
                     // Hinting set once at font load (GetFont).
                     TTF_SetFontStyle(font, (TTF_FontStyleFlags)btn->label->fontStyle);
@@ -907,8 +932,7 @@ static void RenderWidget_Button(UIWindow* window, UIWidget* el,
                         font, btn->label->text, btn->label->textLength, white);
                     if (surf) {
                         btn->label->__SDL_textTexture =
-                            SDL_CreateTextureFromSurface(window->sdlRenderer, surf);
-                        SDL_DestroySurface(surf);
+                            MakeTextTexture(window->sdlRenderer, surf);
                     }
                 }
             }
@@ -922,6 +946,8 @@ static void RenderWidget_Button(UIWindow* window, UIWidget* el,
                                        (Uint8)SDL_clamp((int)(textC.a * 255.0f), 0, 255));
                 float txw = 0.0f, txh = 0.0f;
                 SDL_GetTextureSize(btn->label->__SDL_textTexture, &txw, &txh);
+                txw /= g_textSS;   // texture is g_textSS× — lay out in logical px
+                txh /= g_textSS;
                 const float pressOffset = (btn->state == UI_BUTTON_STATE_PRESSED) ? 1.0f : 0.0f;
 
                 // Optical centring: SDL_ttf surfaces are ascent + descent
@@ -947,7 +973,15 @@ static void RenderWidget_Button(UIWindow* window, UIWidget* el,
                 // a half-pixel, and LINEAR sampling then softens every
                 // glyph. floor(... + 0.5) rounds to nearest int so the
                 // blit is pixel-perfect regardless of widths.
-                g_tempRect2.x = floorf(g_tempRect1.x + (g_tempRect1.w - txw) * 0.5f + 0.5f);
+                float labelX;
+                if (btn->textAlign == 1) {          // left
+                    labelX = g_tempRect1.x + btn->textInset;
+                } else if (btn->textAlign == 2) {   // right
+                    labelX = g_tempRect1.x + g_tempRect1.w - txw - btn->textInset;
+                } else {                            // center
+                    labelX = g_tempRect1.x + (g_tempRect1.w - txw) * 0.5f;
+                }
+                g_tempRect2.x = floorf(labelX + 0.5f);
                 g_tempRect2.y = floorf(g_tempRect1.y + (g_tempRect1.h - txh) * 0.5f
                                        - opticalShift + pressOffset + 0.5f);
                 g_tempRect2.w = txw;
@@ -971,12 +1005,19 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
         UIImage *img = (UIImage*)base;
         if (!img->source || !el->width || !el->height) return;
         if (!img->__SDL_texture && img->loadState != IMAGE_LOAD_FAILURE) {
-            img->__SDL_texture = UIAsset_LoadTexture(window->sdlRenderer, img->source);
-            if (img->__SDL_texture) {
-                img->loadState = IMAGE_LOAD_SUCCESS;
-                SDL_SetTextureScaleMode(img->__SDL_texture, SDL_SCALEMODE_LINEAR);
+            if (UIImage_IsRemoteSource(img->source)) {
+                // http/https: fetched on a background thread and decoded once
+                // it lands. Stays IN_PROGRESS (texture NULL) until then; we
+                // re-pump every frame, so the image pops in when ready.
+                UIImage_PumpRemote(img, window->sdlRenderer);
             } else {
-                img->loadState = IMAGE_LOAD_FAILURE;
+                img->__SDL_texture = UIAsset_LoadTexture(window->sdlRenderer, img->source);
+                if (img->__SDL_texture) {
+                    img->loadState = IMAGE_LOAD_SUCCESS;
+                    SDL_SetTextureScaleMode(img->__SDL_texture, SDL_SCALEMODE_LINEAR);
+                } else {
+                    img->loadState = IMAGE_LOAD_FAILURE;
+                }
             }
         }
         if (!img->__SDL_texture) return;
@@ -1381,7 +1422,11 @@ static void RenderWidget_Video(UIWindow* window, UIWidget* el,
             }
         }
 
+        SDL_Rect __txtPrevClip;
+        bool __txtHadClip = false;
         if (needClip) {
+            __txtHadClip = SDL_RenderClipEnabled(window->sdlRenderer);
+            if (__txtHadClip) SDL_GetRenderClipRect(window->sdlRenderer, &__txtPrevClip);
             SDL_Rect clip = {
                 (int)bounds.x, (int)bounds.y,
                 (int)ceilf(bounds.w), (int)ceilf(bounds.h)
@@ -1392,7 +1437,8 @@ static void RenderWidget_Video(UIWindow* window, UIWidget* el,
         SDL_RenderTexture(window->sdlRenderer, tex, NULL, &dst);
         SDL_SetTextureAlphaMod(tex, 255);
         if (needClip) {
-            SDL_SetRenderClipRect(window->sdlRenderer, NULL);
+            // Restore the caller's clip (e.g. a parent Scroll viewport), not NULL.
+            SDL_SetRenderClipRect(window->sdlRenderer, __txtHadClip ? &__txtPrevClip : NULL);
         }
 }
 
@@ -1709,27 +1755,25 @@ static void RenderWidget_Webview(UIWindow* window, UIWidget* el,
                 if (tf) { fclose(tf); fpath = kFontCands[i]; break; }
             }
 #endif
-            TTF_Font* font = fpath ? GetFont(fpath, 15.0f) : NULL;
+            TTF_Font* font = fpath ? GetFont(fpath, 15.0f * g_textSS) : NULL;
             if (font) {
                 SDL_Color sc = { 226, 232, 240,
                                  (Uint8)SDL_clamp((int)(op * 255.0f), 0, 255) };
                 int wrapW = (int)(ww - 48.0f);
                 if (wrapW < 1) wrapW = 1;
                 SDL_Surface* surf = TTF_RenderText_Blended_Wrapped(
-                    font, msg, strlen(msg), sc, wrapW);
+                    font, msg, strlen(msg), sc, wrapW * g_textSS);
                 if (surf) {
-                    SDL_Texture* tex =
-                        SDL_CreateTextureFromSurface(window->sdlRenderer, surf);
+                    SDL_Texture* tex = MakeTextTexture(window->sdlRenderer, surf);
                     if (tex) {
-                        SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
                         float tw = 0, th = 0;
                         SDL_GetTextureSize(tex, &tw, &th);
+                        tw /= g_textSS; th /= g_textSS;   // texture is g_textSS×
                         SDL_FRect tdst = { wx + (ww - tw) * 0.5f,
                                            wy + (wh - th) * 0.5f, tw, th };
                         SDL_RenderTexture(window->sdlRenderer, tex, NULL, &tdst);
                         SDL_DestroyTexture(tex);
                     }
-                    SDL_DestroySurface(surf);
                 }
             }
         }
@@ -1752,7 +1796,7 @@ static void RenderWidget_FileDrop(UIWindow* window, UIWidget* el,
 
         // Centred prompt text.
         if (fd->prompt && *fd->prompt && fd->fontFamily) {
-            TTF_Font* font = GetFont(fd->fontFamily, fd->fontSize);
+            TTF_Font* font = GetFont(fd->fontFamily, fd->fontSize * g_textSS);
             if (font) {
                 TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
                 UIColor tc = fd->textColor; tc.a *= op;
@@ -1761,18 +1805,17 @@ static void RenderWidget_FileDrop(UIWindow* window, UIWidget* el,
                 const size_t len = strlen(fd->prompt);
                 SDL_Surface* surf = TTF_RenderText_Blended(font, fd->prompt, len, sc);
                 if (surf) {
-                    SDL_Texture* tex = SDL_CreateTextureFromSurface(window->sdlRenderer, surf);
+                    SDL_Texture* tex = MakeTextTexture(window->sdlRenderer, surf);
                     if (tex) {
-                        SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
                         float tw=0, th=0;
                         SDL_GetTextureSize(tex, &tw, &th);
+                        tw /= g_textSS; th /= g_textSS;   // texture is g_textSS×
                         SDL_FRect dst = { bounds.x + (bounds.w - tw) * 0.5f,
                                           bounds.y + (bounds.h - th) * 0.5f,
                                           tw, th };
                         SDL_RenderTexture(window->sdlRenderer, tex, NULL, &dst);
                         SDL_DestroyTexture(tex);
                     }
-                    SDL_DestroySurface(surf);
                 }
             }
         }
@@ -2011,15 +2054,17 @@ static void RenderWidget_TextField(UIWindow* window, UIWidget* el,
             SDL_Color sc = { (Uint8)c.r, (Uint8)c.g, (Uint8)c.b,
                              (Uint8)SDL_clamp((int)(c.a * 255.0f), 0, 255) };
             if (renderLen > 0) {
-                SDL_Surface* surf = TTF_RenderText_Blended(font, renderStr,
-                                                          (size_t)renderLen, sc);
+                // Rasterize at g_textSS× (drawn into a logical-sized dst below)
+                // so the text stays crisp under SSAA. Caret/selection keep
+                // measuring with the logical `font`, so picking is unaffected.
+                TTF_Font* rfont = GetFont(tf->fontFamily, tf->fontSize * g_textSS);
+                if (rfont) TTF_SetFontStyle(rfont, (TTF_FontStyleFlags)tf->fontStyle);
+                SDL_Surface* surf = rfont
+                    ? TTF_RenderText_Blended(rfont, renderStr, (size_t)renderLen, sc)
+                    : NULL;
                 if (surf) {
-                    tf->__SDL_textTexture = SDL_CreateTextureFromSurface(
-                        window->sdlRenderer, surf);
-                    SDL_DestroySurface(surf);
-                    if (tf->__SDL_textTexture) {
-                        SDL_SetTextureScaleMode(tf->__SDL_textTexture, SDL_SCALEMODE_LINEAR);
-                    }
+                    tf->__SDL_textTexture =
+                        MakeTextTexture(window->sdlRenderer, surf);
                 }
             }
             tf->__cachedTextLen = renderLen;
@@ -2058,7 +2103,13 @@ static void RenderWidget_TextField(UIWindow* window, UIWidget* el,
             tf->__charOffsetsLen = 0;
         }
 
-        // Clip drawing of glyphs + caret to the inside of the field.
+        // Clip drawing of glyphs + caret to the inside of the field. Save the
+        // caller's clip first (e.g. a parent Scroll's viewport) and restore it
+        // after — otherwise resetting to NULL would wipe the outer clip and let
+        // following siblings overflow the scroll.
+        SDL_Rect __tfPrevClip;
+        const bool __tfHadClip = SDL_RenderClipEnabled(window->sdlRenderer);
+        if (__tfHadClip) SDL_GetRenderClipRect(window->sdlRenderer, &__tfPrevClip);
         SDL_Rect clip = {
             (int)(bounds.x + tf->paddingLeft),
             (int)(bounds.y),
@@ -2092,6 +2143,7 @@ static void RenderWidget_TextField(UIWindow* window, UIWidget* el,
         if (tf->__SDL_textTexture && renderLen > 0) {
             float tw = 0.0f, th = 0.0f;
             SDL_GetTextureSize(tf->__SDL_textTexture, &tw, &th);
+            tw /= g_textSS; th /= g_textSS;   // texture is g_textSS× — logical
             const float tx = bounds.x + tf->paddingLeft;
             const float ty = bounds.y + (bounds.h - th) * 0.5f;
             SDL_FRect dst = { tx, ty, tw, th };
@@ -2147,7 +2199,140 @@ static void RenderWidget_TextField(UIWindow* window, UIWidget* el,
             }
         }
 
-        SDL_SetRenderClipRect(window->sdlRenderer, NULL);
+        SDL_SetRenderClipRect(window->sdlRenderer, __tfHadClip ? &__tfPrevClip : NULL);
+}
+
+// Span collector for a TextArea highlighter. mocida owns it, so no allocation
+// crosses the FFI boundary — the callback only emits into it.
+typedef struct { UITextSpan* items; int count; int cap; } UISpanSink;
+static void UISpanSink_Emit(void* sinkv, int start, int end, UIColor color) {
+    UISpanSink* s = (UISpanSink*)sinkv;
+    if (!s || end <= start) return;
+    if (s->count >= s->cap) {
+        int nc = s->cap ? s->cap * 2 : 64;
+        UITextSpan* p = (UITextSpan*)realloc(s->items, (size_t)nc * sizeof(UITextSpan));
+        if (!p) return;
+        s->items = p; s->cap = nc;
+    }
+    s->items[s->count].start = start;
+    s->items[s->count].end   = end;
+    s->items[s->count].color = color;
+    s->count++;
+}
+
+// Color for byte position `pos` from the spans (default `def` when uncovered).
+static SDL_Color SpanColorAt(const UISpanSink* sp, int pos, SDL_Color def) {
+    if (sp) {
+        for (int i = 0; i < sp->count; i++) {
+            if (pos >= sp->items[i].start && pos < sp->items[i].end) {
+                UIColor c = sp->items[i].color;
+                SDL_Color r = { (Uint8)c.r, (Uint8)c.g, (Uint8)c.b,
+                                (Uint8)SDL_clamp((int)(c.a * 255.0f), 0, 255) };
+                return r;
+            }
+        }
+    }
+    return def;
+}
+
+// Render a visual line as one texture. With spans, each run of same-colored
+// glyphs is rendered in its color and blitted onto a shared line surface (so the
+// result is still one texture per line — cursor/selection math is unchanged).
+static SDL_Texture* RenderLineColored(SDL_Renderer* rnd, TTF_Font* font,
+                                      const char* text, int segStart, int segLen,
+                                      const UISpanSink* sp, SDL_Color def) {
+    if (segLen <= 0) return NULL;
+    if (!sp || sp->count == 0) {
+        SDL_Surface* surf = TTF_RenderText_Blended(font, text + segStart, (size_t)segLen, def);
+        if (!surf) return NULL;
+        return MakeTextTexture(rnd, surf);
+    }
+    int totalW = 0, totalH = 0;
+    TTF_GetStringSize(font, text + segStart, (size_t)segLen, &totalW, &totalH);
+    if (totalW <= 0 || totalH <= 0) return NULL;
+    SDL_Surface* dest = SDL_CreateSurface(totalW, totalH, SDL_PIXELFORMAT_RGBA32);
+    if (!dest) return NULL;
+    SDL_ClearSurface(dest, 0.0f, 0.0f, 0.0f, 0.0f);
+    const int end = segStart + segLen;
+    int p = segStart;
+    while (p < end) {
+        SDL_Color rc = SpanColorAt(sp, p, def);
+        int q = p + 1;
+        while (q < end) {
+            SDL_Color qc = SpanColorAt(sp, q, def);
+            if (qc.r != rc.r || qc.g != rc.g || qc.b != rc.b || qc.a != rc.a) break;
+            q++;
+        }
+        SDL_Surface* rs = TTF_RenderText_Blended(font, text + p, (size_t)(q - p), rc);
+        if (rs) {
+            int xoff = 0, hh = 0;
+            if (p > segStart) TTF_GetStringSize(font, text + segStart, (size_t)(p - segStart), &xoff, &hh);
+            SDL_SetSurfaceBlendMode(rs, SDL_BLENDMODE_NONE);
+            SDL_Rect dst = { xoff, 0, rs->w, rs->h };
+            SDL_BlitSurface(rs, NULL, dest, &dst);
+            SDL_DestroySurface(rs);
+        }
+        p = q;
+    }
+    SDL_Texture* tex = SDL_CreateTextureFromSurface(rnd, dest);
+    SDL_DestroySurface(dest);
+    // `dest` is an SDL_CreateSurface surface; force BLEND so the composited
+    // line never draws as an opaque (white) box on drivers where the texture
+    // inherits the surface's NONE blend mode.
+    if (tex) SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+    return tex;
+}
+
+// Cached line-number glyph textures for the TextArea gutter. The gutter used to
+// rasterize + DESTROY a fresh texture for every visible line number EVERY frame
+// (~hundreds of texture builds/sec on a scrolled editor). That churn recycles
+// GPU texture memory so fast that other text textures briefly showed stale
+// content -> the "all text flickers, only on the editor screen" glitch. Here
+// each number is rasterized once and kept; the cache is keyed by line number
+// (hashed) and dropped wholesale when the font or colour changes.
+#define LINENUM_CACHE 256
+static SDL_Texture* g_lnTex[LINENUM_CACHE];
+static int          g_lnNum[LINENUM_CACHE];   // line number in the slot (-1 = empty)
+static float        g_lnW[LINENUM_CACHE], g_lnH[LINENUM_CACHE];
+static TTF_Font*    g_lnFont = NULL;
+static Uint32       g_lnColorKey = 0;
+
+static SDL_Texture* GetLineNumTexture(SDL_Renderer* r, TTF_Font* font,
+                                      SDL_Color c, int num,
+                                      float* outW, float* outH) {
+    const Uint32 key = ((Uint32)c.r << 24) | ((Uint32)c.g << 16) |
+                       ((Uint32)c.b << 8)  | (Uint32)c.a;
+    if (g_lnFont != font || g_lnColorKey != key) {
+        for (int i = 0; i < LINENUM_CACHE; i++) {
+            if (g_lnTex[i]) { SDL_DestroyTexture(g_lnTex[i]); g_lnTex[i] = NULL; }
+            g_lnNum[i] = -1;
+        }
+        g_lnFont = font;
+        g_lnColorKey = key;
+    }
+    if (num < 0) return NULL;
+    const int slot = ((unsigned)num) % LINENUM_CACHE;
+    if (g_lnTex[slot] && g_lnNum[slot] == num) {
+        if (outW) *outW = g_lnW[slot];
+        if (outH) *outH = g_lnH[slot];
+        return g_lnTex[slot];
+    }
+    if (g_lnTex[slot]) { SDL_DestroyTexture(g_lnTex[slot]); g_lnTex[slot] = NULL; }
+    char buf[16];
+    SDL_snprintf(buf, sizeof(buf), "%d", num);
+    SDL_Surface* s = TTF_RenderText_Blended(font, buf, strlen(buf), c);
+    g_lnTex[slot] = s ? MakeTextTexture(r, s) : NULL;
+    g_lnNum[slot] = num;
+    if (g_lnTex[slot]) {
+        float tw = 0, th = 0;
+        SDL_GetTextureSize(g_lnTex[slot], &tw, &th);
+        g_lnW[slot] = tw; g_lnH[slot] = th;
+    } else {
+        g_lnW[slot] = g_lnH[slot] = 0;
+    }
+    if (outW) *outW = g_lnW[slot];
+    if (outH) *outH = g_lnH[slot];
+    return g_lnTex[slot];
 }
 
 static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
@@ -2156,6 +2341,10 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
         UITextArea* ta = (UITextArea*)base;
         if (!el->width || !el->height) return;
         SDL_FRect bounds = { el->x, el->y, *el->width, *el->height };
+        // Cache the laid-out origin so UITextArea_GetCaretScreenPos can report
+        // the caret's window pixel for host overlays (autocomplete popup).
+        ta->__lastX = el->x;
+        ta->__lastY = el->y;
 
         UIColor bg2     = ta->bgColor;     bg2.a     *= op;
         UIColor border2 = ta->focused ? ta->borderColorFocused : ta->borderColor;
@@ -2169,22 +2358,48 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
         if (!font) return;
         TTF_SetFontStyle(font, (TTF_FontStyleFlags)ta->fontStyle);
 
+        // Hi-res font used ONLY to rasterize the line / line-number /
+        // placeholder textures at g_textSS×; every metric, caret, selection,
+        // wrap and gutter calculation stays on `font` (logical) and the
+        // textures are drawn into logical-sized dsts. Keeps the code editor
+        // crisp under SSAA without disturbing caret/selection math.
+        TTF_Font* rfont = (g_textSS > 1 && ta->fontSize > 0.0f)
+            ? GetFont(ta->fontFamily, ta->fontSize * g_textSS) : font;
+        if (rfont && rfont != font)
+            TTF_SetFontStyle(rfont, (TTF_FontStyleFlags)ta->fontStyle);
+
         const int showPlaceholder = (ta->textLen == 0 && ta->placeholder);
         const float lineH = ta->fontSize * ta->lineSpacing;
+
+        // Line-number gutter width (0 when off): the pixel width of the largest
+        // line number in the current font, plus left/right breathing room. The
+        // renderer caches it in __gutterW so click hit-testing lands correctly.
+        float gutterW = 0.0f;
+        if (ta->showLineNumbers) {
+            int hardLines = 1;
+            for (int i = 0; i < ta->textLen; i++) if (ta->text[i] == '\n') hardLines++;
+            int digits = 1; for (int v = hardLines; v >= 10; v /= 10) digits++;
+            int dw = 0, dh = 0;
+            TTF_GetStringSize(font, "0", 1, &dw, &dh);
+            if (dw <= 0) dw = (int)(ta->fontSize * 0.6f);
+            gutterW = (float)(dw * digits) + 16.0f;
+        }
+        ta->__gutterW = gutterW;
 
         // Available pixel width inside the padding box. When wrap is
         // enabled and this value changes (the user resized the widget),
         // we have to rebuild the line cache.
         int wrapW = -1;
         if (ta->wrapMode != UI_WRAP_NONE) {
-            wrapW = (int)(bounds.w - ta->paddingLeft - ta->paddingRight);
+            wrapW = (int)(bounds.w - ta->paddingLeft - ta->paddingRight - gutterW);
             if (wrapW < 1) wrapW = -1;
         }
 
         const int needRebuild =
             ta->__cachedTextLen  != ta->textLen ||
             ta->__cachedWrapMode != (int)ta->wrapMode ||
-            ta->__cachedWrapW    != wrapW;
+            ta->__cachedWrapW    != wrapW ||
+            ta->__cachedHlVersion != ta->__hlVersion;
 
         // Rebuild the per-line cache when the text/wrap config changed.
         // Each visual line gets its own glyph texture + char-offset array.
@@ -2227,6 +2442,13 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
             const UIColor c = ta->textColor;
             const SDL_Color sc = { (Uint8)c.r, (Uint8)c.g, (Uint8)c.b,
                                    (Uint8)SDL_clamp((int)(c.a * 255.0f), 0, 255) };
+
+            // Syntax-highlight spans for the whole text (empty when no
+            // highlighter is installed). Reused for every line below.
+            UISpanSink hl = { NULL, 0, 0 };
+            if (ta->highlighter) {
+                ta->highlighter(ta->highlighterUd, ta->text, ta->textLen, &hl, UISpanSink_Emit);
+            }
 
             // Iterate over logical lines (separated by '\n'). Inside
             // each, either emit a single segment (wrap off) or break
@@ -2309,15 +2531,12 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                     ta->lineIsSoft[li]  = firstInLine ? 0 : 1;
 
                     if (segLen > 0) {
-                        SDL_Surface* surf = TTF_RenderText_Blended(
-                            font, ta->text + segStart, (size_t)segLen, sc);
-                        if (surf) {
-                            ta->lineTextures[li] = SDL_CreateTextureFromSurface(
-                                window->sdlRenderer, surf);
-                            SDL_DestroySurface(surf);
-                            if (ta->lineTextures[li]) {
-                                SDL_SetTextureScaleMode(ta->lineTextures[li], SDL_SCALEMODE_LINEAR);
-                            }
+                        // rfont -> the texture is g_textSS×; it is drawn into a
+                        // logical-sized dst (size / g_textSS) in the glyph loop.
+                        ta->lineTextures[li] = RenderLineColored(
+                            window->sdlRenderer, rfont, ta->text, segStart, segLen, &hl, sc);
+                        if (ta->lineTextures[li]) {
+                            SDL_SetTextureScaleMode(ta->lineTextures[li], SDL_SCALEMODE_LINEAR);
                         }
                     } else {
                         ta->lineTextures[li] = NULL;
@@ -2343,40 +2562,115 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                 logicalStart = lineEnd + 1; // skip the '\n'
             }
 
-            ta->__cachedTextLen  = ta->textLen;
-            ta->__cachedWrapMode = (int)ta->wrapMode;
-            ta->__cachedWrapW    = wrapW;
+            free(hl.items);
+            ta->__cachedTextLen   = ta->textLen;
+            ta->__cachedWrapMode  = (int)ta->wrapMode;
+            ta->__cachedWrapW     = wrapW;
+            ta->__cachedHlVersion = ta->__hlVersion;
         }
 
-        // Auto-scroll so the caret stays inside the viewport.
+        // Keep the caret in view — but only when the caret actually moved
+        // (typing, navigation, a click), not on every frame. Re-centering
+        // every render would snap scrollY back to the caret's line each
+        // frame, undoing a wheel scroll; for an *unfocused* area the caret
+        // sits at line 0, so the content could never be wheel-scrolled at
+        // all. Tracking the last followed caretPos lets a plain wheel scroll
+        // stand, while a caret move still pulls its line into view.
         {
-            int pos = ta->caretPos;
-            if (pos < 0) pos = 0;
-            if (pos > ta->textLen) pos = ta->textLen;
-            int lo = 0, hi = ta->linesLen - 1;
-            while (lo < hi) {
-                int mid = (lo + hi + 1) / 2;
-                if (ta->lineStarts[mid] <= pos) lo = mid; else hi = mid - 1;
-            }
-            const int caretLine = lo;
-
             const float viewH = bounds.h - (ta->paddingTop + ta->paddingBottom);
-            const float caretY = caretLine * lineH;
-            if (caretY < ta->scrollY) ta->scrollY = caretY;
-            if (caretY + lineH > ta->scrollY + viewH) {
-                ta->scrollY = caretY + lineH - viewH;
+            if (ta->caretPos != ta->__lastCaretPos) {
+                int pos = ta->caretPos;
+                if (pos < 0) pos = 0;
+                if (pos > ta->textLen) pos = ta->textLen;
+                int lo = 0, hi = ta->linesLen - 1;
+                while (lo < hi) {
+                    int mid = (lo + hi + 1) / 2;
+                    if (ta->lineStarts[mid] <= pos) lo = mid; else hi = mid - 1;
+                }
+                const int caretLine = lo;
+                const float caretY = caretLine * lineH;
+                if (caretY < ta->scrollY) ta->scrollY = caretY;
+                if (caretY + lineH > ta->scrollY + viewH) {
+                    ta->scrollY = caretY + lineH - viewH;
+                }
+                ta->__lastCaretPos = ta->caretPos;
             }
+            // Always clamp to the valid range so neither a wheel scroll nor a
+            // caret move can push the content off either end.
+            const float contentH = ta->linesLen * lineH;
+            float maxScroll = contentH - viewH;
+            if (maxScroll < 0.0f) maxScroll = 0.0f;
+            if (ta->scrollY > maxScroll) ta->scrollY = maxScroll;
             if (ta->scrollY < 0.0f) ta->scrollY = 0.0f;
         }
 
+        // Line-number gutter — drawn before the text clip so the numbers sit in
+        // the left margin. They scroll with the text and only mark hard line
+        // starts; soft-wrapped continuation rows get no number, like a code
+        // editor. Only visible rows are rendered.
+        if (ta->showLineNumbers && gutterW > 0.0f && ta->linesLen > 0) {
+            const float contentH = bounds.h - ta->paddingTop - ta->paddingBottom;
+            SDL_Rect gclip = {
+                (int)(bounds.x + ta->borderWidth),
+                (int)(bounds.y + ta->paddingTop),
+                (int)(ta->paddingLeft + gutterW),
+                (int)contentH
+            };
+            // Flush everything batched so far (the area's bg/border) under the
+            // CURRENT clip before the gutter clip narrows it — otherwise those
+            // draws resolve inside the gutter region for one frame (a white flash
+            // over the rest on rebuild).
+            FlushRenderBatch(window->sdlRenderer);
+            SDL_SetRenderClipRect(window->sdlRenderer, &gclip);
+
+            // Bake the digit colour WITHOUT the per-frame `op` (opacity is
+            // applied via SetTextureAlphaMod at draw time) so the cached
+            // line-number textures stay valid across frames. 0.45 = the gutter
+            // dimming.
+            const SDL_Color gsc = {
+                (Uint8)ta->textColor.r, (Uint8)ta->textColor.g, (Uint8)ta->textColor.b,
+                (Uint8)SDL_clamp((int)(ta->textColor.a * 0.45f * 255.0f), 0, 255)
+            };
+            const float top = bounds.y + ta->paddingTop;
+            int lineNo = 0;
+            for (int li = 0; li < ta->linesLen; li++) {
+                const int hardStart = (li == 0) || !ta->lineIsSoft[li];
+                if (hardStart) lineNo++;
+                else continue;                       // wrapped row: no number
+                const float ytop = top + li * lineH - ta->scrollY;
+                if (ytop + lineH < top) continue;    // above the viewport
+                if (ytop > top + contentH) break;    // below the viewport
+                // Cached: rasterized once per number, NOT rebuilt every frame.
+                float nw = 0, nh = 0;
+                SDL_Texture* nt = GetLineNumTexture(window->sdlRenderer, rfont,
+                                                    gsc, lineNo, &nw, &nh);
+                if (!nt) continue;
+                nw /= g_textSS; nh /= g_textSS;   // texture is g_textSS× — logical
+                SDL_FRect nd = {                     // right-aligned, 8px before text
+                    bounds.x + ta->paddingLeft + gutterW - 8.0f - nw, ytop, nw, nh
+                };
+                SDL_SetTextureAlphaMod(nt, (Uint8)(op * 255.0f + 0.5f));
+                SDL_RenderTexture(window->sdlRenderer, nt, NULL, &nd);
+                SDL_SetTextureAlphaMod(nt, 255);   // reset (cached texture is shared)
+            }
+            // Resolve the gutter numbers under the gutter clip before it's lifted,
+            // so they don't bleed into the text area on the next clip.
+            FlushRenderBatch(window->sdlRenderer);
+            SDL_SetRenderClipRect(window->sdlRenderer, NULL);
+        }
+
         // Clip the inside of the field so glyphs / caret never bleed
-        // over the padding/border.
+        // over the padding/border. The text area starts after the gutter.
         SDL_Rect clipR = {
-            (int)(bounds.x + ta->paddingLeft),
+            (int)(bounds.x + ta->paddingLeft + gutterW),
             (int)(bounds.y + ta->paddingTop),
-            (int)(bounds.w - (ta->paddingLeft + ta->paddingRight)),
+            (int)(bounds.w - (ta->paddingLeft + ta->paddingRight + gutterW)),
             (int)(bounds.h - (ta->paddingTop + ta->paddingBottom))
         };
+        // Flush whatever is still batched (the bg/border when there is no gutter
+        // to flush above) under the CURRENT clip before narrowing to the text box
+        // — otherwise those draws resolve inside clipR for a frame (a flash).
+        FlushRenderBatch(window->sdlRenderer);
         SDL_SetRenderClipRect(window->sdlRenderer, &clipR);
 
         // Selection highlight - emit one rect per affected line.
@@ -2419,7 +2713,7 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                     (li + 1 >= ta->linesLen || !ta->lineIsSoft[li + 1]);
                 const float tail = isHardBreak ? ta->fontSize * 0.4f : 0.0f;
                 SDL_FRect r = {
-                    bounds.x + ta->paddingLeft + x1,
+                    bounds.x + ta->paddingLeft + gutterW + x1,
                     bounds.y + ta->paddingTop + li * lineH - ta->scrollY,
                     (x2 - x1) + tail,
                     lineH
@@ -2434,17 +2728,16 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
             SDL_Color sc = { (Uint8)c.r, (Uint8)c.g, (Uint8)c.b,
                              (Uint8)SDL_clamp((int)(c.a * 255.0f), 0, 255) };
             const int phLen = (int)strlen(ta->placeholder);
-            SDL_Surface* surf = TTF_RenderText_Blended(font, ta->placeholder,
+            SDL_Surface* surf = TTF_RenderText_Blended(rfont, ta->placeholder,
                                                       (size_t)phLen, sc);
             if (surf) {
-                SDL_Texture* tex = SDL_CreateTextureFromSurface(window->sdlRenderer, surf);
-                SDL_DestroySurface(surf);
+                SDL_Texture* tex = MakeTextTexture(window->sdlRenderer, surf);
                 if (tex) {
-                    SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
                     float tw, th;
                     SDL_GetTextureSize(tex, &tw, &th);
+                    tw /= g_textSS; th /= g_textSS;   // texture is g_textSS× — logical
                     SDL_FRect dst = {
-                        bounds.x + ta->paddingLeft,
+                        bounds.x + ta->paddingLeft + gutterW,
                         bounds.y + ta->paddingTop,
                         tw, th
                     };
@@ -2467,8 +2760,9 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                 if (!ta->lineTextures[li]) continue;
                 float tw, th;
                 SDL_GetTextureSize(ta->lineTextures[li], &tw, &th);
+                tw /= g_textSS; th /= g_textSS;   // texture is g_textSS× — logical
                 SDL_FRect dst = {
-                    bounds.x + ta->paddingLeft,
+                    bounds.x + ta->paddingLeft + gutterW,
                     bounds.y + ta->paddingTop + li * lineH - ta->scrollY,
                     tw, th
                 };
@@ -2509,7 +2803,7 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                 const float caretH = ta->fontSize * 1.1f;
                 UIColor cc = ta->caretColor; cc.a *= op;
                 SDL_FRect caretRect = {
-                    bounds.x + ta->paddingLeft + cx,
+                    bounds.x + ta->paddingLeft + gutterW + cx,
                     bounds.y + ta->paddingTop + caretLine * lineH - ta->scrollY
                         + (lineH - caretH) * 0.5f,
                     1.5f, caretH
@@ -2518,6 +2812,11 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
             }
         }
 
+        // Flush the selection / glyphs / caret under the text clip BEFORE lifting
+        // it — otherwise they can resolve under the next sibling's clip (or none)
+        // for a frame, flashing the editor's contents past its own bounds. This
+        // is the residual editor glitch (the gutter got the same treatment above).
+        FlushRenderBatch(window->sdlRenderer);
         SDL_SetRenderClipRect(window->sdlRenderer, NULL);
 }
 
@@ -2661,7 +2960,7 @@ static void RenderWidget_Tooltip(UIWindow* window, UIWidget* el,
         if (!tt->_visible || !tt->text || !*tt->text) return;
 
         TTF_Font* font = (tt->fontFamily && tt->fontSize > 0.0f)
-            ? GetFont(tt->fontFamily, tt->fontSize) : NULL;
+            ? GetFont(tt->fontFamily, tt->fontSize * g_textSS) : NULL;
         if (!font) return;
         TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
 
@@ -2675,12 +2974,7 @@ static void RenderWidget_Tooltip(UIWindow* window, UIWidget* el,
                             (Uint8)tt->textColor.b,255};
             SDL_Surface* surf = TTF_RenderText_Blended(font, tt->text, (size_t)textLen, sc);
             if (surf) {
-                tt->__SDL_textTexture = SDL_CreateTextureFromSurface(
-                    window->sdlRenderer, surf);
-                SDL_DestroySurface(surf);
-                if (tt->__SDL_textTexture) {
-                    SDL_SetTextureScaleMode(tt->__SDL_textTexture, SDL_SCALEMODE_LINEAR);
-                }
+                tt->__SDL_textTexture = MakeTextTexture(window->sdlRenderer, surf);
             }
             tt->__cachedTextLen = textLen;
         }
@@ -2688,6 +2982,7 @@ static void RenderWidget_Tooltip(UIWindow* window, UIWidget* el,
 
         float tw = 0.0f, th = 0.0f;
         SDL_GetTextureSize(tt->__SDL_textTexture, &tw, &th);
+        tw /= g_textSS; th /= g_textSS;   // texture is g_textSS× — logical
         const float bw = tw + tt->paddingX * 2.0f;
         const float bh = th + tt->paddingY * 2.0f;
         // Position next to the cursor with a small offset; clamp to window.
@@ -2734,7 +3029,7 @@ static void RenderWidget_Menu(UIWindow* window, UIWidget* el,
                                   (int)m->borderWidth, br);
 
         TTF_Font* font = (m->fontFamily && m->fontSize > 0.0f)
-            ? GetFont(m->fontFamily, m->fontSize) : NULL;
+            ? GetFont(m->fontFamily, m->fontSize * g_textSS) : NULL;
         if (font) TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
 
         for (int i = 0; i < m->itemCount; i++) {
@@ -2754,18 +3049,17 @@ static void RenderWidget_Menu(UIWindow* window, UIWidget* el,
                 const size_t len = strlen(m->labels[i]);
                 SDL_Surface* surf = TTF_RenderText_Blended(font, m->labels[i], len, sc);
                 if (surf) {
-                    SDL_Texture* tex = SDL_CreateTextureFromSurface(window->sdlRenderer, surf);
+                    SDL_Texture* tex = MakeTextTexture(window->sdlRenderer, surf);
                     if (tex) {
-                        SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
                         float tw = 0, th = 0;
                         SDL_GetTextureSize(tex, &tw, &th);
+                        tw /= g_textSS; th /= g_textSS;   // texture is g_textSS×
                         SDL_FRect dst = { itemR.x + m->paddingX,
                                           itemR.y + (m->itemHeight - th) * 0.5f,
                                           tw, th };
                         SDL_RenderTexture(window->sdlRenderer, tex, NULL, &dst);
                         SDL_DestroyTexture(tex);
                     }
-                    SDL_DestroySurface(surf);
                 }
             }
         }
@@ -2785,7 +3079,7 @@ static void RenderWidget_Dropdown(UIWindow* window, UIWidget* el,
                                   (int)d->borderWidth, br);
 
         TTF_Font* font = (d->fontFamily && d->fontSize > 0.0f)
-            ? GetFont(d->fontFamily, d->fontSize) : NULL;
+            ? GetFont(d->fontFamily, d->fontSize * g_textSS) : NULL;
         if (font) TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
 
         const char* label = (d->selectedIndex >= 0 && d->selectedIndex < d->itemCount)
@@ -2795,18 +3089,17 @@ static void RenderWidget_Dropdown(UIWindow* window, UIWidget* el,
             const size_t len = strlen(label);
             SDL_Surface* surf = TTF_RenderText_Blended(font, label, len, sc);
             if (surf) {
-                SDL_Texture* tex = SDL_CreateTextureFromSurface(window->sdlRenderer, surf);
+                SDL_Texture* tex = MakeTextTexture(window->sdlRenderer, surf);
                 if (tex) {
-                    SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
                     float tw = 0, th = 0;
                     SDL_GetTextureSize(tex, &tw, &th);
+                    tw /= g_textSS; th /= g_textSS;   // texture is g_textSS×
                     SDL_FRect dst = { btn.x + d->paddingX,
                                       btn.y + (btn.h - th) * 0.5f,
                                       tw, th };
                     SDL_RenderTexture(window->sdlRenderer, tex, NULL, &dst);
                     SDL_DestroyTexture(tex);
                 }
-                SDL_DestroySurface(surf);
             }
         }
 
@@ -2842,18 +3135,17 @@ static void RenderWidget_Dropdown(UIWindow* window, UIWidget* el,
                     const size_t len = strlen(d->labels[i]);
                     SDL_Surface* surf = TTF_RenderText_Blended(font, d->labels[i], len, sc);
                     if (surf) {
-                        SDL_Texture* tex = SDL_CreateTextureFromSurface(window->sdlRenderer, surf);
+                        SDL_Texture* tex = MakeTextTexture(window->sdlRenderer, surf);
                         if (tex) {
-                            SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
                             float tw = 0, th = 0;
                             SDL_GetTextureSize(tex, &tw, &th);
+                            tw /= g_textSS; th /= g_textSS;   // texture is g_textSS×
                             SDL_FRect dst = { rowR.x + d->paddingX,
                                               rowR.y + (d->popupItemHeight - th) * 0.5f,
                                               tw, th };
                             SDL_RenderTexture(window->sdlRenderer, tex, NULL, &dst);
                             SDL_DestroyTexture(tex);
                         }
-                        SDL_DestroySurface(surf);
                     }
                 }
             }

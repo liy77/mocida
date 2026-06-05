@@ -77,6 +77,13 @@ typedef struct {
     int   __rcW, __rcH, __rcFillMode;
     float __rcRadius, __rcBorder, __rcRotation, __rcOp;
     void* __rcSrc;             /**< source-texture identity the cache was built from */
+
+    int   cache;               /**< 1 = keep http/https downloads in the process-wide
+                                    in-memory cache (default); 0 = always refetch and
+                                    never store. Mirrors Qt's `Image { cache: }`. */
+    void* __download;          /**< Opaque in-flight remote-download job, or NULL.
+                                    Set while an http(s) source is being fetched on a
+                                    background thread; cleared once consumed. */
 } UIImage;
 
 /**
@@ -84,10 +91,15 @@ typedef struct {
  * The texture is **not** loaded here - it is created on the first render
  * (lazy load via UIAsset_LoadTexture).
  *
- * @param source            File path. Accepts PNG, JPG, BMP, GIF, WEBP,
- *                          SVG (via the vendored plutosvg). The path is
- *                          resolved relative to the CWD or the
- *                          executable's directory.
+ * @param source            File path or remote URL. Accepts PNG, JPG, BMP,
+ *                          GIF, WEBP, SVG (via the vendored plutosvg). A
+ *                          local path is resolved relative to the CWD or the
+ *                          executable's directory. An `http://` / `https://`
+ *                          URL is downloaded on a background thread and decoded
+ *                          once it arrives (see UIImage_PumpRemote); by default
+ *                          the bytes are kept in an in-memory cache keyed by
+ *                          URL so the same image is not refetched while the
+ *                          process lives. Toggle that with UIImage_SetCache.
  * @param animated          Reserved for future animated GIF support
  *                          (only the first frame is loaded for now).
  * @param nineSlice         Reserved for nine-slice scaling (not yet
@@ -145,6 +157,54 @@ UIImage* UIImage_FromMemory(SDL_Renderer* renderer,
  * @param image Pointer to the UIImage. NULL is safe.
  */
 void UIImage_Destroy(UIImage* image);
+
+/**
+ * Reports whether `source` is a remote URL the image widget fetches over
+ * the network (an `http://` or `https://` address).
+ *
+ * @param source Source string (NULL accepted).
+ * @return 1 for a remote URL, 0 otherwise.
+ */
+int UIImage_IsRemoteSource(const char* source);
+
+/**
+ * Enables or disables the in-memory cache for this image's remote download.
+ *
+ * With caching on (the default) the bytes fetched for the image's URL are
+ * stored in a process-wide cache keyed by that URL, so reusing the same URL
+ * - including after the widget tree is rebuilt / the source is redefined -
+ * does not hit the network again. The cache is never written to disk, so a
+ * fresh launch always refetches and picks up a changed server image. With
+ * caching off the image always refetches and stores nothing.
+ *
+ * Has no effect on local-file images. Takes effect for the next load (call
+ * it before the image first renders).
+ *
+ * @param image UIImage to configure (NULL safe).
+ * @param cache 1 to cache (default), 0 to always refetch.
+ */
+void UIImage_SetCache(UIImage* image, int cache);
+
+/**
+ * Advances the asynchronous load of a remote (http/https) image. Called by
+ * the renderer every frame while the texture is not yet ready: it kicks off
+ * the background download on first call and, once the bytes have arrived,
+ * decodes them into a texture on the render thread.
+ *
+ * No-op for local-file images and after the texture is loaded. Safe to call
+ * repeatedly.
+ *
+ * @param image    UIImage with a remote source.
+ * @param renderer Active SDL renderer (used to create the texture).
+ */
+void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer);
+
+/**
+ * Drops every entry from the process-wide remote-image cache, freeing the
+ * memory held by previously downloaded URLs. In-flight downloads and already
+ * decoded textures are unaffected; subsequent loads refetch.
+ */
+void UIImage_ClearRemoteCache(void);
 
 #endif // !(MOCIDA_IOS && __OBJC__)
 

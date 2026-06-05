@@ -46,6 +46,8 @@ UIButton* UIButton_Create(const char* text, float fontSize) {
     btn->state         = UI_BUTTON_STATE_NORMAL;
     btn->enabled       = 1;
     btn->cursor        = UI_CURSOR_POINTER;
+    btn->textAlign     = 0;       // center
+    btn->textInset     = 8.0f;
 
     btn->background = UIRectangle_Create();
     if (!btn->background) { free(btn); return NULL; }
@@ -103,6 +105,16 @@ UIButton* UIButton_SetFontStyle(UIButton* btn, int fontStyle) {
 UIButton* UIButton_SetRadius(UIButton* btn, float radius) {
     if (!btn) return btn;
     UIRectangle_SetRadius(btn->background, radius);
+    return btn;
+}
+
+UIButton* UIButton_SetTextAlign(UIButton* btn, int align) {
+    if (btn) btn->textAlign = (align < 0 || align > 2) ? 0 : align;
+    return btn;
+}
+
+UIButton* UIButton_SetTextInset(UIButton* btn, float inset) {
+    if (btn) btn->textInset = inset < 0.0f ? 0.0f : inset;
     return btn;
 }
 
@@ -229,6 +241,14 @@ static UIChildren* ContainerChildren(UIWidget* w) {
     if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) {
         return (UIChildren*)((UIRectangle*)base)->children;
     }
+    // A UIScroll's content is rendered with its children re-laid-out to absolute
+    // on-screen positions (offset by the scroll), so descending into the content
+    // and hit-testing with the same screen coords is correct — no offset needed.
+    // Without this, nothing inside a Scroll ever receives mouse events.
+    if (strcmp(t, UI_WIDGET_SCROLL) == 0) {
+        UIWidget* content = ((UIScroll*)base)->content;
+        return content ? ContainerChildren(content) : NULL;
+    }
     return NULL;
 }
 
@@ -250,7 +270,8 @@ void UIButton_DispatchMouseMotion(UIChildren* children, float x, float y) {
         if (btn && btn->enabled) {
             ButtonOnMotion(btn, InsideWidget(w, x, y));
         } else {
-            // Recurse into containers so nested buttons get hover too.
+            // Recurse into containers (incl. scroll content) so nested buttons
+            // get hover too.
             UIChildren* kids = ContainerChildren(w);
             if (kids) UIButton_DispatchMouseMotion(kids, x, y);
         }

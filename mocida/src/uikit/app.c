@@ -10,6 +10,8 @@
 #include <uikit/app.h>
 #include <uikit/color.h>
 #include <uikit/rect.h>
+#include <uikit/stack.h>
+#include <uikit/container.h>
 #include <uikit/asset.h>
 #include <uikit/window.h>
 #include <uikit/widget.h>
@@ -42,33 +44,164 @@ static void WindowToRenderCoords(UIApp* app, float wx, float wy, float* rx, floa
     }
 }
 
-// Forwards a mouse wheel event to every UIScroll whose bounds contain
-// (x, y). Vertical wheel goes to scrollY by default; with shift held
-// it goes to scrollX (matching most browsers).
+// If `w` is a container that holds a child collection (Stack / Grid / Rectangle /
+// Scroll content), return it so the wheel dispatch can recurse into nested
+// scrolls. Mirrors button.c's ContainerChildren — containers lay out their
+// children's absolute x/y during render, so the same absolute hit-test works at
+// any depth. A Scroll's content is re-laid-out to absolute on-screen positions.
+static UIChildren* WheelContainerChildren(UIWidget* w) {
+    if (!w || !w->data) return NULL;
+    UIWidgetBase* base = (UIWidgetBase*)w->data;
+    const char* t = base->__widget_type;
+    if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;
+    if (strcmp(t, UI_WIDGET_GRID) == 0)      return ((UIGrid*)base)->items;
+    if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) return (UIChildren*)((UIRectangle*)base)->children;
+    if (strcmp(t, UI_WIDGET_SCROLL) == 0) {
+        UIWidget* content = ((UIScroll*)base)->content;
+        return content ? WheelContainerChildren(content) : NULL;
+    }
+    return NULL;
+}
+
+// Find the innermost UIScroll whose bounds contain (x, y), recursing through
+// nested containers. Without the recursion a Scroll nested inside layout
+// containers — the common case (e.g. a file panel deep in a Stack tree) — never
+// receives the wheel, so scrolling silently does nothing.
+static UIScroll* FindScrollAt(UIChildren* children, float x, float y) {
+    if (!children) return NULL;
+    for (int i = children->count - 1; i >= 0; i--) {
+        UIWidget* w = children->children[i];
+        if (!w || !w->visible || !w->data) continue;
+        // Descend first so a more deeply-nested scroll wins over an outer one.
+        UIChildren* kids = WheelContainerChildren(w);
+        if (kids) {
+            UIScroll* inner = FindScrollAt(kids, x, y);
+            if (inner) return inner;
+        }
+        UIWidgetBase* b = (UIWidgetBase*)w->data;
+        if (strcmp(b->__widget_type, UI_WIDGET_SCROLL) == 0 &&
+            w->width && w->height &&
+            x >= w->x && x < w->x + *w->width &&
+            y >= w->y && y < w->y + *w->height) {
+            return (UIScroll*)b;
+        }
+    }
+    return NULL;
+}
+
+// Forwards a mouse wheel event to the innermost UIScroll under (x, y). Vertical
+// wheel goes to scrollY by default; with shift held it goes to scrollX (matching
+// most browsers).
 static void DispatchWheelToScrolls(UIChildren* children,
                                    float mouseX, float mouseY,
                                    float dxNotches, float dyNotches,
                                    int shift) {
+    UIScroll* s = FindScrollAt(children, mouseX, mouseY);
+    if (!s) return;
+    const float speed = s->wheelSpeed > 0.0f ? s->wheelSpeed : 60.0f;
+    if (shift) {
+        if (s->allowHorizontal) s->scrollX -= dyNotches * speed;
+    } else {
+        if (s->allowVertical)   s->scrollY -= dyNotches * speed;
+        if (s->allowHorizontal) s->scrollX -= dxNotches * speed;
+    }
+}
+
+// --- Scrollbar thumb drag --------------------------------------------------
+// The vertical scrollbar thumb (drawn by RenderScroll in window_render.inc) is
+// click-draggable. We recompute the SAME thumb geometry here from the scroll's
+// live viewport + measured contentH, so the hit-test and the drag-to-scroll
+// mapping line up exactly with the rendered bar.
+typedef struct {
+    int   has;
+    float thumbX, thumbY, thumbW, thumbH; // thumb rect
+    float trackY, viewH;                  // track origin + viewport height
+} UIVThumb;
+
+static UIVThumb ComputeVThumb(UIWidget* w, UIScroll* s) {
+    UIVThumb r = {0};
+    if (!s->showScrollbar || !s->allowVertical) return r;
+    if (!w->width || !w->height) return r;
+    const float viewW = *w->width, viewH = *w->height;
+    if (s->contentH <= viewH) return r; // no overflow → no thumb
+    const float barW = s->scrollbarWidth > 0.0f ? s->scrollbarWidth : 8.0f;
+    float th = viewH * (viewH / s->contentH);
+    if (th < 24.0f) th = 24.0f;
+    const float maxYv = s->contentH - viewH;
+    const float t = maxYv > 0.0f ? (s->scrollY / maxYv) : 0.0f;
+    const float ty = w->y + t * (viewH - th);
+    r.has = 1;
+    r.thumbX = w->x + viewW - barW; r.thumbY = ty;
+    r.thumbW = barW;                r.thumbH = th;
+    r.trackY = w->y;                r.viewH  = viewH;
+    return r;
+}
+
+// Begin dragging the vertical thumb under (x, y), if any. Recurses like
+// FindScrollAt so a nested scroll's thumb wins; returns 1 if a thumb is grabbed.
+static int ScrollbarDragBegin(UIChildren* children, float x, float y) {
+    if (!children) return 0;
+    for (int i = children->count - 1; i >= 0; i--) {
+        UIWidget* w = children->children[i];
+        if (!w || !w->visible || !w->data) continue;
+        UIChildren* kids = WheelContainerChildren(w);
+        if (kids && ScrollbarDragBegin(kids, x, y)) return 1;
+        UIWidgetBase* b = (UIWidgetBase*)w->data;
+        if (strcmp(b->__widget_type, UI_WIDGET_SCROLL) == 0) {
+            UIScroll* s = (UIScroll*)b;
+            UIVThumb tb = ComputeVThumb(w, s);
+            if (tb.has && x >= tb.thumbX && x < tb.thumbX + tb.thumbW &&
+                          y >= tb.thumbY && y < tb.thumbY + tb.thumbH) {
+                s->__barDragging = 1;
+                s->__barGrabDY = y - tb.thumbY; // keep the grab point under the cursor
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+// Apply an in-progress thumb drag. Returns 1 if some scroll consumed it.
+static int ScrollbarDragMove(UIChildren* children, float y) {
+    if (!children) return 0;
+    int handled = 0;
+    for (int i = children->count - 1; i >= 0; i--) {
+        UIWidget* w = children->children[i];
+        if (!w || !w->data) continue;
+        UIChildren* kids = WheelContainerChildren(w);
+        if (kids && ScrollbarDragMove(kids, y)) handled = 1;
+        UIWidgetBase* b = (UIWidgetBase*)w->data;
+        if (strcmp(b->__widget_type, UI_WIDGET_SCROLL) == 0) {
+            UIScroll* s = (UIScroll*)b;
+            if (s->__barDragging) {
+                UIVThumb tb = ComputeVThumb(w, s);
+                if (tb.has) {
+                    const float maxYv = s->contentH - tb.viewH;
+                    const float span  = tb.viewH - tb.thumbH;
+                    const float desiredTop = y - s->__barGrabDY;
+                    float t = span > 0.0f ? (desiredTop - tb.trackY) / span : 0.0f;
+                    if (t < 0.0f) t = 0.0f;
+                    if (t > 1.0f) t = 1.0f;
+                    s->scrollY = t * maxYv;
+                }
+                handled = 1;
+            }
+        }
+    }
+    return handled;
+}
+
+// Release any thumb drag.
+static void ScrollbarDragEnd(UIChildren* children) {
     if (!children) return;
     for (int i = children->count - 1; i >= 0; i--) {
         UIWidget* w = children->children[i];
-        if (!w || !w->visible || !w->data || !w->width || !w->height) continue;
+        if (!w || !w->data) continue;
+        UIChildren* kids = WheelContainerChildren(w);
+        if (kids) ScrollbarDragEnd(kids);
         UIWidgetBase* b = (UIWidgetBase*)w->data;
-        if (strcmp(b->__widget_type, UI_WIDGET_SCROLL) != 0) continue;
-
-        const float wW = *w->width, hH = *w->height;
-        if (mouseX < w->x || mouseX >= w->x + wW ||
-            mouseY < w->y || mouseY >= w->y + hH) continue;
-
-        UIScroll* s = (UIScroll*)b;
-        const float speed = s->wheelSpeed > 0.0f ? s->wheelSpeed : 60.0f;
-        if (shift) {
-            if (s->allowHorizontal) s->scrollX -= dyNotches * speed;
-        } else {
-            if (s->allowVertical)   s->scrollY -= dyNotches * speed;
-            if (s->allowHorizontal) s->scrollX -= dxNotches * speed;
-        }
-        return; // first hit captures
+        if (strcmp(b->__widget_type, UI_WIDGET_SCROLL) == 0)
+            ((UIScroll*)b)->__barDragging = 0;
     }
 }
 
@@ -146,6 +279,23 @@ static bool LiveResizeWatch(void* userdata, SDL_Event* event) {
     return false;
 }
 
+// If `w` is a layout container, return its child collection so the cursor
+// hover-test can recurse into NESTED interactive widgets (e.g. a resize-handle
+// MouseArea deep inside Stacks). Mirrors the dispatch's ContainerChildren.
+static UIChildren* CursorContainerChildren(UIWidget* w) {
+    if (!w || !w->data) return NULL;
+    UIWidgetBase* base = (UIWidgetBase*)w->data;
+    const char* t = base->__widget_type;
+    if (!strcmp(t, UI_WIDGET_STACK))     return ((UIStack*)base)->items;
+    if (!strcmp(t, UI_WIDGET_GRID))      return ((UIGrid*)base)->items;
+    if (!strcmp(t, UI_WIDGET_RECTANGLE)) return (UIChildren*)((UIRectangle*)base)->children;
+    if (!strcmp(t, UI_WIDGET_SCROLL)) {
+        UIWidget* content = ((UIScroll*)base)->content;
+        return content ? CursorContainerChildren(content) : NULL;
+    }
+    return NULL;
+}
+
 // Walks children back-to-front and returns the cursor advertised by
 // the topmost widget under (x, y). Falls back to UI_CURSOR_DEFAULT when
 // nothing interactive is under the cursor.
@@ -153,9 +303,16 @@ static UICursor PickHoverCursor(UIChildren* children, float x, float y) {
     if (!children) return UI_CURSOR_DEFAULT;
     for (int i = children->count - 1; i >= 0; i--) {
         UIWidget* w = children->children[i];
-        if (!w || !w->visible || !w->data || !w->width || !w->height) continue;
-        const float ww = *w->width, hh = *w->height;
-        if (x < w->x || x >= w->x + ww || y < w->y || y >= w->y + hh) continue;
+        if (!w || !w->visible || !w->data) continue;
+        // Bounds-test ONLY widgets with an explicit size. Intrinsic-sized layout
+        // containers (a Stack/HStack with no width/height pointer) must still be
+        // recursed into — otherwise a nested interactive widget (a resize-handle
+        // MouseArea) is never reached. (The dispatch recurses unconditionally too.)
+        const bool sized = w->width && w->height;
+        if (sized) {
+            const float ww = *w->width, hh = *w->height;
+            if (x < w->x || x >= w->x + ww || y < w->y || y >= w->y + hh) continue;
+        }
 
         UIWidgetBase* base = (UIWidgetBase*)w->data;
         // WebView2 composition mode: defer to whatever cursor the page
@@ -199,9 +356,16 @@ static UICursor PickHoverCursor(UIChildren* children, float x, float y) {
             // looking at widgets behind it.
             continue;
         }
-        // Hit a non-interactive widget on top - stop here so widgets
-        // below don't accidentally claim the cursor.
-        return UI_CURSOR_DEFAULT;
+        // A layout container: recurse so a nested interactive widget (e.g. a
+        // resize-handle MouseArea inside the panel's Stacks) can claim the cursor.
+        UIChildren* kids = CursorContainerChildren(w);
+        if (kids) {
+            UICursor c = PickHoverCursor(kids, x, y);
+            if (c != UI_CURSOR_DEFAULT) return c;
+        }
+        // A SIZED opaque widget blocks widgets behind it → stop. An intrinsic
+        // (unsized) container that claimed nothing keeps looking at its siblings.
+        if (sized) return UI_CURSOR_DEFAULT;
     }
     return UI_CURSOR_DEFAULT;
 }
@@ -213,6 +377,9 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
         case SDL_EVENT_MOUSE_MOTION: {
             float rx, ry;
             WindowToRenderCoords(app, event->motion.x, event->motion.y, &rx, &ry);
+            // A scrollbar-thumb drag in progress owns the motion: move it and
+            // swallow the event so hover/selection logic doesn't also react.
+            if (ScrollbarDragMove(app->window->children, ry)) break;
             // Mouse areas first so a draggable area can capture the
             // motion even when a button widget is underneath.
             UIMouseArea_DispatchMouseMotion(app->window->children, rx, ry);
@@ -238,6 +405,9 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
             // decides if the click landed on a button/link/etc.
             UIWebView_DispatchMouseDown  (app->window->children, rx, ry, event->button.button);
             if (event->button.button == SDL_BUTTON_LEFT) {
+                // A scrollbar thumb grab takes priority over any widget beneath
+                // it; if it grabs, don't also click through to that widget.
+                if (ScrollbarDragBegin(app->window->children, rx, ry)) break;
                 UIButton_DispatchMouseDown   (app->window->children, rx, ry);
                 UIControls_DispatchMouseDown (app->window->children, rx, ry, event->button.button);
                 UITextField_DispatchMouseDown(app->window->children, app->window->sdlWindow,
@@ -281,6 +451,8 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
         case SDL_EVENT_MOUSE_BUTTON_UP: {
             float rx, ry;
             WindowToRenderCoords(app, event->button.x, event->button.y, &rx, &ry);
+            // End any scrollbar-thumb drag before the usual up-dispatch.
+            ScrollbarDragEnd(app->window->children);
             UIMouseArea_DispatchMouseUp(app->window->children, rx, ry, event->button.button);
             UIWebView_DispatchMouseUp  (app->window->children, rx, ry, event->button.button);
             if (event->button.button == SDL_BUTTON_LEFT) {
@@ -626,12 +798,19 @@ UIWidget* UIApp_GetWindow(UIApp* app) {
 
 void UIApp_SetChildren(UIApp* app, UIChildren* children) {
     if (!app || !app->window || !children) return;
-    
+
+    // The old tree (and its focused widget) is about to be freed, so drop the
+    // global focus pointer first — otherwise the next focus change would blur a
+    // dangling widget and crash (FocusApply → strcmp on freed memory). Hosts
+    // that rebuild while a TextArea is focused (e.g. an autocomplete popup)
+    // re-focus the new widget themselves after this call.
+    UIWidget_InvalidateFocus();
+
     // Free the previous children if they exist
     if (app->window->children) {
         UIChildren_Destroy(app->window->children);
     }
-    
+
     app->window->children = children;
 }
 

@@ -69,6 +69,9 @@ struct UIButton {
 
     UIButtonCallback onClick;  /**< Fired on a completed click inside the button. */
     void* userdata;            /**< Opaque pointer passed to onClick. */
+
+    int textAlign;             /**< Label horizontal align: 0=center (default), 1=left, 2=right. */
+    float textInset;           /**< Edge padding (px) for left/right align. Default 8. */
 };
 
 /**
@@ -103,6 +106,16 @@ UIButton* UIButton_SetFontSize(UIButton* btn, float size);
  * effect on the next render.
  */
 UIButton* UIButton_SetFontStyle(UIButton* btn, int fontStyle);
+
+/**
+ * Sets the label's horizontal alignment inside the button:
+ * 0 = center (default), 1 = left, 2 = right. Left/right use `textInset`
+ * as the edge padding (see UIButton_SetTextInset).
+ */
+UIButton* UIButton_SetTextAlign(UIButton* btn, int align);
+
+/** Edge padding (px) used by left/right text alignment. Default 8. */
+UIButton* UIButton_SetTextInset(UIButton* btn, float inset);
 
 /**
  * Sets the border radius of the button's background. Rounded corners

@@ -483,6 +483,11 @@ static UIChildren* TF_ContainerChildren(UIWidget* w) {
     if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;
     if (strcmp(t, UI_WIDGET_GRID) == 0)      return ((UIGrid*)base)->items;
     if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) return (UIChildren*)((UIRectangle*)base)->children;
+    // Descend into scroll content so text fields inside a Scroll get events.
+    if (strcmp(t, UI_WIDGET_SCROLL) == 0) {
+        UIWidget* content = ((UIScroll*)base)->content;
+        return content ? TF_ContainerChildren(content) : NULL;
+    }
     return NULL;
 }
 
@@ -662,6 +667,11 @@ void UITextField_DispatchMouseUp(UIChildren* children, float x, float y, int but
 
 void UITextField_DispatchTextInput(UIChildren* children, const char* text) {
     if (!children || !text || !*text) return;
+    // Skip text produced under Ctrl (without Alt) so Ctrl-combo shortcuts don't
+    // also type a character (e.g. a stray space from Ctrl+Space). AltGr (Ctrl+Alt)
+    // still types normally.
+    SDL_Keymod km = SDL_GetModState();
+    if ((km & SDL_KMOD_CTRL) && !(km & SDL_KMOD_ALT)) return;
     UITextField* tf = TF_FindFocused(children);
     if (tf) InsertChars(tf, text, (int)strlen(text));
 }

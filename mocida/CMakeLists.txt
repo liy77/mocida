@@ -317,6 +317,10 @@ if(APPLE)
     if(MOCIDA_IOS)
         list(APPEND MOCIDA_SOURCES_OBJCXX
             "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/webview_uikit.mm")
+        # iOS has no libcurl, so UIImage's remote-source loader downloads via
+        # NSURLSession from this Objective-C file (see src/uikit/image.c).
+        list(APPEND MOCIDA_SOURCES_OBJCXX
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/image_net_ios.mm")
     else()
         list(APPEND MOCIDA_SOURCES_OBJCXX
             "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/webview_cocoa.mm")
@@ -907,6 +911,10 @@ if(MOCIDA_BUILD_INSTALLER)
         ${MOCIDA_SOURCES} ${MOCIDA_SOURCES_CXX})
     target_include_directories(mocida_static_installer PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src/headers)
+    # The installer links no libcurl (kept a curl-free single exe), so build
+    # UIImage's remote-source loader without an HTTP backend. The installer
+    # never displays http(s) images, so this only stubs an unused path.
+    target_compile_definitions(mocida_static_installer PRIVATE MOCIDA_NO_REMOTE_IMAGES=1)
     target_link_libraries(mocida_static_installer PUBLIC
         ${_M_SDL3}
         ${_M_SDL3_IMG}

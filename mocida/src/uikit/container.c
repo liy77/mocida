@@ -91,6 +91,24 @@ UIScroll* UIScroll_Create(void) {
     s->allowHorizontal = 1;
     s->allowDragScroll = 0;
     s->wheelSpeed = 60.0f;
+    s->showScrollbar = 1;
+    s->scrollbarColor = (UIColor){ 150, 155, 168, 0.55f };
+    s->scrollbarTrackColor = (UIColor){ 255, 255, 255, 0.04f };
+    s->scrollbarWidth = 8.0f;
+    return s;
+}
+
+UIScroll* UIScroll_SetScrollbar(UIScroll* s, int show) {
+    if (!s) return s;
+    s->showScrollbar = show ? 1 : 0;
+    return s;
+}
+
+UIScroll* UIScroll_SetScrollbarStyle(UIScroll* s, UIColor thumb, UIColor track, float width) {
+    if (!s) return s;
+    s->scrollbarColor = thumb;
+    s->scrollbarTrackColor = track;
+    if (width > 0.0f) s->scrollbarWidth = width;
     return s;
 }
 

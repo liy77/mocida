@@ -64,6 +64,13 @@ impl Stack {
         self
     }
 
+    /// Free layout: render each child at its own explicit x/y instead of
+    /// flowing them along an axis (for canvas-style absolute positioning).
+    pub fn free_layout(self, enabled: bool) -> Self {
+        unsafe { sys::UIStack_SetFreeLayout(self.ptr, enabled as i32) };
+        self
+    }
+
     /// Sets inner padding (left, top, right, bottom).
     pub fn padding(self, left: f32, top: f32, right: f32, bottom: f32) -> Self {
         unsafe { sys::UIStack_SetPadding(self.ptr, left, top, right, bottom) };

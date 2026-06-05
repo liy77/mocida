@@ -53,6 +53,10 @@ typedef struct {
     float   borderWidth;       /**< Border thickness (pixels). */
 
     UIChildren* items;         /**< Owned items. Destroyed with the stack. */
+
+    int freeLayout;            /**< 1 = don't flow items; render each at its own
+                                *   explicit x/y (absolute). For freely-positioned
+                                *   content like game objects on a canvas. */
 } UIStack;
 
 UIStack* UIStack_Create(UIStackOrientation orientation);
@@ -63,6 +67,7 @@ UIStack* UIStack_SetJustify(UIStack* s, UIStackJustify justify);
 UIStack* UIStack_SetBackground(UIStack* s, UIColor color);
 UIStack* UIStack_SetRadius (UIStack* s, float radius);
 UIStack* UIStack_SetBorder (UIStack* s, UIColor color, float width);
+UIStack* UIStack_SetFreeLayout(UIStack* s, int enabled);
 int      UIStack_AddItem   (UIStack* s, UIWidget* item);
 void     UIStack_Destroy   (UIStack* s);
 

@@ -105,6 +105,22 @@ impl Button {
         self
     }
 
+    /// Label horizontal alignment: 0 = center (default), 1 = left, 2 = right.
+    pub fn text_align(self, align: i32) -> Self {
+        unsafe {
+            sys::UIButton_SetTextAlign(self.ptr, align);
+        }
+        self
+    }
+
+    /// Edge padding (px) used by left/right text alignment.
+    pub fn text_inset(self, inset: f32) -> Self {
+        unsafe {
+            sys::UIButton_SetTextInset(self.ptr, inset);
+        }
+        self
+    }
+
     /// Sets the label font style (e.g. `FontStyle::BOLD | FontStyle::ITALIC`).
     pub fn font_style(self, style: FontStyle) -> Self {
         unsafe {

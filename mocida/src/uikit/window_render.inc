@@ -122,6 +122,54 @@ static void RenderScroll(UIWindow* window, UIWidget* el, UIScroll* s) {
 
     FlushRenderBatch(window->sdlRenderer);
     SDL_SetRenderClipRect(window->sdlRenderer, NULL);
+
+    // Scrollbar(s) drawn over the content (not clipped), on the trailing edges.
+    // Shown only when content overflows on that axis and showScrollbar is set.
+    if (s->showScrollbar) {
+        const float op = el->opacity;
+        const float barW = s->scrollbarWidth > 0.0f ? s->scrollbarWidth : 8.0f;
+        const float minThumb = 24.0f;
+
+        // Vertical scrollbar.
+        if (s->allowVertical && s->contentH > viewport.h) {
+            SDL_FRect track = { viewport.x + viewport.w - barW, viewport.y,
+                                barW, viewport.h };
+            UIColor tc = s->scrollbarTrackColor; tc.a *= op;
+            if (tc.a > 0.0f)
+                DrawRoundedRectWithBorder(window->sdlRenderer, track, tc,
+                                          barW * 0.5f, 0, tc);
+            float th = viewport.h * (viewport.h / s->contentH);
+            if (th < minThumb) th = minThumb;
+            float maxYv = s->contentH - viewport.h;
+            float t = maxYv > 0.0f ? (s->scrollY / maxYv) : 0.0f;
+            float ty = viewport.y + t * (viewport.h - th);
+            SDL_FRect thumb = { track.x, ty, barW, th };
+            UIColor thc = s->scrollbarColor; thc.a *= op;
+            DrawRoundedRectWithBorder(window->sdlRenderer, thumb, thc,
+                                      barW * 0.5f, 0, thc);
+        }
+
+        // Horizontal scrollbar.
+        if (s->allowHorizontal && s->contentW > viewport.w) {
+            SDL_FRect track = { viewport.x, viewport.y + viewport.h - barW,
+                                viewport.w, barW };
+            UIColor tc = s->scrollbarTrackColor; tc.a *= op;
+            if (tc.a > 0.0f)
+                DrawRoundedRectWithBorder(window->sdlRenderer, track, tc,
+                                          barW * 0.5f, 0, tc);
+            float tw = viewport.w * (viewport.w / s->contentW);
+            if (tw < minThumb) tw = minThumb;
+            float maxXv = s->contentW - viewport.w;
+            float t = maxXv > 0.0f ? (s->scrollX / maxXv) : 0.0f;
+            float tx = viewport.x + t * (viewport.w - tw);
+            SDL_FRect thumb = { tx, track.y, tw, barW };
+            UIColor thc = s->scrollbarColor; thc.a *= op;
+            DrawRoundedRectWithBorder(window->sdlRenderer, thumb, thc,
+                                      barW * 0.5f, 0, thc);
+        }
+
+        FlushRenderBatch(window->sdlRenderer);
+    }
 }
 
 // Bounds-check that culls widgets entirely outside the current render

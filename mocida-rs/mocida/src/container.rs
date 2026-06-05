@@ -2,6 +2,7 @@
 
 use mocida_sys as sys;
 
+use crate::color::Color;
 use crate::error::{Error, Result};
 use crate::widget::Widget;
 
@@ -136,6 +137,22 @@ impl Scroll {
     /// Sets the wheel scroll speed in pixels per notch.
     pub fn wheel_speed(self, px_per_notch: f32) -> Self {
         unsafe { sys::UIScroll_SetWheelSpeed(self.ptr, px_per_notch) };
+        self
+    }
+
+    /// Shows (`true`) or hides (`false`) the scrollbar. Shown by default when
+    /// the content overflows.
+    pub fn scrollbar(self, show: bool) -> Self {
+        unsafe { sys::UIScroll_SetScrollbar(self.ptr, show as i32) };
+        self
+    }
+
+    /// Styles the scrollbar: thumb color, track color (alpha 0 = no track), and
+    /// thickness in pixels.
+    pub fn scrollbar_style(self, thumb: Color, track: Color, width: f32) -> Self {
+        unsafe {
+            sys::UIScroll_SetScrollbarStyle(self.ptr, thumb.into_raw(), track.into_raw(), width)
+        };
         self
     }
 

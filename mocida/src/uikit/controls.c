@@ -500,6 +500,11 @@ static UIChildren* CtlContainerChildren(UIWidget* w) {
     if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;
     if (strcmp(t, UI_WIDGET_GRID) == 0)      return ((UIGrid*)base)->items;
     if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) return (UIChildren*)((UIRectangle*)base)->children;
+    // Descend into scroll content so controls inside a Scroll get events.
+    if (strcmp(t, UI_WIDGET_SCROLL) == 0) {
+        UIWidget* content = ((UIScroll*)base)->content;
+        return content ? CtlContainerChildren(content) : NULL;
+    }
     return NULL;
 }
 

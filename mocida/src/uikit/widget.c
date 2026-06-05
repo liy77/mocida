@@ -265,6 +265,7 @@ static void UIWidget_FocusApply(UIWidget* widget, int focused) {
 
     UIWidgetBase* b = (UIWidgetBase*)widget->data;
     const char* t = b->__widget_type;
+    if (!t) return;   // defensive: a stale/half-freed widget has no type tag
 
     if (!strcmp(t, UI_WIDGET_TEXTFIELD)) {
         UITextField* tf = (UITextField*)b;
@@ -308,11 +309,55 @@ static void UIWidget_FocusApply(UIWidget* widget, int focused) {
     // visuals can read it via UIWidget_IsFocused.
 }
 
+static int UIWidget_ChildrenHave(UIChildren* children, const UIWidget* target);
+
+// Recursively searches a live subtree for the exact widget pointer `target`,
+// comparing by identity ONLY. `target` is never dereferenced, so this is safe
+// to call with a possibly-freed cached pointer — the tree nodes we walk (`w`)
+// are live, but `target` may be a stale address.
+static int UIWidget_SubtreeHas(UIWidget* w, const UIWidget* target) {
+    if (!w) return 0;
+    if (w == target) return 1;
+    if (!w->data) return 0;
+    UIWidgetBase* base = (UIWidgetBase*)w->data;
+    const char* t = base->__widget_type;
+    if (!t) return 0;
+    if (strcmp(t, UI_WIDGET_STACK) == 0)     return UIWidget_ChildrenHave(((UIStack*)base)->items, target);
+    if (strcmp(t, UI_WIDGET_GRID) == 0)      return UIWidget_ChildrenHave(((UIGrid*)base)->items, target);
+    if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) return UIWidget_ChildrenHave((UIChildren*)((UIRectangle*)base)->children, target);
+    if (strcmp(t, UI_WIDGET_SCROLL) == 0)    return UIWidget_SubtreeHas(((UIScroll*)base)->content, target);
+    return 0;
+}
+
+static int UIWidget_ChildrenHave(UIChildren* children, const UIWidget* target) {
+    if (!children) return 0;
+    for (int i = 0; i < children->count; i++)
+        if (UIWidget_SubtreeHas(children->children[i], target)) return 1;
+    return 0;
+}
+
+// 1 if `widget` is still present in the active window's live tree. Used to
+// confirm a cached focus pointer hasn't been freed by a tree rebuild before we
+// touch it: blurring/focusing a stale widget runs FocusApply → strcmp on freed
+// memory (ACCESS_VIOLATION). Pointer-identity only — `widget` is not read.
+static int UIWidget_IsLive(const UIWidget* widget) {
+    if (!widget) return 0;
+    UIWindow* win = UIWindow_GetActive();
+    if (!win || !win->children) return 0;
+    return UIWidget_ChildrenHave(win->children, widget);
+}
+
 UIWidget* UIWidget_SetFocus(UIWidget* widget, int focused) {
     focused = focused ? 1 : 0;
 
     if (!focused) {
         if (!widget) return NULL;
+        // Only blur a widget that is still in the live tree. A stale pointer
+        // (its subtree was rebuilt out from under us) must not be focus-applied.
+        if (!UIWidget_IsLive(widget)) {
+            if (g_focusedWidget == widget) g_focusedWidget = NULL;
+            return NULL;
+        }
         if (widget->focused) {
             widget->focused = 0;
             UIWidget_FocusApply(widget, 0);
@@ -323,11 +368,21 @@ UIWidget* UIWidget_SetFocus(UIWidget* widget, int focused) {
 
     if (!widget) return NULL;
 
+    // Refuse to focus a widget that isn't part of the live tree. Hosts that
+    // rebuild the tree (e.g. an autocomplete popup) sometimes re-focus a cached
+    // pointer freed by the rebuild; storing it would leave g_focusedWidget
+    // dangling and crash on the next blur (FocusApply → strcmp on freed memory).
+    if (!UIWidget_IsLive(widget)) return NULL;
+
     // Blur the previous focus owner first so SDL_StopTextInput happens
-    // before SDL_StartTextInput on the same window.
+    // before SDL_StartTextInput on the same window. Guard against a stale
+    // previous owner the same way — drop it without dereferencing if it's gone.
     if (g_focusedWidget && g_focusedWidget != widget) {
-        g_focusedWidget->focused = 0;
-        UIWidget_FocusApply(g_focusedWidget, 0);
+        if (UIWidget_IsLive(g_focusedWidget)) {
+            g_focusedWidget->focused = 0;
+            UIWidget_FocusApply(g_focusedWidget, 0);
+        }
+        g_focusedWidget = NULL;
     }
 
     widget->focused = 1;
@@ -350,6 +405,14 @@ void UIWidget_ClearFocus(void) {
     g_focusedWidget = NULL;
     w->focused = 0;
     UIWidget_FocusApply(w, 0);
+}
+
+void UIWidget_InvalidateFocus(void) {
+    // Drop the cached focus owner WITHOUT dereferencing it — used when the whole
+    // widget tree is replaced (UIApp_SetChildren), since the previously-focused
+    // widget is about to be freed and blurring it (FocusApply → strcmp on its
+    // type tag) would read freed memory.
+    g_focusedWidget = NULL;
 }
 
 UIWidget* UIWidget_FindByData(void* data) {

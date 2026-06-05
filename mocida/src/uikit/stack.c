@@ -53,6 +53,11 @@ UIStack* UIStack_SetBorder(UIStack* s, UIColor color, float width) {
     return s;
 }
 
+UIStack* UIStack_SetFreeLayout(UIStack* s, int enabled) {
+    if (s) s->freeLayout = enabled ? 1 : 0;
+    return s;
+}
+
 int UIStack_AddItem(UIStack* s, UIWidget* item) {
     if (!s || !item) return 0;
     return UIChildren_Add(s->items, item);

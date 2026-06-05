@@ -2,6 +2,9 @@
 #include <uikit/textfield.h>
 #include <uikit/window.h>
 #include <uikit/font.h>
+#include <uikit/stack.h>
+#include <uikit/container.h>
+#include <uikit/rect.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -25,6 +28,82 @@ static UITextArea* AsTextArea(UIWidget* w) {
     UIWidgetBase* b = (UIWidgetBase*)w->data;
     if (strcmp(b->__widget_type, UI_WIDGET_TEXTAREA) != 0) return NULL;
     return (UITextArea*)b;
+}
+
+// Defined further down; used by the recursive unfocus helper below.
+static void SetFocused(UITextArea* ta, SDL_Window* win, int focused);
+
+// If `w` is a layout container (Stack / Grid / Rectangle / Scroll content),
+// return its child collection so dispatch can recurse into a nested TextArea.
+// Without this, a TextArea inside any container — the common case (e.g. an editor
+// pane deep in a Stack tree) — never receives focus, text, keys or wheel.
+static UIChildren* TA_ContainerChildren(UIWidget* w) {
+    if (!w || !w->data) return NULL;
+    UIWidgetBase* base = (UIWidgetBase*)w->data;
+    const char* t = base->__widget_type;
+    if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;
+    if (strcmp(t, UI_WIDGET_GRID) == 0)      return ((UIGrid*)base)->items;
+    if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) return (UIChildren*)((UIRectangle*)base)->children;
+    if (strcmp(t, UI_WIDGET_SCROLL) == 0) {
+        UIWidget* content = ((UIScroll*)base)->content;
+        return content ? TA_ContainerChildren(content) : NULL;
+    }
+    return NULL;
+}
+
+// Recursively find the topmost TextArea under (x, y). Returns 1 and fills the
+// out-params on hit.
+static int TA_FindHit(UIChildren* children, float x, float y,
+                      UITextArea** outTa, UIWidget** outW) {
+    if (!children) return 0;
+    for (int i = children->count - 1; i >= 0; i--) {
+        UIWidget* w = children->children[i];
+        UITextArea* ta = AsTextArea(w);
+        if (ta) {
+            if (InsideWidget(w, x, y)) { *outTa = ta; *outW = w; return 1; }
+        } else {
+            UIChildren* kids = TA_ContainerChildren(w);
+            if (kids && TA_FindHit(kids, x, y, outTa, outW)) return 1;
+        }
+    }
+    return 0;
+}
+
+// Recursively drop focus on every TextArea except `keep` (window-scoped text
+// input is toggled per area). Forward-declared via its use below.
+static void TA_UnfocusExcept(UIChildren* children, SDL_Window* win, UITextArea* keep) {
+    if (!children) return;
+    for (int i = 0; i < children->count; i++) {
+        UIWidget* w = children->children[i];
+        UITextArea* ta = AsTextArea(w);
+        if (ta) {
+            if (ta == keep) continue;
+            SetFocused(ta, win, 0);
+            ta->mouseSelecting = 0;
+            ta->lastClickMs    = 0;
+            ta->lastClickPos   = -1;
+            ta->clickCount     = 0;
+        } else {
+            UIChildren* kids = TA_ContainerChildren(w);
+            if (kids) TA_UnfocusExcept(kids, win, keep);
+        }
+    }
+}
+
+// The focused TextArea anywhere in the tree (recursive), or NULL.
+static UITextArea* TA_Focused(UIChildren* children) {
+    if (!children) return NULL;
+    for (int i = 0; i < children->count; i++) {
+        UIWidget* w = children->children[i];
+        UITextArea* ta = AsTextArea(w);
+        if (ta) {
+            if (ta->focused) return ta;
+        } else {
+            UIChildren* kids = TA_ContainerChildren(w);
+            if (kids) { UITextArea* f = TA_Focused(kids); if (f) return f; }
+        }
+    }
+    return NULL;
 }
 
 static int EnsureTextCapacity(UITextArea* ta, int needCap) {
@@ -65,6 +144,10 @@ static void InvalidateLineCache(UITextArea* ta) {
     ta->__cachedWrapW    = -1;
 }
 
+// Defined further down with the rest of the undo machinery; declared here so
+// UITextArea_SetText (above the definition) can drop history on a fresh load.
+static void HistoryReset(UITextArea* ta);
+
 static void ClampCaretAndSelection(UITextArea* ta) {
     if (!ta) return;
     if (ta->caretPos < 0)            ta->caretPos = 0;
@@ -88,7 +171,7 @@ UITextArea* UITextArea_Create(const char* initialText, float fontSize) {
     if (initialText) memcpy(ta->text, initialText, (size_t)initLen);
     ta->text[initLen] = '\0';
     ta->textLen   = initLen;
-    ta->caretPos  = initLen;
+    ta->caretPos  = 0;            // open at the top, not the end of the content
     ta->maxLength = -1;
 
     ta->fontSize          = fontSize > 0.0f ? fontSize : 16.0f;
@@ -110,6 +193,13 @@ UITextArea* UITextArea_Create(const char* initialText, float fontSize) {
     ta->paddingTop        = 8.0f;
     ta->paddingBottom     = 8.0f;
     ta->lineSpacing       = 1.25f;
+    ta->onSave            = NULL;
+    ta->saveUd            = NULL;
+    ta->highlighter       = NULL;
+    ta->highlighterUd     = NULL;
+    ta->__hlVersion       = 0;
+    ta->__cachedHlVersion = -1;
+    ta->__lastCaretPos    = -1;  // first render follows the caret (shows top)
     ta->selAnchor         = -1;
     ta->selectionColor    = (UIColor){ 191, 219, 254, 1.0f };
     ta->lastClickPos      = -1;
@@ -143,8 +233,11 @@ UITextArea* UITextArea_SetText(UITextArea* ta, const char* text) {
     if (text) memcpy(ta->text, text, (size_t)len);
     ta->text[len] = '\0';
     ta->textLen   = len;
-    ta->caretPos  = len;
+    ta->caretPos  = 0;      // a fresh load shows the top of the file
+    ta->scrollY   = 0.0f;
+    ta->__lastCaretPos = 0; // caret didn't "move" — keep us pinned at the top
     ta->selAnchor = -1;
+    HistoryReset(ta);       // a fresh document — discard the old undo history
     InvalidateLineCache(ta);
     if (ta->onChange) ta->onChange(ta, ta->text, ta->userdata);
     return ta;
@@ -208,6 +301,20 @@ UITextArea* UITextArea_SetTextColor  (UITextArea* ta, UIColor color) {
     InvalidateLineCache(ta);
     return ta;
 }
+UITextArea* UITextArea_SetHighlighter(UITextArea* ta, UITextAreaHighlighter fn, void* ud) {
+    if (!ta) return ta;
+    ta->highlighter   = fn;
+    ta->highlighterUd = ud;
+    ta->__hlVersion++;       // force the line cache (and its colors) to rebuild
+    InvalidateLineCache(ta);
+    return ta;
+}
+UITextArea* UITextArea_OnSave(UITextArea* ta, UITextAreaSaveCallback fn, void* ud) {
+    if (!ta) return ta;
+    ta->onSave = fn;
+    ta->saveUd = ud;
+    return ta;
+}
 UITextArea* UITextArea_SetBorder(UITextArea* ta, UIColor normal, UIColor focused, float width) {
     if (!ta) return ta;
     ta->borderColor = normal;
@@ -268,6 +375,16 @@ UITextArea* UITextArea_SetFontSize(UITextArea* ta, float size) {
     return ta;
 }
 
+UITextArea* UITextArea_SetShowLineNumbers(UITextArea* ta, int show) {
+    if (!ta) return ta;
+    show = show ? 1 : 0;
+    if (ta->showLineNumbers != show) {
+        ta->showLineNumbers = show;
+        InvalidateLineCache(ta);
+    }
+    return ta;
+}
+
 UITextArea* UITextArea_SetFontStyle(UITextArea* ta, int fontStyle) {
     if (!ta) return ta;
     if (ta->fontStyle != fontStyle) {
@@ -286,6 +403,7 @@ UITextArea* UITextArea_OnChange(UITextArea* ta, UITextAreaChangedCallback cb, vo
 
 void UITextArea_Destroy(UITextArea* ta) {
     if (!ta) return;
+    HistoryReset(ta);          // free the undo/redo snapshots
     free(ta->text);
     free(ta->placeholder);
     free(ta->fontFamily);
@@ -313,6 +431,130 @@ static void CollapseSelection(UITextArea* ta) {
     if (ta) ta->selAnchor = ta->caretPos;
 }
 
+// ── Completion-popup nav-lock ────────────────────────────────────────
+// While an autocomplete popup is open the host turns this on so the editor
+// TextArea swallows Up/Down/Enter/Tab/Esc (instead of moving the caret /
+// inserting) and records which nav key was pressed; the host polls it via
+// UITextArea_TakeCompletionNavKey to drive the popup selection.
+static int g_taNavLock = 0;
+static int g_taNavKey  = 0;  // 0 none, 1 Up, 2 Down, 3 Enter, 4 Tab, 5 Esc
+void UITextArea_SetCompletionNavLock(int on) { g_taNavLock = on; if (!on) g_taNavKey = 0; }
+int  UITextArea_TakeCompletionNavKey(void)   { int k = g_taNavKey; g_taNavKey = 0; return k; }
+
+// ── Bracket auto-close (VSCode-style) ────────────────────────────────
+static void InsertChars(UITextArea* ta, const char* chars, int n);  // defined below
+static char CloserFor(char c) { return c == '(' ? ')' : c == '{' ? '}' : c == '[' ? ']' : 0; }
+static int  IsOpener (char c) { return c == '(' || c == '{' || c == '['; }
+// Insert an open/close pair and leave the caret between them.
+static void InsertBracketPair(UITextArea* ta, char open, char close) {
+    char buf[2] = { open, close };
+    InsertChars(ta, buf, 2);   // caretPos now sits AFTER close
+    ta->caretPos--;            // step back so the caret is between ( | )
+    CollapseSelection(ta);
+}
+
+// ---------------------------------------------------------------------
+// Undo / redo
+//
+// History is a stack of full-text snapshots (heap copies) + the caret
+// position at each point. Edits record a PRE-edit checkpoint; Ctrl+Z pops it
+// (pushing the current state onto the redo stack) and Ctrl+Y / Ctrl+Shift+Z
+// reverses that. A run of same-kind, caret-contiguous edits (e.g. typing a
+// word, or holding Backspace) coalesces into one step.
+// ---------------------------------------------------------------------
+
+#define UI_TA_UNDO_MAX 256
+
+static void HistoryFree(char*** stack, int** carets, int* len, int* cap) {
+    if (*stack) { for (int i = 0; i < *len; i++) free((*stack)[i]); free(*stack); }
+    free(*carets);
+    *stack = NULL; *carets = NULL; *len = 0; *cap = 0;
+}
+
+static void HistoryPush(char*** stack, int** carets, int* len, int* cap,
+                        const char* text, int caret) {
+    if (*len >= *cap) {
+        int nc = *cap ? *cap * 2 : 32;
+        *stack  = (char**)realloc(*stack,  (size_t)nc * sizeof(char*));
+        *carets = (int*)  realloc(*carets, (size_t)nc * sizeof(int));
+        *cap = nc;
+    }
+    (*stack)[*len]  = _strdup(text ? text : "");
+    (*carets)[*len] = caret;
+    (*len)++;
+    if (*len > UI_TA_UNDO_MAX) {        // cap depth: drop the oldest snapshot
+        free((*stack)[0]);
+        memmove(&(*stack)[0],  &(*stack)[1],  (size_t)(*len - 1) * sizeof(char*));
+        memmove(&(*carets)[0], &(*carets)[1], (size_t)(*len - 1) * sizeof(int));
+        (*len)--;
+    }
+}
+
+// Drop the whole undo + redo history (a fresh document was loaded).
+static void HistoryReset(UITextArea* ta) {
+    HistoryFree(&ta->undoText, &ta->undoCaret, &ta->undoLen, &ta->undoCap);
+    HistoryFree(&ta->redoText, &ta->redoCaret, &ta->redoLen, &ta->redoCap);
+    ta->__lastEditKind  = 0;
+    ta->__lastEditCaret = -1;
+}
+
+// Record a PRE-edit checkpoint, coalescing contiguous same-kind runs.
+// `kind`: 1 = insert, 2 = delete. `boundary` forces a new step (word break,
+// newline, multi-char paste, selection replace). Clears the redo stack on a
+// genuine new edit.
+static void RecordUndo(UITextArea* ta, int kind, int boundary) {
+    if (!ta || ta->__suppressHistory) return;
+    const int contiguous = !boundary && kind == ta->__lastEditKind &&
+                           ta->caretPos == ta->__lastEditCaret;
+    if (contiguous) return;
+    HistoryPush(&ta->undoText, &ta->undoCaret, &ta->undoLen, &ta->undoCap,
+                ta->text, ta->caretPos);
+    HistoryFree(&ta->redoText, &ta->redoCaret, &ta->redoLen, &ta->redoCap);
+}
+
+// Replace the buffer with `text` and place the caret, without recording
+// history (used by undo/redo themselves). Fires onChange so the host binding
+// stays in sync.
+static void ApplyHistoryText(UITextArea* ta, const char* text, int caret) {
+    const int len = text ? (int)strlen(text) : 0;
+    if (!EnsureTextCapacity(ta, len + 1)) return;
+    if (text) memcpy(ta->text, text, (size_t)len);
+    ta->text[len] = '\0';
+    ta->textLen   = len;
+    ta->caretPos  = caret < 0 ? 0 : (caret > len ? len : caret);
+    ta->selAnchor = -1;
+    InvalidateLineCache(ta);
+    if (ta->onChange) ta->onChange(ta, ta->text, ta->userdata);
+}
+
+static void DoUndo(UITextArea* ta) {
+    if (!ta || ta->undoLen <= 0) return;
+    HistoryPush(&ta->redoText, &ta->redoCaret, &ta->redoLen, &ta->redoCap,
+                ta->text, ta->caretPos);
+    ta->undoLen--;
+    char* t = ta->undoText[ta->undoLen]; ta->undoText[ta->undoLen] = NULL;
+    const int c = ta->undoCaret[ta->undoLen];
+    ta->__suppressHistory = 1;
+    ApplyHistoryText(ta, t, c);
+    ta->__suppressHistory = 0;
+    free(t);
+    ta->__lastEditKind = 0;   // a later edit starts a fresh run
+}
+
+static void DoRedo(UITextArea* ta) {
+    if (!ta || ta->redoLen <= 0) return;
+    HistoryPush(&ta->undoText, &ta->undoCaret, &ta->undoLen, &ta->undoCap,
+                ta->text, ta->caretPos);
+    ta->redoLen--;
+    char* t = ta->redoText[ta->redoLen]; ta->redoText[ta->redoLen] = NULL;
+    const int c = ta->redoCaret[ta->redoLen];
+    ta->__suppressHistory = 1;
+    ApplyHistoryText(ta, t, c);
+    ta->__suppressHistory = 0;
+    free(t);
+    ta->__lastEditKind = 0;
+}
+
 static void DeleteSelection(UITextArea* ta) {
     if (!HasSelection(ta)) return;
     int s, e;
@@ -320,12 +562,14 @@ static void DeleteSelection(UITextArea* ta) {
     if (s < 0) s = 0;
     if (e > ta->textLen) e = ta->textLen;
     if (e <= s) { ta->selAnchor = ta->caretPos; return; }
+    RecordUndo(ta, 2, 1);   // replacing/deleting a selection is its own step
     const int n = e - s;
     memmove(ta->text + s, ta->text + e, (size_t)(ta->textLen - e + 1));
     ta->textLen  -= n;
     ta->caretPos  = s;
     ta->selAnchor = s;
     InvalidateLineCache(ta);
+    ta->__lastEditKind = 2; ta->__lastEditCaret = ta->caretPos;
     if (ta->onChange) ta->onChange(ta, ta->text, ta->userdata);
 }
 
@@ -336,7 +580,15 @@ static void DeleteSelection(UITextArea* ta) {
 static void InsertChars(UITextArea* ta, const char* chars, int n) {
     if (!ta || !chars || n <= 0) return;
     ClampCaretAndSelection(ta);
-    if (HasSelection(ta)) DeleteSelection(ta);
+    if (HasSelection(ta)) {
+        DeleteSelection(ta);   // records the pre-edit checkpoint for the replace
+    } else {
+        // Break the undo run on whitespace / newline / multi-char paste so a
+        // word, not the whole paragraph, is one undo step.
+        const int boundary = (n != 1) || chars[0] == '\n' ||
+                             chars[0] == ' ' || chars[0] == '\t';
+        RecordUndo(ta, 1, boundary);
+    }
     if (ta->maxLength >= 0 && ta->textLen + n > ta->maxLength) {
         n = ta->maxLength - ta->textLen;
         if (n <= 0) return;
@@ -350,6 +602,7 @@ static void InsertChars(UITextArea* ta, const char* chars, int n) {
     ta->textLen  += n;
     CollapseSelection(ta);
     InvalidateLineCache(ta);
+    ta->__lastEditKind = 1; ta->__lastEditCaret = ta->caretPos;
     if (ta->onChange) ta->onChange(ta, ta->text, ta->userdata);
 }
 
@@ -358,6 +611,7 @@ static void DeleteBefore(UITextArea* ta) {
     ClampCaretAndSelection(ta);
     if (HasSelection(ta)) { DeleteSelection(ta); return; }
     if (ta->caretPos <= 0) return;
+    RecordUndo(ta, 2, 0);
     memmove(ta->text + ta->caretPos - 1,
             ta->text + ta->caretPos,
             (size_t)(ta->textLen - ta->caretPos + 1));
@@ -365,6 +619,7 @@ static void DeleteBefore(UITextArea* ta) {
     ta->textLen--;
     CollapseSelection(ta);
     InvalidateLineCache(ta);
+    ta->__lastEditKind = 2; ta->__lastEditCaret = ta->caretPos;
     if (ta->onChange) ta->onChange(ta, ta->text, ta->userdata);
 }
 
@@ -373,13 +628,74 @@ static void DeleteAfter(UITextArea* ta) {
     ClampCaretAndSelection(ta);
     if (HasSelection(ta)) { DeleteSelection(ta); return; }
     if (ta->caretPos >= ta->textLen) return;
+    RecordUndo(ta, 2, 0);
     memmove(ta->text + ta->caretPos,
             ta->text + ta->caretPos + 1,
             (size_t)(ta->textLen - ta->caretPos));
     ta->textLen--;
     CollapseSelection(ta);
     InvalidateLineCache(ta);
+    ta->__lastEditKind = 2; ta->__lastEditCaret = ta->caretPos;
     if (ta->onChange) ta->onChange(ta, ta->text, ta->userdata);
+}
+
+// ---------------------------------------------------------------------
+// Autocomplete / programmatic-edit support (host-driven completion).
+// ---------------------------------------------------------------------
+
+int UITextArea_GetCaretByte(const UITextArea* ta) {
+    return ta ? ta->caretPos : 0;
+}
+
+void UITextArea_SetCaretByte(UITextArea* ta, int pos) {
+    if (!ta) return;
+    if (pos < 0) pos = 0;
+    if (pos > ta->textLen) pos = ta->textLen;
+    ta->caretPos = pos;
+    ta->selAnchor = -1;     // collapse any selection to the caret
+    ClampCaretAndSelection(ta);
+}
+
+void UITextArea_InsertText(UITextArea* ta, const char* s) {
+    if (!ta || !s) return;
+    InsertChars(ta, s, (int)strlen(s));
+}
+
+void UITextArea_ReplaceBeforeCaret(UITextArea* ta, int n, const char* s) {
+    if (!ta) return;
+    ClampCaretAndSelection(ta);
+    for (int i = 0; i < n && ta->caretPos > 0; i++) DeleteBefore(ta);
+    if (s && *s) InsertChars(ta, s, (int)strlen(s));
+}
+
+void UITextArea_GetCaretScreenPos(UITextArea* ta, float* ox, float* oy) {
+    if (ox) *ox = 0.0f;
+    if (oy) *oy = 0.0f;
+    if (!ta) return;
+    const float lineH = ta->fontSize * ta->lineSpacing;
+    int pos = ta->caretPos;
+    if (pos < 0) pos = 0;
+    if (pos > ta->textLen) pos = ta->textLen;
+    int caretLine = 0;
+    if (ta->lineStarts && ta->linesLen > 0) {
+        int lo = 0, hi = ta->linesLen - 1;
+        while (lo < hi) {
+            int mid = (lo + hi + 1) / 2;
+            if (ta->lineStarts[mid] <= pos) lo = mid; else hi = mid - 1;
+        }
+        caretLine = lo;
+    }
+    float cx = 0.0f;
+    if (ta->lineCharOffsets && ta->lineStarts && ta->lineCharOffsetsLen &&
+        caretLine < ta->linesLen && ta->lineCharOffsets[caretLine]) {
+        int col = pos - ta->lineStarts[caretLine];
+        if (col >= 0 && col < ta->lineCharOffsetsLen[caretLine]) {
+            cx = (float)ta->lineCharOffsets[caretLine][col];
+        }
+    }
+    if (ox) *ox = ta->__lastX + ta->paddingLeft + ta->__gutterW + cx;
+    if (oy) *oy = ta->__lastY + ta->paddingTop
+                  + (float)caretLine * lineH - ta->scrollY + lineH;
 }
 
 // ---------------------------------------------------------------------
@@ -526,27 +842,14 @@ void UITextArea_DispatchMouseDown(UIChildren* children, SDL_Window* win,
                                   float x, float y, int button) {
     if (!children || button != SDL_BUTTON_LEFT) return;
 
+    // Recurse the whole tree so a TextArea nested in layout containers is found.
     UITextArea* hit  = NULL;
     UIWidget*   hitW = NULL;
-    for (int i = children->count - 1; i >= 0; i--) {
-        UIWidget* w = children->children[i];
-        UITextArea* ta = AsTextArea(w);
-        if (!ta) continue;
-        if (InsideWidget(w, x, y)) { hit = ta; hitW = w; break; }
-    }
+    TA_FindHit(children, x, y, &hit, &hitW);
 
-    // Unfocus everyone else BEFORE focusing the hit (SDL_StartTextInput
-    // is window-scoped; doing it the other way around leaves text input
-    // off after a focus change).
-    for (int i = 0; i < children->count; i++) {
-        UITextArea* ta = AsTextArea(children->children[i]);
-        if (!ta || ta == hit) continue;
-        SetFocused(ta, win, 0);
-        ta->mouseSelecting = 0;
-        ta->lastClickMs    = 0;
-        ta->lastClickPos   = -1;
-        ta->clickCount     = 0;
-    }
+    // Unfocus every other TextArea BEFORE focusing the hit (SDL_StartTextInput
+    // is window-scoped; the other order leaves text input off after a change).
+    TA_UnfocusExcept(children, win, hit);
 
     if (!hit) return;
 
@@ -554,11 +857,12 @@ void UITextArea_DispatchMouseDown(UIChildren* children, SDL_Window* win,
     SetFocused(ta, win, 1);
     UIWidget_SetFocus(hitW, 1);
 
-    const float lx = x - (hitW->x + ta->paddingLeft);
+    const float lx = x - (hitW->x + ta->paddingLeft + ta->__gutterW);
     const float ly = y - (hitW->y + ta->paddingTop) + ta->scrollY;
     int pos = CaretFromLocalXY(ta, lx, ly);
     if (pos < 0) pos = 0;
     if (pos > ta->textLen) pos = ta->textLen;
+    ta->__lastEditKind = 0;   // clicking ends the current undo run
 
     const Uint64 now = SDL_GetTicks();
     const int near = (ta->lastClickPos >= 0 &&
@@ -600,58 +904,109 @@ void UITextArea_DispatchMouseMotion(UIChildren* children, float x, float y) {
     for (int i = 0; i < children->count; i++) {
         UIWidget* w = children->children[i];
         UITextArea* ta = AsTextArea(w);
-        if (!ta || !ta->mouseSelecting) continue;
-        const float lx = x - (w->x + ta->paddingLeft);
-        const float ly = y - (w->y + ta->paddingTop) + ta->scrollY;
-        int pos = CaretFromLocalXY(ta, lx, ly);
-        if (pos < 0) pos = 0;
-        if (pos > ta->textLen) pos = ta->textLen;
-        if (pos != ta->caretPos) ta->caretPos = pos;
+        if (ta) {
+            if (!ta->mouseSelecting) continue;
+            const float lx = x - (w->x + ta->paddingLeft + ta->__gutterW);
+            const float ly = y - (w->y + ta->paddingTop) + ta->scrollY;
+            int pos = CaretFromLocalXY(ta, lx, ly);
+            if (pos < 0) pos = 0;
+            if (pos > ta->textLen) pos = ta->textLen;
+            if (pos != ta->caretPos) ta->caretPos = pos;
+        } else {
+            UIChildren* kids = TA_ContainerChildren(w);
+            if (kids) UITextArea_DispatchMouseMotion(kids, x, y);
+        }
     }
 }
 
 void UITextArea_DispatchMouseUp(UIChildren* children, float x, float y, int button) {
-    (void)x; (void)y;
     if (!children || button != SDL_BUTTON_LEFT) return;
     for (int i = 0; i < children->count; i++) {
-        UITextArea* ta = AsTextArea(children->children[i]);
-        if (!ta) continue;
-        ta->mouseSelecting = 0;
+        UIWidget* w = children->children[i];
+        UITextArea* ta = AsTextArea(w);
+        if (ta) {
+            ta->mouseSelecting = 0;
+        } else {
+            UIChildren* kids = TA_ContainerChildren(w);
+            if (kids) UITextArea_DispatchMouseUp(kids, x, y, button);
+        }
     }
 }
 
-void UITextArea_DispatchMouseWheel(UIChildren* children, float x, float y, float dy) {
-    if (!children) return;
+// First TextArea under (x, y) captures the wheel; recurses into containers.
+static int TA_WheelRec(UIChildren* children, float x, float y, float dy) {
+    if (!children) return 0;
     for (int i = children->count - 1; i >= 0; i--) {
         UIWidget* w = children->children[i];
         UITextArea* ta = AsTextArea(w);
-        if (!ta) continue;
-        if (!InsideWidget(w, x, y)) continue;
-        ta->scrollY -= dy * (ta->fontSize * ta->lineSpacing) * 2.0f;
-        if (ta->scrollY < 0.0f) ta->scrollY = 0.0f;
-        return; // first hit captures
+        if (ta) {
+            if (!InsideWidget(w, x, y)) continue;
+            ta->scrollY -= dy * (ta->fontSize * ta->lineSpacing) * 2.0f;
+            if (ta->scrollY < 0.0f) ta->scrollY = 0.0f;
+            return 1;
+        } else {
+            UIChildren* kids = TA_ContainerChildren(w);
+            if (kids && TA_WheelRec(kids, x, y, dy)) return 1;
+        }
     }
+    return 0;
+}
+
+void UITextArea_DispatchMouseWheel(UIChildren* children, float x, float y, float dy) {
+    TA_WheelRec(children, x, y, dy);
 }
 
 void UITextArea_DispatchTextInput(UIChildren* children, const char* text) {
     if (!children || !text || !*text) return;
-    for (int i = 0; i < children->count; i++) {
-        UITextArea* ta = AsTextArea(children->children[i]);
-        if (!ta || !ta->focused) continue;
-        InsertChars(ta, text, (int)strlen(text));
-        return;
+    // Ignore text generated while Ctrl is held without Alt. SDL can emit a
+    // TEXTINPUT of " " for Ctrl+Space on Windows; without this guard a Ctrl+Space
+    // shortcut (e.g. "open autocomplete") also inserts a stray space. Ctrl+Alt
+    // (AltGr) is left alone so it still produces real characters.
+    SDL_Keymod km = SDL_GetModState();
+    if ((km & SDL_KMOD_CTRL) && !(km & SDL_KMOD_ALT)) return;
+    UITextArea* ta = TA_Focused(children);
+    if (!ta) return;
+    // Bracket auto-close, typed-input only (never in InsertChars — paste / Tab /
+    // Enter / completion-insert route through it and must stay literal). Gated to
+    // a lone ASCII bracket with no active selection.
+    if (text[0] && text[1] == '\0' && !HasSelection(ta)) {
+        char c = text[0];
+        if (IsOpener(c)) { InsertBracketPair(ta, c, CloserFor(c)); return; }
+        // Step over an existing closer instead of inserting a duplicate.
+        if ((c == ')' || c == '}' || c == ']') &&
+            ta->caretPos < ta->textLen && ta->text[ta->caretPos] == c) {
+            ta->caretPos++;
+            CollapseSelection(ta);
+            return;
+        }
     }
+    InsertChars(ta, text, (int)strlen(text));
 }
 
 void UITextArea_DispatchKeyDown(UIChildren* children, SDL_Window* win,
                                 SDL_Scancode key, Uint16 mod) {
     if (!children) return;
-    for (int i = 0; i < children->count; i++) {
-        UITextArea* ta = AsTextArea(children->children[i]);
-        if (!ta || !ta->focused) continue;
-
+    // The focused TextArea may be nested in containers — search recursively.
+    UITextArea* ta = TA_Focused(children);
+    if (!ta) return;
+    {
         const int ctrl  = (mod & SDL_KMOD_CTRL)  != 0;
         const int shift = (mod & SDL_KMOD_SHIFT) != 0;
+
+        // Completion-popup nav-lock: swallow the nav keys so the caret never
+        // moves (the host polls the swallowed key to drive popup selection).
+        // Other keys (typing) fall through and refine the popup as usual.
+        if (g_taNavLock) {
+            switch (key) {
+                case SDL_SCANCODE_UP:        g_taNavKey = 1; return;
+                case SDL_SCANCODE_DOWN:      g_taNavKey = 2; return;
+                case SDL_SCANCODE_RETURN:
+                case SDL_SCANCODE_KP_ENTER:  g_taNavKey = 3; return;
+                case SDL_SCANCODE_TAB:       g_taNavKey = 4; return;
+                case SDL_SCANCODE_ESCAPE:    g_taNavKey = 5; return;
+                default: break;
+            }
+        }
 
         const int isMove = (key == SDL_SCANCODE_LEFT  || key == SDL_SCANCODE_RIGHT ||
                             key == SDL_SCANCODE_UP    || key == SDL_SCANCODE_DOWN  ||
@@ -663,7 +1018,20 @@ void UITextArea_DispatchKeyDown(UIChildren* children, SDL_Window* win,
         }
 
         switch (key) {
-            case SDL_SCANCODE_BACKSPACE: DeleteBefore(ta); break;
+            case SDL_SCANCODE_BACKSPACE:
+                // Auto-pair: backspace inside an empty bracket pair "(|)" removes
+                // both sides.
+                if (!HasSelection(ta) && ta->caretPos > 0 && ta->caretPos < ta->textLen) {
+                    char l = ta->text[ta->caretPos - 1];
+                    char r = ta->text[ta->caretPos];
+                    if (IsOpener(l) && CloserFor(l) == r) {
+                        DeleteAfter(ta);   // closer to the right
+                        DeleteBefore(ta);  // opener to the left
+                        break;
+                    }
+                }
+                DeleteBefore(ta);
+                break;
             case SDL_SCANCODE_DELETE:    DeleteAfter(ta);  break;
 
             case SDL_SCANCODE_LEFT:
@@ -766,10 +1134,21 @@ void UITextArea_DispatchKeyDown(UIChildren* children, SDL_Window* win,
                     ta->caretPos  = ta->textLen;
                 }
                 break;
+            case SDL_SCANCODE_S:
+                if (ctrl && ta->onSave) ta->onSave(ta, ta->saveUd);
+                break;
+            case SDL_SCANCODE_Z:
+                if (ctrl) { if (shift) DoRedo(ta); else DoUndo(ta); }
+                break;
+            case SDL_SCANCODE_Y:
+                if (ctrl) DoRedo(ta);
+                break;
             default:
                 break;
         }
-        return;
+        // Moving the caret ends the current typing/deleting run, so the next
+        // edit starts a fresh undo step.
+        if (isMove) ta->__lastEditKind = 0;
     }
 }
 

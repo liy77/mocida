@@ -40,6 +40,13 @@ static UIChildren* ContainerChildren(UIWidget* w) {
     if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;
     if (strcmp(t, UI_WIDGET_GRID) == 0)      return ((UIGrid*)base)->items;
     if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) return (UIChildren*)((UIRectangle*)base)->children;
+    // Descend into a UIScroll's content (its children are re-laid-out to
+    // absolute on-screen coords at render, so the same hit-test point applies)
+    // — otherwise nothing inside a Scroll receives mouse events.
+    if (strcmp(t, UI_WIDGET_SCROLL) == 0) {
+        UIWidget* content = ((UIScroll*)base)->content;
+        return content ? ContainerChildren(content) : NULL;
+    }
     return NULL;
 }
 
@@ -114,7 +121,8 @@ UIMouseArea* UIMouseArea_SetDragBounds(UIMouseArea* area, float x, float y, floa
     UIMouseArea* UIMouseArea_##name(UIMouseArea* area, UIMouseAreaCallback cb, void* userdata) { \
         if (!area) return area; \
         area->field = cb; \
-        area->userdata = userdata; \
+        area->field##Ud = userdata; \
+        area->userdata = userdata; /* keep legacy field in sync (last setter wins) */ \
         return area; \
     }
 
@@ -144,8 +152,8 @@ void UIMouseArea_Destroy(UIMouseArea* area) {
 // hover state is kept consistent across overlapping areas.
 
 static void FireCallback(UIMouseArea* area, UIMouseAreaCallback cb,
-                         UIMouseEvent ev) {
-    if (cb) cb(area, ev, area->userdata);
+                         void* ud, UIMouseEvent ev) {
+    if (cb) cb(area, ev, ud);
 }
 
 static UIMouseEvent MakeEvent(float x, float y,
@@ -178,11 +186,11 @@ void UIMouseArea_DispatchMouseMotion(UIChildren* children, float x, float y) {
         // Hover transitions.
         if (inside && !area->hovered) {
             area->hovered = 1;
-            FireCallback(area, area->onHoverEnter,
+            FireCallback(area, area->onHoverEnter, area->onHoverEnterUd,
                          MakeEvent(x, y, 0, 0, 0, 0, 0));
         } else if (!inside && area->hovered) {
             area->hovered = 0;
-            FireCallback(area, area->onHoverExit,
+            FireCallback(area, area->onHoverExit, area->onHoverExitUd,
                          MakeEvent(x, y, 0, 0, 0, 0, 0));
         }
 
@@ -195,7 +203,7 @@ void UIMouseArea_DispatchMouseMotion(UIChildren* children, float x, float y) {
 
             if (!area->dragging && (dx != 0.0f || dy != 0.0f)) {
                 area->dragging = 1;
-                FireCallback(area, area->onDragStart,
+                FireCallback(area, area->onDragStart, area->onDragStartUd,
                              MakeEvent(x, y, 0, 0, x, y, 0));
             }
 
@@ -215,7 +223,7 @@ void UIMouseArea_DispatchMouseMotion(UIChildren* children, float x, float y) {
                         ApplyClamp(area, *t->width, *t->height, &t->x, &t->y);
                     }
                 }
-                FireCallback(area, area->onDrag,
+                FireCallback(area, area->onDrag, area->onDragUd,
                              MakeEvent(x, y, dx, dy, 0, 0, 0));
             }
         }
@@ -230,7 +238,7 @@ void UIMouseArea_DispatchMouseMotion(UIChildren* children, float x, float y) {
             }
             area->onMouseMove(area,
                               MakeEvent(x, y, dx, dy, 0, 0, 0),
-                              area->userdata);
+                              area->onMouseMoveUd);
         }
     }
 }
@@ -253,7 +261,7 @@ void UIMouseArea_DispatchMouseDown(UIChildren* children, float x, float y, int b
             area->pressed = 1;
             area->lastMouseX = x;
             area->lastMouseY = y;
-            FireCallback(area, area->onMouseDown,
+            FireCallback(area, area->onMouseDown, area->onMouseDownUd,
                          MakeEvent(x, y, 0, 0, x, y, button));
 
             const Uint64 now = SDL_GetTicks();
@@ -264,7 +272,7 @@ void UIMouseArea_DispatchMouseDown(UIChildren* children, float x, float y, int b
                 area->lastClickButton == button &&
                 dxClick * dxClick + dyClick * dyClick <=
                     UI_MOUSE_DOUBLECLICK_PX * UI_MOUSE_DOUBLECLICK_PX) {
-                FireCallback(area, area->onDoubleClick,
+                FireCallback(area, area->onDoubleClick, area->onDoubleClickUd,
                              MakeEvent(x, y, 0, 0, x, y, button));
                 // Reset so a triple-click doesn't fire as another
                 // double-click.
@@ -294,10 +302,10 @@ void UIMouseArea_DispatchMouseUp(UIChildren* children, float x, float y, int but
         if (!area->enabled || !area->pressed) continue;
 
         if (area->dragging) {
-            FireCallback(area, area->onDragEnd,
+            FireCallback(area, area->onDragEnd, area->onDragEndUd,
                          MakeEvent(x, y, 0, 0, 0, 0, button));
         }
-        FireCallback(area, area->onMouseUp,
+        FireCallback(area, area->onMouseUp, area->onMouseUpUd,
                      MakeEvent(x, y, 0, 0, 0, 0, button));
 
         area->pressed = 0;
