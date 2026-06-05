@@ -879,15 +879,19 @@ endif()
 
 # ----------------------------------------------------------------------
 # Optional GUI installer (installer/installer.c). The installer is a
-# Mocida app that downloads the SDK (mocida.dll + headers + SDL DLLs)
+# Mocida app that downloads the SDK (headers + libraries + SDL shared libs)
 # from a GitHub release at install time and publishes MOCIDA_INCLUDE_DIR
-# / MOCIDA_LIB_DIR / PATH via the Windows registry.
+# / MOCIDA_LIB_DIR via platform-specific persistent env:
+#   Windows  — HKCU\Environment (user) or HKLM\...\Session Manager\Environment
+#              (system); also appends lib dir to PATH.
+#   macOS/Linux — exports written to ~/.mocida.env, sourced from
+#              ~/.zshrc / ~/.bashrc / ~/.profile on first install.
 #
 # The installer is built against a private STATIC copy of mocida so the
-# resulting .exe does NOT depend on mocida.dll at runtime — it can't,
-# because what it ships *is* mocida.dll. It still needs SDL3*.dll +
-# WebView2Loader.dll alongside it (these come from vcpkg / vendored
-# SDL subdirs and are shared libraries by design).
+# resulting executable does NOT depend on the mocida shared library at
+# runtime — it can't, because what it ships *is* that library. On Windows
+# it still needs SDL3*.dll + WebView2Loader.dll alongside it (these come
+# from vcpkg / vendored SDL subdirs and are shared libraries by design).
 # ----------------------------------------------------------------------
 option(MOCIDA_BUILD_INSTALLER "Build the GUI installer (installer/installer.c)" OFF)
 if(MOCIDA_BUILD_INSTALLER)

@@ -18,6 +18,8 @@ Tasks:
           MOCIDA_* FFI env vars to the C build outputs.
   all     c -> rust   (default)
   clean   Wipe the C build dir for this config + cargo clean.
+  env     Publish MOCIDA_INCLUDE_DIR / MOCIDA_LIB_DIR to the PERSISTENT
+          system environment, cross-platform (Win registry / ~/.mocida.env).
 
 Incremental caching is delegated to the real engines (Ninja for C, cargo for
 Rust) - same model Turbo uses: the orchestrator owns the graph, the tools own
@@ -29,6 +31,7 @@ Usage:
   python build.py c --force             # clean rebuild of just the C lib
   python build.py rust                  # rebuild Rust against the current C lib
   python build.py setup                 # first-time machine bootstrap (Windows)
+  python build.py env                   # persist MOCIDA_* to the system env
   python build.py clean
 """
 
@@ -61,6 +64,7 @@ DEPENDS = {
     "c": [],
     "rust": ["c"],
     "clean": [],
+    "env": [],
     "all": ["c", "rust"],
 }
 
@@ -260,11 +264,93 @@ def task_clean(opts):
     add_result("clean", "OK", (time.perf_counter() - t0) * 1000)
 
 
+# ========================================================================
+#  TASK: env  (publish MOCIDA_* to the PERSISTENT system environment)
+# ========================================================================
+# build.py's `rust` task only sets MOCIDA_INCLUDE_DIR / MOCIDA_LIB_DIR in the
+# cargo subprocess env - those die with the process. The `env` task persists
+# them cross-platform so any later shell / IDE / consumer build can find the
+# SDK, mirroring what installer/installer.c does at install time:
+#   Windows     - HKCU\Environment (per-user), broadcast WM_SETTINGCHANGE so
+#                 new shells pick it up without a logout.
+#   macOS/Linux - exports upserted into ~/.mocida.env, sourced from
+#                 ~/.zshrc / ~/.bashrc / ~/.profile via an idempotent marker.
+def _persist_env_windows(pairs):
+    import winreg
+    import ctypes
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
+                        winreg.KEY_SET_VALUE) as key:
+        for name, value in pairs.items():
+            winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+    # Tell running processes the environment changed (no logout needed).
+    HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG = 0xFFFF, 0x001A, 0x0002
+    ctypes.windll.user32.SendMessageTimeoutW(
+        HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment",
+        SMTO_ABORTIFHUNG, 5000, ctypes.byref(ctypes.c_ulong()))
+
+
+def _persist_env_posix(pairs):
+    home = Path(os.path.expanduser("~"))
+    envfile = home / ".mocida.env"
+    lines = envfile.read_text().splitlines() if envfile.exists() else []
+    for name, value in pairs.items():
+        prefix = f"export {name}="
+        newline = f'export {name}="{value}"'
+        for i, ln in enumerate(lines):
+            if ln.startswith(prefix):       # upsert: replace prior value
+                lines[i] = newline
+                break
+        else:
+            lines.append(newline)
+    envfile.write_text("\n".join(lines) + "\n")
+    # Source ~/.mocida.env from the login shells (idempotent via a marker).
+    marker = '[ -f "$HOME/.mocida.env" ] && . "$HOME/.mocida.env"  # mocida sdk env'
+    for rc in (".zshrc", ".bashrc", ".profile"):
+        rcpath = home / rc
+        if rc != ".profile" and not rcpath.exists():
+            continue                        # don't create shells the user lacks
+        existing = rcpath.read_text() if rcpath.exists() else ""
+        if "# mocida sdk env" in existing:
+            continue
+        sep = "" if (not existing or existing.endswith("\n")) else "\n"
+        with rcpath.open("a") as f:
+            f.write(sep + marker + "\n")
+
+
+def persist_env(pairs):
+    if PLATFORM == "win32":
+        _persist_env_windows(pairs)
+    else:
+        _persist_env_posix(pairs)
+
+
+def task_env(opts):
+    head(f"env - publish MOCIDA_* to persistent system env [{PLATFORM}]")
+    t0 = time.perf_counter()
+    libdir = c_build_dir(opts.config)
+    incdir = CDIR / "src" / "headers"
+    if not incdir.exists():
+        raise TaskError(f"C headers not found at {incdir}")
+    pairs = {
+        "MOCIDA_INCLUDE_DIR": str(incdir.resolve()),
+        "MOCIDA_LIB_DIR": str(libdir.resolve()),
+    }
+    persist_env(pairs)
+    for k, v in pairs.items():
+        note(f"{k} = {v}")
+    if PLATFORM == "win32":
+        note("written to HKCU\\Environment (open a new shell to pick it up)")
+    else:
+        note("written to ~/.mocida.env (sourced from ~/.zshrc / .bashrc / .profile)")
+    add_result("env", "OK", (time.perf_counter() - t0) * 1000)
+
+
 RUNNERS = {
     "setup": task_setup,
     "c": task_c,
     "rust": task_rust,
     "clean": task_clean,
+    "env": task_env,
 }
 
 
@@ -299,7 +385,7 @@ def main():
         prog="build.py",
         description="Mocida monorepo build orchestrator (Turbo-style).")
     ap.add_argument("task", nargs="?", default="all",
-                    choices=["all", "c", "rust", "setup", "clean"],
+                    choices=["all", "c", "rust", "setup", "clean", "env"],
                     help="task to run (default: all)")
     ap.add_argument("--config", default="debug",
                     choices=["debug", "release", "relwithdebinfo"],
