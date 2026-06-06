@@ -188,6 +188,14 @@ int  UITextArea_GetCaretByte        (const UITextArea* ta);
 void UITextArea_SetCaretByte        (UITextArea* ta, int pos);
 /** Insert `s` at the caret (advances the caret past it; fires onChange). */
 void UITextArea_InsertText          (UITextArea* ta, const char* s);
+/** Edit commands — same effect as the Ctrl+Z/Y/X/C/V/A key handlers, for a menu
+ *  or programmatic editing. Operate on the (focused) TextArea; fire onChange. */
+UITextArea* UITextArea_Undo         (UITextArea* ta);
+UITextArea* UITextArea_Redo         (UITextArea* ta);
+UITextArea* UITextArea_Cut          (UITextArea* ta);
+UITextArea* UITextArea_Copy         (UITextArea* ta);
+UITextArea* UITextArea_Paste        (UITextArea* ta);
+UITextArea* UITextArea_SelectAll    (UITextArea* ta);
 /** Delete `n` bytes immediately before the caret, then insert `s` there —
  *  used to swap a typed word prefix for a chosen completion. */
 void UITextArea_ReplaceBeforeCaret  (UITextArea* ta, int n, const char* s);

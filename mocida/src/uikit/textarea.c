@@ -1176,3 +1176,37 @@ UITextArea* UITextArea_SetFocus(UITextArea* ta, int focused) {
 int UITextArea_IsFocused(const UITextArea* ta) {
     return ta ? ta->focused : 0;
 }
+
+// ---------------------------------------------------------------------
+// Edit commands (programmatic equivalents of the Ctrl+Z/Y/X/C/V/A key
+// handlers) — used by the host's Edit menu, acting on the focused TextArea.
+// ---------------------------------------------------------------------
+UITextArea* UITextArea_Undo(UITextArea* ta) { if (ta) DoUndo(ta); return ta; }
+UITextArea* UITextArea_Redo(UITextArea* ta) { if (ta) DoRedo(ta); return ta; }
+
+UITextArea* UITextArea_Copy(UITextArea* ta) {
+    if (!ta) return ta;
+    char* sel = CopySelectedText(ta);
+    if (sel) { SDL_SetClipboardText(sel); free(sel); }
+    else if (ta->textLen > 0) SDL_SetClipboardText(ta->text);
+    return ta;
+}
+UITextArea* UITextArea_Cut(UITextArea* ta) {
+    if (!ta) return ta;
+    char* sel = CopySelectedText(ta);
+    if (sel) { SDL_SetClipboardText(sel); free(sel); DeleteSelection(ta); }
+    return ta;
+}
+UITextArea* UITextArea_Paste(UITextArea* ta) {
+    if (!ta) return ta;
+    char* clip = SDL_GetClipboardText();
+    if (clip && *clip) InsertChars(ta, clip, (int)strlen(clip));
+    if (clip) SDL_free(clip);
+    return ta;
+}
+UITextArea* UITextArea_SelectAll(UITextArea* ta) {
+    if (!ta) return ta;
+    ta->selAnchor = 0;
+    ta->caretPos  = ta->textLen;
+    return ta;
+}
