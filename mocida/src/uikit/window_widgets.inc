@@ -2620,19 +2620,25 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
         // Optional wallpaper drawn cover-fit behind the text (host sets it via
         // UITextArea_SetBgImage; host also makes bgColor transparent so it shows).
         // Drawn by the TextArea itself — not a MUI overlay — so it tracks the editor
-        // rect exactly and dodges mocida's nested free-layout clipping. The texture
-        // is loaded lazily (the renderer is only available here) and cached.
+        // rect exactly and dodges mocida's nested free-layout clipping. The decoded
+        // texture is cached in a PROCESS-WIDE slot keyed by path (NOT per-TextArea):
+        // opening a file structurally rebuilds the editor and recreates the TextArea,
+        // so a per-widget cache would re-decode the image from disk on every open — a
+        // visible stutter. The global slot reloads only when the path actually changes.
         if (ta->__bgImagePath) {
-            if (!ta->__bgImageTex) {
+            static char* s_bgPath = NULL;
+            static SDL_Texture* s_bgTex = NULL;
+            if (!s_bgPath || strcmp(s_bgPath, ta->__bgImagePath) != 0) {
+                if (s_bgTex) { SDL_DestroyTexture(s_bgTex); s_bgTex = NULL; }
+                SDL_free(s_bgPath); s_bgPath = SDL_strdup(ta->__bgImagePath);
                 SDL_Surface* __bgs = UIAsset_LoadSurface(ta->__bgImagePath);
                 if (__bgs) {
-                    ta->__bgImageTex = SDL_CreateTextureFromSurface(window->sdlRenderer, __bgs);
-                    if (ta->__bgImageTex)
-                        SDL_SetTextureScaleMode((SDL_Texture*)ta->__bgImageTex, SDL_SCALEMODE_LINEAR);
+                    s_bgTex = SDL_CreateTextureFromSurface(window->sdlRenderer, __bgs);
+                    if (s_bgTex) SDL_SetTextureScaleMode(s_bgTex, SDL_SCALEMODE_LINEAR);
                     SDL_DestroySurface(__bgs);
                 }
             }
-            SDL_Texture* __btex = (SDL_Texture*)ta->__bgImageTex;
+            SDL_Texture* __btex = s_bgTex;
             float __tw = 0.0f, __th = 0.0f;
             if (__btex) SDL_GetTextureSize(__btex, &__tw, &__th);
             if (__btex && __tw > 0.0f && __th > 0.0f) {
