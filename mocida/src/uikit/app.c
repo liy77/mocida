@@ -103,69 +103,33 @@ static UIScroll* FindScrollAt(UIChildren* children, float x, float y) {
 // widget opts out with propagatingEvents:true — then the event also passes
 // through to whatever sits below.
 //
-// We compute, once per spatial event, the OUTERMOST non-propagating widget whose
-// own bounds cover the event point (the "occluder" = the overlay's root cover).
-// The protected dispatchers then ask OcclusionAllows(leaf): a candidate target is
-// allowed when it belongs to the occluder's subtree (it IS the overlay or a
-// control inside it) and blocked when it sits outside that subtree — i.e. a
-// lower/behind sibling the overlay hides.
+// We record the event point once per spatial event (OcclusionBegin); the
+// protected dispatchers then ask OcclusionAllows(leaf), which walks the
+// root→leaf path (PathAllowsRec): the leaf is BLOCKED if, at any container level
+// on that path, a LATER sibling (higher z) presents a non-propagating cover at
+// the point — that later sibling is an overlay sitting in front of the leaf's
+// branch. A per-level path walk (rather than a single "global occluder subtree")
+// is essential because the editor body and the Settings modal are SIBLINGS
+// inside one full-window editor-root Stack: a global cover would be the root
+// itself, which contains both, so it could never tell them apart and the wheel
+// leaked straight through to the editor TextArea.
 //
 // Coverage is decided by each widget's OWN bounds regardless of its type, so a
 // plain Rectangle/Stack overlay background occludes a TextArea of a different
 // type behind it (cross-type occlusion). Intrinsic (sizeless) containers have no
-// box of their own and only occlude through a sized descendant.
+// box of their own and only occlude through a sized descendant (BranchCovers
+// descends them so a free-layout overlay still counts as covering).
 typedef struct {
-    int        active;   // 1 while an occluder covers the current event point
-    UIWidget*  widget;   // the occluding subtree root (topmost opaque cover)
+    int        active;   // 1 while an event point is being arbitrated
+    float      x, y;     // the event point (render-space)
+    UIChildren* root;    // the window's child collection (path-search start)
 } UIOccluder;
 
 static UIOccluder g_occluder; // per-event; reset by OcclusionBegin
 
-// Recurses front-to-back looking for the OUTERMOST non-propagating widget whose
-// own box covers (x, y) along the frontmost branch — the overlay's root cover,
-// not its inner controls. A sized, non-propagating widget that covers the point
-// is recorded WITHOUT descending into it, so its whole subtree counts as "in
-// front" (allowed) and only siblings BEHIND it are occluded. We still descend
-// THROUGH propagating widgets, sizeless (intrinsic) containers, and widgets that
-// don't cover the point — that's how we reach the real cover sitting inside a
-// sizeless view root. Returns 1 once an occluder is recorded.
-static int OccluderRec(UIChildren* children, float x, float y) {
-    if (!children) return 0;
-    for (int i = children->count - 1; i >= 0; i--) {
-        UIWidget* w = children->children[i];
-        if (!w || !w->visible || !w->data) continue;
-        const int sized = (w->width && w->height);
-        const int covers = sized &&
-            x >= w->x && x < w->x + *w->width &&
-            y >= w->y && y < w->y + *w->height;
-        // A sized, non-propagating widget that covers the point IS the cover for
-        // this branch: record it and stop (don't descend — its children are "in
-        // front" and stay interactive via the descendant test below).
-        if (covers && !w->propagatingEvents) {
-            g_occluder.active = 1;
-            g_occluder.widget = w;
-            return 1;
-        }
-        // Otherwise pass through (propagating, sizeless, or non-covering) and
-        // look for a cover deeper in this branch.
-        UIChildren* kids = WheelContainerChildren(w);
-        if (kids && OccluderRec(kids, x, y)) return 1;
-    }
-    return 0;
-}
-
-// Compute the occluder for this event point. Call once before running the
-// dispatch chain for a wheel/click event.
-static void OcclusionBegin(UIChildren* children, float x, float y) {
-    g_occluder.active = 0;
-    g_occluder.widget = NULL;
-    OccluderRec(children, x, y);
-}
-
 // True when `target` is `ancestor` or lives somewhere inside its subtree
-// (descending through the same containers the dispatch walks). Used to tell a
-// widget that is part of the occluding overlay (allowed) apart from one that is
-// merely positioned behind it (blocked).
+// (descending through the same containers the dispatch walks). Used to tell
+// whether the leaf being dispatched belongs to a given overlay branch.
 static int IsInSubtree(UIWidget* ancestor, UIWidget* target) {
     if (!ancestor || !target) return 0;
     if (ancestor == target) return 1;
@@ -177,14 +141,98 @@ static int IsInSubtree(UIWidget* ancestor, UIWidget* target) {
     return 0;
 }
 
-// True when `leaf` may receive the current event. Allowed when there is no
-// occluder, or when `leaf` belongs to the occluding subtree (it IS the overlay
-// or a widget inside it). A leaf outside that subtree is BEHIND the overlay and
-// is blocked — that's what stops a scroll/click over the Settings modal from
-// reaching the editor underneath.
+// True when widget `w`'s branch presents a sized, non-propagating cover at
+// (x, y) — either `w` itself (sized + covering) or, for a free-layout overlay
+// whose own wrapper is sizeless, a covering descendant reached by descending
+// through propagating / sizeless / non-covering containers. This mirrors the
+// hover-cursor pick: the Settings modal's outer wrapper Stack is sizeless, so
+// the real cover (its full-window dim layer) sits one level down and must still
+// count as "this sibling covers the point".
+static int BranchCovers(UIWidget* w, float x, float y) {
+    if (!w || !w->visible || !w->data || w->propagatingEvents) return 0;
+    // A DISABLED MouseArea (e.g. a `dismiss:` popup catcher gated off while the popup
+    // is hidden — it's always-rendered + sized 100000² but UIMouseArea_SetEnabled(0))
+    // does NOT catch events, so its own box must NOT count as a cover (else it blocks
+    // every click behind the always-rendered popup). Mirrors PickHoverCursorImpl,
+    // which treats a disabled MouseArea as cursor-transparent. A child may still cover,
+    // so we fall through to the descent rather than returning 0 outright.
+    UIWidgetBase* __bc_base = (UIWidgetBase*)w->data;
+    const int self_catches =
+        !(strcmp(__bc_base->__widget_type, UI_WIDGET_MOUSE_AREA) == 0
+          && !((UIMouseArea*)__bc_base)->enabled);
+    const int sized = (w->width && w->height);
+    if (self_catches && sized &&
+        x >= w->x && x < w->x + *w->width &&
+        y >= w->y && y < w->y + *w->height) {
+        return 1; // this widget's own box covers the point
+    }
+    // A sized widget whose box does NOT cover the point doesn't occlude here,
+    // but a sizeless container might still hold a covering child. Descend.
+    UIChildren* kids = WheelContainerChildren(w);
+    if (!kids) return 0;
+    for (int i = 0; i < kids->count; i++) {
+        if (BranchCovers(kids->children[i], x, y)) return 1;
+    }
+    return 0;
+}
+
+// Walks the root→leaf path and decides whether `leaf` may receive the event at
+// (x, y). The rule mirrors the front-to-back hover-cursor pick: at every
+// container level on the path, the leaf's branch is occluded if a LATER sibling
+// (drawn on top / higher z) is a sized, non-propagating widget whose own box
+// covers the point — that later sibling is an overlay sitting in front of the
+// leaf's branch, so input must not pass through it to the leaf.
+//
+// This is what distinguishes the Settings modal from the editor underneath:
+// both live as siblings inside one full-window editor-root Stack, so a single
+// "global occluder subtree" can't tell them apart (the root contains both). The
+// path walk instead sees that the modal's full-window dim layer is a LATER
+// sibling of the editor body that covers the point, and blocks the editor body
+// (and its TextArea) while leaving the modal's own controls — which sit INSIDE
+// that dim-layer branch — allowed. A normal panel Scroll has no later covering
+// sibling, so it stays interactive.
+static int PathAllowsRec(UIChildren* children, UIWidget* leaf, float x, float y) {
+    if (!children) return 0;
+    // Find which child's subtree the leaf lives in.
+    int branch = -1;
+    for (int i = 0; i < children->count; i++) {
+        if (IsInSubtree(children->children[i], leaf)) { branch = i; break; }
+    }
+    if (branch < 0) return 0; // leaf not under here (shouldn't happen on the path)
+
+    // Any LATER sibling (higher z) whose branch presents a non-propagating cover
+    // at the point blocks the leaf's branch — it's an overlay in front of it.
+    // BranchCovers descends sizeless wrappers so a free-layout overlay (the modal
+    // dim layer inside its sizeless outer Stack) still counts as covering.
+    for (int i = branch + 1; i < children->count; i++) {
+        if (BranchCovers(children->children[i], x, y)) {
+            return 1; // occluded by a later covering sibling at this level
+        }
+    }
+
+    // Descend into the leaf's own branch and check deeper levels too.
+    UIWidget* b = children->children[branch];
+    if (b == leaf) return 0;
+    UIChildren* kids = WheelContainerChildren(b);
+    if (!kids) return 0;
+    return PathAllowsRec(kids, leaf, x, y);
+}
+
+// Record the event point so the per-leaf path check can run. Call once before
+// the dispatch chain for a wheel/click/motion event.
+static void OcclusionBegin(UIChildren* children, float x, float y) {
+    g_occluder.active = 1;
+    g_occluder.x = x;
+    g_occluder.y = y;
+    g_occluder.root = children;
+}
+
+// True when `leaf` may receive the current event (no later covering overlay
+// sibling anywhere on its root→leaf path). This is what stops a scroll/click
+// over the Settings modal from reaching the editor underneath.
 static int OcclusionAllows(UIWidget* leaf) {
-    if (!g_occluder.active) return 1;
-    return IsInSubtree(g_occluder.widget, leaf);
+    if (!g_occluder.active || !g_occluder.root) return 1;
+    return !PathAllowsRec(g_occluder.root, leaf, g_occluder.x, g_occluder.y);
 }
 
 // Public wrapper consulted by the cross-file input dispatchers (mouse_area.c,
