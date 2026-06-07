@@ -150,4 +150,15 @@ int      UIGlass_AddItem        (UIGlass* g, UIWidget* item);
 void     UIGlass_GetContentSize (UIGlass* g, float* outW, float* outH);
 void     UIGlass_Destroy        (UIGlass* g);
 
+/* ---- global controls (live, no rebuild) ----
+ * Let the app toggle the in-app glass look + tune the blur strength at runtime
+ * without rebuilding the view. When DISABLED, every Glass widget renders as a
+ * SOLID panel (full-opacity tint, no blur) — so a `Glass{}` can stand in for a
+ * plain panel and the user flips "translucent" in settings. The blur SCALE
+ * multiplies each widget's `blur` (the intensity/"power" knob). */
+void  UIGlass_SetGlobalEnabled   (int on);     /* default: 1 (on) */
+int   UIGlass_GetGlobalEnabled   (void);
+void  UIGlass_SetGlobalBlurScale (float scale); /* default: 1.0 */
+float UIGlass_GetGlobalBlurScale (void);
+
 #endif // UIKIT_GLASS_H

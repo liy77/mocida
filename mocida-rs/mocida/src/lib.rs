@@ -112,7 +112,10 @@ pub use rect::Rectangle;
 pub use screen::{Insets, Screen};
 pub use shadow::Shadow;
 pub use sound::Sound;
-pub use glass::{BackdropMaterial, Glass, GlassThickness, VibrancyState};
+pub use glass::{
+    set_glass_blur_scale, set_glass_enabled, BackdropMaterial, Glass, GlassThickness,
+    VibrancyState,
+};
 pub use stack::{Stack, StackAlign, StackJustify, StackOrientation};
 pub use tab::TabView;
 pub use text::{FontStyle, Text, TextHAlign, TextVAlign, WrapMode};

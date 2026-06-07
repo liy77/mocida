@@ -404,7 +404,13 @@ int UIWindow_Render(UIWindow* window) {
     int aaScale = 1;
     if      (g_aaMode == 2) aaScale = 2; // SSAA_2X
     else if (g_aaMode == 3) aaScale = 4; // SSAA_4X
-    const int needsOffscreen = (g_aaMode >= 2);
+    // A UIGlass widget blurred last frame? Render offscreen so its blur can GPU-copy
+    // the region instead of reading back the backbuffer. g_glassBlurSeen is re-set
+    // during this frame's render if a glass widget blurs again (it stays on while a
+    // glass surface is visible).
+    const int glassWantsOffscreen = g_glassBlurSeen;
+    g_glassBlurSeen = 0;
+    const int needsOffscreen = (g_aaMode >= 2) || glassWantsOffscreen;
 
     if (needsOffscreen) {
         const int tw = rw * aaScale;

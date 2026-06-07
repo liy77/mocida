@@ -1165,6 +1165,99 @@ void DrawRoundedRectWithBorder(SDL_Renderer* renderer, SDL_FRect rect,
     }
 }
 
+// Set whenever a glass widget blurs in a frame. UIWindow_Render reads it at the
+// start of the NEXT frame to force offscreen rendering, so the blur can GPU-copy
+// the region from the offscreen target instead of reading back the backbuffer (a
+// backbuffer readback stalls the pipeline AND corrupts the flip swapchain — the
+// rest of the frame dims). One-frame lag only on a glass widget's first appearance.
+int g_glassBlurSeen = 0;
+
+// In-app glass "backdrop filter": blur the already-rendered framebuffer BEHIND
+// `rect` and paint the blurred result back into it, so a UIGlass widget frosts the
+// app content under it (macOS-vibrancy style). SDL_Renderer exposes no fragment
+// shaders, so the blur is a chain of bilinear half-resolution down-samples (each a
+// box blur) finished by one linear up-sample — wide, smooth, cheap. `blurPx` =
+// strength. When the frame renders to an offscreen target (forced by g_glassBlurSeen)
+// the snapshot is a pure-GPU copy; otherwise it falls back to one readback.
+void DrawGlassBackdropBlur(SDL_Renderer* r, SDL_FRect rect, float blurPx) {
+    if (!r || rect.w < 2.0f || rect.h < 2.0f || blurPx < 1.0f) return;
+    g_glassBlurSeen = 1; // ask the next frame to render offscreen (no readback)
+
+    float sx = 1.0f, sy = 1.0f;
+    SDL_GetRenderScale(r, &sx, &sy);
+    int sw = (int)(rect.w * sx + 0.5f);
+    int sh = (int)(rect.h * sy + 0.5f);
+    if (sw < 2 || sh < 2) return;
+
+    SDL_Texture* target = SDL_GetRenderTarget(r); // offscreen texture, or NULL=backbuffer
+    SDL_Texture* cap = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32,
+                                         SDL_TEXTUREACCESS_TARGET, sw, sh);
+    if (!cap) return;
+    SDL_SetTextureScaleMode(cap, SDL_SCALEMODE_LINEAR);
+
+    // Grab the glass region into `cap`.
+    if (target) {
+        // GPU copy from the offscreen target (no readback, no swapchain touch).
+        SDL_FRect srcF = { rect.x * sx, rect.y * sy, (float)sw, (float)sh };
+        SDL_SetRenderTarget(r, cap);
+        SDL_SetRenderScale(r, 1.0f, 1.0f);
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+        SDL_SetTextureBlendMode(target, SDL_BLENDMODE_NONE);
+        SDL_RenderTexture(r, target, &srcF, NULL);
+    } else {
+        // Backbuffer fallback (first frame before offscreen kicks in): one readback.
+        SDL_Rect rr = { (int)(rect.x * sx), (int)(rect.y * sy), sw, sh };
+        SDL_Surface* snap = SDL_RenderReadPixels(r, &rr);
+        if (!snap) { SDL_DestroyTexture(cap); return; }
+        SDL_Texture* t = SDL_CreateTextureFromSurface(r, snap);
+        SDL_DestroySurface(snap);
+        if (!t) { SDL_DestroyTexture(cap); return; }
+        SDL_SetTextureScaleMode(t, SDL_SCALEMODE_LINEAR);
+        SDL_SetTextureBlendMode(t, SDL_BLENDMODE_NONE);
+        SDL_SetRenderTarget(r, cap);
+        SDL_SetRenderScale(r, 1.0f, 1.0f);
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+        SDL_RenderTexture(r, t, NULL, NULL);
+        SDL_DestroyTexture(t);
+    }
+
+    // Progressive halving — more passes = wider blur (scaled by blurPx).
+    int passes = (int)(blurPx / 5.0f);
+    if (passes < 1) passes = 1;
+    if (passes > 6) passes = 6;
+    SDL_Texture* levels[7] = { 0 };
+    int nLevels = 0;
+    SDL_Texture* cur = cap;
+    int dw = sw, dh = sh;
+    for (int p = 0; p < passes; p++) {
+        int nw = dw / 2, nh = dh / 2;
+        if (nw < 2 || nh < 2) break;
+        SDL_Texture* down = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32,
+                                              SDL_TEXTUREACCESS_TARGET, nw, nh);
+        if (!down) break;
+        SDL_SetTextureScaleMode(down, SDL_SCALEMODE_LINEAR);
+        SDL_SetRenderTarget(r, down);
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+        SDL_SetTextureBlendMode(cur, SDL_BLENDMODE_NONE);
+        SDL_RenderTexture(r, cur, NULL, NULL); // half-res bilinear down-sample
+        cur = down;
+        levels[nLevels++] = down;
+        dw = nw; dh = nh;
+    }
+
+    // Restore target + scale, up-sample the smallest level back over the rect.
+    SDL_SetRenderTarget(r, target);
+    SDL_SetRenderScale(r, sx, sy);
+    SDL_SetTextureScaleMode(cur, SDL_SCALEMODE_LINEAR);
+    SDL_SetTextureBlendMode(cur, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+    SDL_RenderTexture(r, cur, NULL, &rect);
+
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND); // restore for widget draws
+    for (int i = 0; i < nLevels; i++) SDL_DestroyTexture(levels[i]);
+    SDL_DestroyTexture(cap);
+}
+
 // Cleanup circle cache
 void CleanupCircleCache(void) {
     for (int i = 0; i < MAX_CIRCLE_CACHE; i++) {

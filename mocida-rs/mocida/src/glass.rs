@@ -255,3 +255,16 @@ impl Drop for Glass {
         }
     }
 }
+
+/// Global glass switch (live, no rebuild). When `false`, every `Glass` widget
+/// renders as a SOLID panel (full-opacity tint, no blur) — so a `Glass{}` can
+/// double as a plain panel and the app toggles "translucent" at runtime.
+pub fn set_glass_enabled(on: bool) {
+    unsafe { sys::UIGlass_SetGlobalEnabled(if on { 1 } else { 0 }) };
+}
+
+/// Global blur-strength multiplier applied to every `Glass` widget's `blur`
+/// (the intensity / "power" knob). 1.0 = as authored.
+pub fn set_glass_blur_scale(scale: f32) {
+    unsafe { sys::UIGlass_SetGlobalBlurScale(scale) };
+}

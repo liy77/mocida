@@ -117,12 +117,28 @@ static void RenderWidget_Glass(UIWindow* window, UIWidget* el,
         if (!g->items) return;
         UIChildren_SortByZ(g->items);
 
-        // --- glass background (tint + soft edge highlight) ---
+        // --- glass background (in-app blur + tint + soft edge highlight) ---
         if (el->width && el->height && *el->width > 0 && *el->height > 0) {
             g_tempRect1.x = el->x;
             g_tempRect1.y = el->y;
             g_tempRect1.w = *el->width;
             g_tempRect1.h = *el->height;
+
+            // Global glass switch: when OFF, the widget renders as a SOLID panel
+            // (full-opacity tint, no blur) so a Glass{} can stand in for a plain
+            // panel and the app flips "translucent" live. The global blur scale is
+            // the intensity / "power" knob.
+            const int   glassOn    = UIGlass_GetGlobalEnabled();
+            const float blurScale  = UIGlass_GetGlobalBlurScale();
+            const float effBlur    = glassOn ? (g->blurPx * blurScale) : 0.0f;
+            const float effTintOp  = glassOn ? g->tintOpacity : 1.0f;
+
+            // Real backdrop blur of the app content behind the panel (the in-app
+            // "vibrancy"). Skipped for window-wide OS materials (Mica/KDE-window)
+            // — there the compositor blurs the desktop behind the whole window.
+            if (effBlur >= 1.0f && !UIBackdropMaterial_IsWindowWide(g->material)) {
+                DrawGlassBackdropBlur(window->sdlRenderer, g_tempRect1, effBlur);
+            }
 
             // thin/regular/thick nudge the painted opacity a little.
             float thick = (g->thickness == UI_GLASS_THIN)  ? 0.8f
@@ -130,7 +146,7 @@ static void RenderWidget_Glass(UIWindow* window, UIWidget* el,
                         :                                     1.0f;
 
             UIColor fillC = g->tint;
-            fillC.a *= g->tintOpacity * thick * op;
+            fillC.a *= effTintOp * thick * op;
             if (fillC.a > 1.0f) fillC.a = 1.0f;
 
             // Faint white edge so the panel reads as a glass surface even on a
