@@ -2646,7 +2646,15 @@ static bool D3D11_RenderPresent(SDL_Renderer *renderer)
     /* The application may optionally specify "dirty" or "scroll"
      * rects to improve efficiency in certain scenarios.
      */
-    result = IDXGISwapChain1_Present1(data->swapChain, data->syncInterval, data->presentFlags, &parameters);
+    // [mocida] A composition swap chain (transparent window) has its buffers held
+    // by the compositor, so a non-blocking present (DXGI_PRESENT_DO_NOT_WAIT) finds
+    // no free buffer and SKIPS the frame — the swap chain never gets content and the
+    // window reads black. Always do a blocking present for composition windows.
+    UINT presentFlags = data->presentFlags;
+    if (SDL_GetWindowFlags(renderer->window) & SDL_WINDOW_TRANSPARENT) {
+        presentFlags &= ~DXGI_PRESENT_DO_NOT_WAIT;
+    }
+    result = IDXGISwapChain1_Present1(data->swapChain, data->syncInterval, presentFlags, &parameters);
 
     /* Discard the contents of the render target.
      * This is a valid operation only when the existing contents will be entirely

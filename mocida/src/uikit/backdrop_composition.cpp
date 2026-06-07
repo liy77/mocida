@@ -97,6 +97,20 @@ static void attach_wuc(UICompBackdrop* bd, HWND hwnd, void* swapchain,
     bd->tint.Brush(bd->compositor.CreateColorBrush(make_color(tintRGB, tintOpacity)));
 
     auto compInterop = bd->compositor.as<ABI::Windows::UI::Composition::ICompositorInterop>();
+    // Associate SDL's D3D device with the compositor so it can share the swap
+    // chain (cross-device sharing is what fails with DXGI_ERROR_UNSUPPORTED).
+    {
+        IDXGISwapChain1* sc = (IDXGISwapChain1*)swapchain;
+        ID3D11Device* d3d = nullptr;
+        if (SUCCEEDED(sc->GetDevice(__uuidof(ID3D11Device), (void**)&d3d)) && d3d) {
+            ABI::Windows::UI::Composition::ICompositionGraphicsDevice* gdev = nullptr;
+            HRESULT ghr = compInterop->CreateGraphicsDevice((IUnknown*)d3d, &gdev);
+            if (gdev) gdev->Release();
+            d3d->Release();
+            fprintf(stderr, "[backdrop/comp] CreateGraphicsDevice hr=0x%08X\n", (unsigned)ghr);
+            fflush(stderr);
+        }
+    }
     wuc::ICompositionSurface surface{ nullptr };
     winrt::check_hresult(compInterop->CreateCompositionSurfaceForSwapChain(
         static_cast<IUnknown*>(swapchain),
@@ -131,9 +145,19 @@ static bool attach_dcomp(UICompBackdrop* bd, HWND hwnd, void* swapchain) {
     if (FAILED(hr) || !bd->dcompTarget) return false;
     hr = bd->dcompDevice->CreateVisual(&bd->dcompVisual);
     if (FAILED(hr) || !bd->dcompVisual) return false;
+    bd->dcompVisual->SetOffsetX(0.0f);
+    bd->dcompVisual->SetOffsetY(0.0f);
     bd->dcompVisual->SetContent((IUnknown*)sc);
     bd->dcompTarget->SetRoot(bd->dcompVisual);
     bd->dcompDevice->Commit();
+    {
+        DXGI_SWAP_CHAIN_DESC1 d{};
+        sc->GetDesc1(&d);
+        RECT wr{}; GetClientRect(hwnd, &wr);
+        fprintf(stderr, "[backdrop/comp] swapchain=%ux%u client=%ldx%ld\n",
+                d.Width, d.Height, wr.right - wr.left, wr.bottom - wr.top);
+        fflush(stderr);
+    }
     return true;
 }
 
