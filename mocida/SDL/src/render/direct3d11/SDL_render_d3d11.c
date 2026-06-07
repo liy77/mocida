@@ -623,8 +623,14 @@ static HRESULT D3D11_CreateDeviceResources(SDL_Renderer *renderer)
         creationFlags |= D3D11_CREATE_DEVICE_DEBUG;
     }
 
-    // Create a single-threaded device unless the app requests otherwise.
-    if (!SDL_GetHintBoolean(SDL_HINT_RENDER_DIRECT3D_THREADSAFE, false)) {
+    // Create a single-threaded device unless the app requests otherwise. [mocida]
+    // A transparent window composites its swap chain via Windows.UI.Composition,
+    // which shares the swap chain's device across threads — that REQUIRES a
+    // multithreaded device, else CreateCompositionSurfaceForSwapChain fails with
+    // DXGI_ERROR_UNSUPPORTED. So never make a single-threaded device for one.
+    BOOL mocida_comp = renderer->window &&
+        (SDL_GetWindowFlags(renderer->window) & SDL_WINDOW_TRANSPARENT) != 0;
+    if (!mocida_comp && !SDL_GetHintBoolean(SDL_HINT_RENDER_DIRECT3D_THREADSAFE, false)) {
         creationFlags |= D3D11_CREATE_DEVICE_SINGLETHREADED;
     }
 
