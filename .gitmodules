@@ -1,7 +1,3 @@
-[submodule "mocida/SDL"]
-	path = mocida/SDL
-	url = https://github.com/libsdl-org/SDL.git
-	branch = release-3.2.x
 [submodule "mocida/SDL_image"]
 	path = mocida/SDL_image
 	url = https://github.com/libsdl-org/SDL_image.git
