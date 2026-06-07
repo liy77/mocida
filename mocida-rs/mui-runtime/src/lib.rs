@@ -1652,7 +1652,11 @@ fn build_stack(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
         }
         _ => false,
     });
-    if child_absolute {
+    // Auto-detection only sees DIRECT element children, not ones nested in `if`/`for`
+    // blocks. `freeLayout: true` forces it on so absolute children behind conditionals
+    // (e.g. an editor background layer) are honoured. Flow children (no x:/y:) keep
+    // their auto-flow cursor position either way.
+    if child_absolute || prop_bool(el, "freeLayout") == Some(true) {
         stack = stack.free_layout(true);
     }
     // A non-start `align` fills the cross axis; a non-start `justify` fills the
