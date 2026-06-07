@@ -62,7 +62,9 @@ static int TA_FindHit(UIChildren* children, float x, float y,
         UIWidget* w = children->children[i];
         UITextArea* ta = AsTextArea(w);
         if (ta) {
-            if (InsideWidget(w, x, y)) { *outTa = ta; *outW = w; return 1; }
+            if (InsideWidget(w, x, y) && UIWidget_EventOcclusionAllows(w)) {
+                *outTa = ta; *outW = w; return 1;
+            }
         } else {
             UIChildren* kids = TA_ContainerChildren(w);
             if (kids && TA_FindHit(kids, x, y, outTa, outW)) return 1;
@@ -1108,6 +1110,7 @@ static int TA_WheelRec(UIChildren* children, float x, float y, float dy) {
         UITextArea* ta = AsTextArea(w);
         if (ta) {
             if (!InsideWidget(w, x, y)) continue;
+            if (!UIWidget_EventOcclusionAllows(w)) continue; // hidden behind an overlay
             ta->scrollY -= dy * (ta->fontSize * ta->lineSpacing) * 2.0f;
             if (ta->scrollY < 0.0f) ta->scrollY = 0.0f;
             return 1;

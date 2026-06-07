@@ -570,6 +570,7 @@ void UIControls_DispatchMouseDown(UIChildren* children, float x, float y, int bu
         UIWidget* w = children->children[i];
         if (!w || !w->visible || !w->data || !w->width || !w->height) continue;
         if (!InsideRect(x, y, w->x, w->y, *w->width, *w->height)) continue;
+        if (!UIWidget_EventOcclusionAllows(w)) continue; // hidden behind an overlay
         UIWidgetBase* base = (UIWidgetBase*)w->data;
 
         // Containers: the click is inside this container's bounds, so the hit

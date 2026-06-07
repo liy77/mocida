@@ -17,7 +17,11 @@ const ATTR: Color = Color::rgb(0xC5, 0x86, 0xC0); // purple (annotations / props
 
 /// Languages we highlight. Anything else → no highlighting.
 pub fn is_supported(lang: &str) -> bool {
-    matches!(lang, "rs" | "crs" | "crm" | "mui" | "json")
+    matches!(
+        lang,
+        "rs" | "crs" | "crm" | "mui" | "json"
+            | "toml" | "kson" | "sh" | "bash" | "zsh" | "ps1" | "md" | "markdown"
+    )
 }
 
 fn keywords(lang: &str) -> &'static [&'static str] {
@@ -43,9 +47,29 @@ fn keywords(lang: &str) -> &'static [&'static str] {
             "view", "App", "signal", "mut", "if", "else", "for", "in", "import", "from", "true",
             "false", "Window", "Screen",
         ],
-        // JSON (incl. onda.project): strings/numbers come from the shared lexer;
-        // only the three literals need a keyword color.
-        "json" => &["true", "false", "null"],
+        // JSON (incl. onda.project) + KSON (copper config): strings/numbers come
+        // from the shared lexer; only the literals need a keyword color.
+        "json" | "kson" => &["true", "false", "null"],
+        // TOML (incl. Cargo.toml / Cargo.lock): # comments + strings/numbers from
+        // the lexer; only the booleans (+ inf/nan) get a keyword color.
+        "toml" => &["true", "false", "inf", "nan"],
+        // POSIX shell.
+        "sh" | "bash" | "zsh" => &[
+            "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done",
+            "case", "esac", "in", "function", "return", "local", "export", "readonly",
+            "declare", "echo", "cd", "source", "exit", "break", "continue", "set", "unset",
+            "alias", "shift", "trap", "eval", "exec", "test", "then", "select",
+        ],
+        // PowerShell (hyphenated cmdlets like Write-Host don't tokenise as one
+        // identifier, so only the bare-word control keywords are listed).
+        "ps1" => &[
+            "if", "else", "elseif", "function", "param", "foreach", "for", "while", "do",
+            "switch", "try", "catch", "finally", "throw", "break", "continue", "return",
+            "begin", "process", "end", "filter", "in", "trap", "until", "class", "enum",
+            "using", "Write", "Get", "Set", "New", "Remove",
+        ],
+        // Markdown has no keywords — headers/code are handled structurally below.
+        "md" | "markdown" => &[],
         _ => &[],
     }
 }
@@ -60,8 +84,111 @@ pub fn spans(text: &str, lang: &str) -> Vec<(usize, usize, Color)> {
 
     let is_ident = |c: u8| c == b'_' || c.is_ascii_alphanumeric();
 
+    // Per-language lexer flavours.
+    let is_md = matches!(lang, "md" | "markdown");
+    let hash_comment = matches!(lang, "toml" | "kson" | "sh" | "bash" | "zsh" | "ps1");
+    let shell_var = matches!(lang, "sh" | "bash" | "zsh" | "ps1");
+
     while i < n {
         let c = b[i];
+
+        // Markdown is prose, not code: handle its few token classes here and
+        // ALWAYS continue, so the code-lexer rules below never mis-colour text
+        // (numbers, quotes, etc.). ATX headers (line-start '#') → heading colour;
+        // `code`/```fenced``` → string; **bold** → attr. Spans are bounded so an
+        // unterminated marker can't recolour the rest of the file.
+        if is_md {
+            let at_line_start = i == 0 || b[i - 1] == b'\n';
+            if at_line_start && c == b'#' {
+                let s = i;
+                while i < n && b[i] != b'\n' {
+                    i += 1;
+                }
+                out.push((s, i, KEYWORD));
+                continue;
+            }
+            if c == b'`' {
+                let s = i;
+                let mut ticks = 0;
+                while i < n && b[i] == b'`' {
+                    ticks += 1;
+                    i += 1;
+                }
+                if ticks >= 3 {
+                    loop {
+                        if i >= n {
+                            break;
+                        }
+                        if b[i] == b'`' {
+                            let mut cnt = 0;
+                            while i < n && b[i] == b'`' {
+                                cnt += 1;
+                                i += 1;
+                            }
+                            if cnt >= 3 {
+                                break;
+                            }
+                        } else {
+                            i += 1;
+                        }
+                    }
+                } else {
+                    while i < n && b[i] != b'`' && b[i] != b'\n' {
+                        i += 1;
+                    }
+                    if i < n && b[i] == b'`' {
+                        i += 1;
+                    }
+                }
+                out.push((s, i.min(n), STRING));
+                continue;
+            }
+            if c == b'*' && i + 1 < n && b[i + 1] == b'*' {
+                let s = i;
+                i += 2;
+                while i + 1 < n && !(b[i] == b'*' && b[i + 1] == b'*') && b[i] != b'\n' {
+                    i += 1;
+                }
+                if i + 1 < n && b[i] == b'*' && b[i + 1] == b'*' {
+                    i += 2;
+                }
+                out.push((s, i.min(n), ATTR));
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Hash line comment (TOML / shell / PowerShell / KSON) — before the hex
+        // and Rust-attr '#' rules so `# foo` reads as a comment, not a colour.
+        if hash_comment && c == b'#' {
+            let s = i;
+            i += 1;
+            while i < n && b[i] != b'\n' {
+                i += 1;
+            }
+            out.push((s, i, COMMENT));
+            continue;
+        }
+        // Shell / PowerShell variable: $name or ${name} (bounded to the line).
+        if shell_var && c == b'$' {
+            let s = i;
+            i += 1;
+            if i < n && b[i] == b'{' {
+                while i < n && b[i] != b'}' && b[i] != b'\n' {
+                    i += 1;
+                }
+                if i < n && b[i] == b'}' {
+                    i += 1;
+                }
+            } else {
+                while i < n && is_ident(b[i]) {
+                    i += 1;
+                }
+            }
+            out.push((s, i, KEYWORD));
+            continue;
+        }
 
         // Line comment // ... (and MUI/Copper use the same).
         if c == b'/' && i + 1 < n && b[i + 1] == b'/' {

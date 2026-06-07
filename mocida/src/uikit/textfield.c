@@ -501,7 +501,9 @@ static int TF_FindHit(UIChildren* children, float x, float y,
         UIWidget* w = children->children[i];
         UITextField* tf = AsTextField(w);
         if (tf) {
-            if (InsideWidget(w, x, y)) { *outTf = tf; *outW = w; return 1; }
+            if (InsideWidget(w, x, y) && UIWidget_EventOcclusionAllows(w)) {
+                *outTf = tf; *outW = w; return 1;
+            }
         } else {
             UIChildren* kids = TF_ContainerChildren(w);
             if (kids && TF_FindHit(kids, x, y, outTf, outW)) return 1;

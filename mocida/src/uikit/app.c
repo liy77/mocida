@@ -64,6 +64,10 @@ static UIChildren* WheelContainerChildren(UIWidget* w) {
     return NULL;
 }
 
+// Forward decl: the z-order event occluder query (defined below) is used by the
+// hit-tests above its definition.
+static int OcclusionAllows(UIWidget* leaf);
+
 // Find the innermost UIScroll whose bounds contain (x, y), recursing through
 // nested containers. Without the recursion a Scroll nested inside layout
 // containers — the common case (e.g. a file panel deep in a Stack tree) — never
@@ -83,11 +87,111 @@ static UIScroll* FindScrollAt(UIChildren* children, float x, float y) {
         if (strcmp(b->__widget_type, UI_WIDGET_SCROLL) == 0 &&
             w->width && w->height &&
             x >= w->x && x < w->x + *w->width &&
-            y >= w->y && y < w->y + *w->height) {
+            y >= w->y && y < w->y + *w->height &&
+            OcclusionAllows(w)) {     // a scroll hidden behind an overlay is occluded
             return (UIScroll*)b;
         }
     }
     return NULL;
+}
+
+// --- Z-order event occlusion ------------------------------------------------
+// By DEFAULT every widget OCCLUDES input events: an event (wheel/scroll, click,
+// hover) whose point falls inside a widget's bounds is consumed by the TOPMOST
+// subtree at that point and must NOT leak to lower-z widgets underneath it (so a
+// Settings modal stops scroll/clicks from reaching the editor behind it). A
+// widget opts out with propagatingEvents:true — then the event also passes
+// through to whatever sits below.
+//
+// We compute, once per spatial event, the OUTERMOST non-propagating widget whose
+// own bounds cover the event point (the "occluder" = the overlay's root cover).
+// The protected dispatchers then ask OcclusionAllows(leaf): a candidate target is
+// allowed when it belongs to the occluder's subtree (it IS the overlay or a
+// control inside it) and blocked when it sits outside that subtree — i.e. a
+// lower/behind sibling the overlay hides.
+//
+// Coverage is decided by each widget's OWN bounds regardless of its type, so a
+// plain Rectangle/Stack overlay background occludes a TextArea of a different
+// type behind it (cross-type occlusion). Intrinsic (sizeless) containers have no
+// box of their own and only occlude through a sized descendant.
+typedef struct {
+    int        active;   // 1 while an occluder covers the current event point
+    UIWidget*  widget;   // the occluding subtree root (topmost opaque cover)
+} UIOccluder;
+
+static UIOccluder g_occluder; // per-event; reset by OcclusionBegin
+
+// Recurses front-to-back looking for the OUTERMOST non-propagating widget whose
+// own box covers (x, y) along the frontmost branch — the overlay's root cover,
+// not its inner controls. A sized, non-propagating widget that covers the point
+// is recorded WITHOUT descending into it, so its whole subtree counts as "in
+// front" (allowed) and only siblings BEHIND it are occluded. We still descend
+// THROUGH propagating widgets, sizeless (intrinsic) containers, and widgets that
+// don't cover the point — that's how we reach the real cover sitting inside a
+// sizeless view root. Returns 1 once an occluder is recorded.
+static int OccluderRec(UIChildren* children, float x, float y) {
+    if (!children) return 0;
+    for (int i = children->count - 1; i >= 0; i--) {
+        UIWidget* w = children->children[i];
+        if (!w || !w->visible || !w->data) continue;
+        const int sized = (w->width && w->height);
+        const int covers = sized &&
+            x >= w->x && x < w->x + *w->width &&
+            y >= w->y && y < w->y + *w->height;
+        // A sized, non-propagating widget that covers the point IS the cover for
+        // this branch: record it and stop (don't descend — its children are "in
+        // front" and stay interactive via the descendant test below).
+        if (covers && !w->propagatingEvents) {
+            g_occluder.active = 1;
+            g_occluder.widget = w;
+            return 1;
+        }
+        // Otherwise pass through (propagating, sizeless, or non-covering) and
+        // look for a cover deeper in this branch.
+        UIChildren* kids = WheelContainerChildren(w);
+        if (kids && OccluderRec(kids, x, y)) return 1;
+    }
+    return 0;
+}
+
+// Compute the occluder for this event point. Call once before running the
+// dispatch chain for a wheel/click event.
+static void OcclusionBegin(UIChildren* children, float x, float y) {
+    g_occluder.active = 0;
+    g_occluder.widget = NULL;
+    OccluderRec(children, x, y);
+}
+
+// True when `target` is `ancestor` or lives somewhere inside its subtree
+// (descending through the same containers the dispatch walks). Used to tell a
+// widget that is part of the occluding overlay (allowed) apart from one that is
+// merely positioned behind it (blocked).
+static int IsInSubtree(UIWidget* ancestor, UIWidget* target) {
+    if (!ancestor || !target) return 0;
+    if (ancestor == target) return 1;
+    UIChildren* kids = WheelContainerChildren(ancestor);
+    if (!kids) return 0;
+    for (int i = 0; i < kids->count; i++) {
+        if (IsInSubtree(kids->children[i], target)) return 1;
+    }
+    return 0;
+}
+
+// True when `leaf` may receive the current event. Allowed when there is no
+// occluder, or when `leaf` belongs to the occluding subtree (it IS the overlay
+// or a widget inside it). A leaf outside that subtree is BEHIND the overlay and
+// is blocked — that's what stops a scroll/click over the Settings modal from
+// reaching the editor underneath.
+static int OcclusionAllows(UIWidget* leaf) {
+    if (!g_occluder.active) return 1;
+    return IsInSubtree(g_occluder.widget, leaf);
+}
+
+// Public wrapper consulted by the cross-file input dispatchers (mouse_area.c,
+// button.c, textarea.c, …) to honour z-order occlusion without each needing the
+// occluder internals.
+int UIWidget_EventOcclusionAllows(const UIWidget* leaf) {
+    return OcclusionAllows((UIWidget*)leaf);
 }
 
 // Forwards a mouse wheel event to the innermost UIScroll under (x, y). Vertical
@@ -155,6 +259,7 @@ static int ScrollbarDragBegin(UIChildren* children, float x, float y) {
         UIWidgetBase* b = (UIWidgetBase*)w->data;
         if (strcmp(b->__widget_type, UI_WIDGET_SCROLL) == 0) {
             UIScroll* s = (UIScroll*)b;
+            if (!OcclusionAllows(w)) continue; // thumb behind an overlay is occluded
             UIVThumb tb = ComputeVThumb(w, s);
             if (tb.has && x >= tb.thumbX && x < tb.thumbX + tb.thumbW &&
                           y >= tb.thumbY && y < tb.thumbY + tb.thumbH) {
@@ -321,6 +426,10 @@ static UICursor PickHoverCursorImpl(UIChildren* children, float x, float y, bool
     for (int i = children->count - 1; i >= 0; i--) {
         UIWidget* w = children->children[i];
         if (!w || !w->visible || !w->data) continue;
+        // propagatingEvents widgets are transparent to input: they neither
+        // advertise their own cursor nor block the widgets behind them, so the
+        // cursor pick (like the event dispatch) sees straight through them.
+        if (w->propagatingEvents) continue;
 
         UIWidgetBase* base = (UIWidgetBase*)w->data;
         const char* type = base->__widget_type;
@@ -438,6 +547,9 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
             // A scrollbar-thumb drag in progress owns the motion: move it and
             // swallow the event so hover/selection logic doesn't also react.
             if (ScrollbarDragMove(app->window->children, ry)) break;
+            // Establish the z-order occluder for this point so the dispatchers
+            // (and the hover-cursor pick) don't leak hover through an overlay.
+            OcclusionBegin(app->window->children, rx, ry);
             // Mouse areas first so a draggable area can capture the
             // motion even when a button widget is underneath.
             UIMouseArea_DispatchMouseMotion(app->window->children, rx, ry);
@@ -456,6 +568,9 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
         case SDL_EVENT_MOUSE_BUTTON_DOWN: {
             float rx, ry;
             WindowToRenderCoords(app, event->button.x, event->button.y, &rx, &ry);
+            // Establish the z-order occluder so a click over an overlay can't
+            // also reach widgets behind it (unless they're propagatingEvents).
+            OcclusionBegin(app->window->children, rx, ry);
             // UIMouseArea handles every button (its callbacks see the
             // button index). The rest are left-only by design.
             UIMouseArea_DispatchMouseDown(app->window->children, rx, ry, event->button.button);
@@ -511,6 +626,7 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
             WindowToRenderCoords(app, event->button.x, event->button.y, &rx, &ry);
             // End any scrollbar-thumb drag before the usual up-dispatch.
             ScrollbarDragEnd(app->window->children);
+            OcclusionBegin(app->window->children, rx, ry);
             UIMouseArea_DispatchMouseUp(app->window->children, rx, ry, event->button.button);
             UIWebView_DispatchMouseUp  (app->window->children, rx, ry, event->button.button);
             if (event->button.button == SDL_BUTTON_LEFT) {
@@ -528,6 +644,9 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
             WindowToRenderCoords(app, event->wheel.mouse_x, event->wheel.mouse_y, &rx, &ry);
             const SDL_Keymod mods = SDL_GetModState();
             const int shift = (mods & SDL_KMOD_SHIFT) != 0;
+            // Occlusion: a wheel over an overlay must not scroll the editor
+            // (Scroll + TextArea) behind it.
+            OcclusionBegin(app->window->children, rx, ry);
             DispatchWheelToScrolls(app->window->children, rx, ry,
                                    event->wheel.x, event->wheel.y, shift);
             UITextArea_DispatchMouseWheel(app->window->children, rx, ry,

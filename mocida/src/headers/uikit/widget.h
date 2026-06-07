@@ -90,6 +90,20 @@ typedef struct {
     int clipChildren;
 
     /**
+     * Z-order event occlusion control. When 0 (the DEFAULT) this widget
+     * OCCLUDES input events: an event (mouse wheel/scroll, button click,
+     * hover) whose point falls inside this widget's bounds (or the bounds of
+     * an opaque descendant) is consumed by the topmost subtree and does NOT
+     * leak to lower-z sibling subtrees underneath it — so a modal/overlay
+     * stops scroll/clicks from reaching the editor behind it.
+     *
+     * Set to 1 to make the widget transparent to events: the event also
+     * passes through to whatever sits below it. Mirrors `visible`/`clipChildren`
+     * — lives on every widget, defaults off (occlude).
+     */
+    int propagatingEvents;
+
+    /**
      * Per-child cross-axis alignment inside a parent Stack, overriding the
      * Stack's own `align` for THIS child. 0 = inherit the stack; 1 = start,
      * 2 = center, 3 = end (mapped to the cross axis: left/center/right in a
@@ -202,6 +216,32 @@ UIWidget* UIWidget_SetClipChildren(UIWidget* widget, int enabled);
 
 /** True when clipChildren was previously enabled on `widget`. */
 int       UIWidget_GetClipChildren(const UIWidget* widget);
+
+/**
+ * Controls z-order event occlusion for this widget. By default (`enabled = 0`)
+ * the widget occludes events: any wheel/click/hover whose point falls inside it
+ * is consumed by this subtree and never reaches lower-z widgets behind it. Pass
+ * `enabled = 1` to let events pass through to whatever is below as well.
+ *
+ * @return The widget, for chaining.
+ */
+UIWidget* UIWidget_SetPropagatingEvents(UIWidget* widget, int enabled);
+
+/** True when this widget lets events pass through to widgets behind it. */
+int       UIWidget_GetPropagatingEvents(const UIWidget* widget);
+
+/**
+ * Z-order event-occlusion query used by the input dispatchers.
+ *
+ * The event loop (app.c) computes, once per spatial event, the topmost
+ * NON-propagating widget whose bounds cover the event point (the "occluder").
+ * A dispatcher calls this for each candidate leaf target it is about to deliver
+ * to: it returns 1 when the leaf may receive the event (no occluder, the leaf
+ * IS the occluder, or the leaf sits on top of it), and 0 when the leaf is hidden
+ * BEHIND the occluder and must be skipped. With no occluder active it always
+ * returns 1, so the call is a safe no-op outside an event dispatch.
+ */
+int       UIWidget_EventOcclusionAllows(const UIWidget* leaf);
 
 /**
  * Generic keyboard focus control. Works on ANY widget (button, text

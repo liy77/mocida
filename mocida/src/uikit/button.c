@@ -272,7 +272,7 @@ void UIButton_DispatchMouseMotion(UIChildren* children, float x, float y) {
         UIWidget* w   = children->children[i];
         UIButton* btn = AsButton(w);
         if (btn && btn->enabled) {
-            ButtonOnMotion(btn, InsideWidget(w, x, y));
+            ButtonOnMotion(btn, InsideWidget(w, x, y) && UIWidget_EventOcclusionAllows(w));
         } else {
             // Recurse into containers (incl. scroll content) so nested buttons
             // get hover too.
@@ -288,7 +288,7 @@ void UIButton_DispatchMouseDown(UIChildren* children, float x, float y) {
         UIWidget* w   = children->children[i];
         UIButton* btn = AsButton(w);
         if (btn && btn->enabled) {
-            if (InsideWidget(w, x, y)) {
+            if (InsideWidget(w, x, y) && UIWidget_EventOcclusionAllows(w)) {
                 btn->isPressed     = 1;
                 btn->isMouseInside = 1;
                 btn->state         = UI_BUTTON_STATE_PRESSED;
@@ -306,7 +306,7 @@ void UIButton_DispatchMouseUp(UIChildren* children, float x, float y) {
         UIWidget* w   = children->children[i];
         UIButton* btn = AsButton(w);
         if (btn && btn->enabled) {
-            const int inside = InsideWidget(w, x, y);
+            const int inside = InsideWidget(w, x, y) && UIWidget_EventOcclusionAllows(w);
             if (btn->isPressed && inside) {
                 if (btn->onClick) btn->onClick(btn, btn->userdata);
                 btn->state = UI_BUTTON_STATE_HOVER;

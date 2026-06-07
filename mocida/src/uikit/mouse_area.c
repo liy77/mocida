@@ -183,7 +183,8 @@ void UIMouseArea_DispatchMouseMotion(UIChildren* children, float x, float y) {
         }
         if (!area->enabled) continue;
 
-        const int inside = InsideWidget(w, x, y);
+        // Occlusion: an area hidden behind an overlay gets no hover.
+        const int inside = InsideWidget(w, x, y) && UIWidget_EventOcclusionAllows(w);
 
         // Hover transitions.
         if (inside && !area->hovered) {
@@ -259,7 +260,7 @@ void UIMouseArea_DispatchMouseDown(UIChildren* children, float x, float y, int b
         }
         if (!area->enabled) continue;
 
-        if (InsideWidget(w, x, y)) {
+        if (InsideWidget(w, x, y) && UIWidget_EventOcclusionAllows(w)) {
             area->pressed = 1;
             area->lastMouseX = x;
             area->lastMouseY = y;

@@ -444,7 +444,7 @@ void UIText_DispatchMouseDown(UIChildren* children, SDL_Window* win,
         UIWidget* w  = children->children[i];
         UIText*   t  = AsSelectableText(w);
         if (!t) continue;
-        if (InsideWidget(w, x, y)) { hit = t; hitW = w; break; }
+        if (InsideWidget(w, x, y) && UIWidget_EventOcclusionAllows(w)) { hit = t; hitW = w; break; }
     }
 
     // Drop focus + selection on every other selectable UIText.

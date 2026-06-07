@@ -251,6 +251,24 @@ impl Widget {
         unsafe { sys::UIWidget_GetClipChildren(self.ptr as *const _) != 0 }
     }
 
+    /// Z-order event occlusion (mirrors `UIWidget_SetPropagatingEvents`).
+    ///
+    /// By default (`false`) the widget OCCLUDES input events: any
+    /// wheel/click/hover whose point falls inside it is consumed by the
+    /// topmost subtree and never reaches lower-z widgets behind it. Set to
+    /// `true` to let the event also pass through to whatever is below.
+    pub fn propagating_events(self, enabled: bool) -> Self {
+        unsafe {
+            sys::UIWidget_SetPropagatingEvents(self.ptr, enabled as i32);
+        }
+        self
+    }
+
+    /// True when this widget lets events pass through to widgets behind it.
+    pub fn is_propagating_events(&self) -> bool {
+        unsafe { sys::UIWidget_GetPropagatingEvents(self.ptr as *const _) != 0 }
+    }
+
     /// Borrow the raw parent `UIWidget*` (NULL if unparented). The
     /// pointee is owned by the scene graph, not by you — do not free it.
     #[inline]

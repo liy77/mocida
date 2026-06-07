@@ -1204,6 +1204,15 @@ fn build_element(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wid
         Some(mut f) => widget.on_key_down(move |k, mods| f(k, mods as i32)),
         None => widget,
     };
+    // `propagatingEvents: true` makes the widget transparent to input events
+    // (wheel/click/hover pass THROUGH to widgets behind it). The default is
+    // false: a widget OCCLUDES events, so an overlay (e.g. the Settings modal)
+    // consumes the event and it never leaks to the editor underneath. Applied
+    // here so it works on every element type.
+    let widget = match prop_bool(el, "propagatingEvents") {
+        Some(p) => widget.propagating_events(p),
+        None => widget,
+    };
     Ok(widget)
 }
 

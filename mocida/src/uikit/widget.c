@@ -50,6 +50,7 @@ UIWidget* UIWidget_Create(UIWidgetData data)  {
     widget->id = NULL;
     widget->focused = 0;
     widget->clipChildren = 0;
+    widget->propagatingEvents = 0; // default: occlude events (don't leak to widgets below)
     // Container-layout fields — MUST be zeroed: the Stack/Rectangle render reads
     // them every frame (cross-axis align + outer margins). Left uninitialised
     // (malloc, not calloc) they hold heap garbage, which makes layout random per
@@ -148,6 +149,16 @@ UIWidget* UIWidget_SetClipChildren(UIWidget* widget, int enabled) {
 
 int UIWidget_GetClipChildren(const UIWidget* widget) {
     return (widget && widget->clipChildren) ? 1 : 0;
+}
+
+UIWidget* UIWidget_SetPropagatingEvents(UIWidget* widget, int enabled) {
+    if (widget == NULL) return NULL;
+    widget->propagatingEvents = enabled ? 1 : 0;
+    return widget;
+}
+
+int UIWidget_GetPropagatingEvents(const UIWidget* widget) {
+    return (widget && widget->propagatingEvents) ? 1 : 0;
 }
 
 UIWidget* UIWidget_GetParent(UIWidget* widget) {
