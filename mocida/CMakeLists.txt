@@ -321,9 +321,19 @@ if(APPLE)
         # NSURLSession from this Objective-C file (see src/uikit/image.c).
         list(APPEND MOCIDA_SOURCES_OBJCXX
             "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/image_net_ios.mm")
+        # UIVisualEffectView backdrop (Liquid Glass / vibrancy) for iOS.
+        list(APPEND MOCIDA_SOURCES_OBJCXX
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/backdrop_uikit.mm")
     else()
         list(APPEND MOCIDA_SOURCES_OBJCXX
             "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/webview_cocoa.mm")
+        # NSVisualEffectView backdrop (Liquid Glass / vibrancy) for macOS.
+        list(APPEND MOCIDA_SOURCES_OBJCXX
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/backdrop_cocoa.mm")
+        # Custom-titlebar native decorations (full-size-content + transparent
+        # titlebar) for macOS — keeps rounding/shadow/traffic-lights.
+        list(APPEND MOCIDA_SOURCES_OBJCXX
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/titlebar_cocoa.mm")
     endif()
 endif()
 
@@ -502,7 +512,33 @@ if(WIN32)
         dxgi            # surface allocation
         version         # WebView2LoaderStatic.lib calls GetFileVersionInfo*
         shlwapi         # path helpers WebView2LoaderStatic.lib needs
+        dwmapi          # DwmSetWindowAttribute (Mica/Acrylic backdrop)
+        windowsapp      # WinRT (Windows.UI.Composition acrylic backdrop)
     )
+
+    # C++/WinRT projection headers (Windows.UI.Composition for the real acrylic
+    # backdrop, backdrop_composition.cpp) live under the SDK's cppwinrt/ dir, which
+    # is NOT on the default include path. Derive it from a known SDK include
+    # (dwmapi.h is in <ver>/um) so it tracks whatever SDK CMake picked.
+    find_path(_mocida_um_dir NAMES dwmapi.h PATHS ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
+    if(_mocida_um_dir)
+        get_filename_component(_mocida_sdk_ver_dir "${_mocida_um_dir}" DIRECTORY)
+        if(EXISTS "${_mocida_sdk_ver_dir}/cppwinrt")
+            target_include_directories(mocida PRIVATE "${_mocida_sdk_ver_dir}/cppwinrt")
+            message(STATUS "Mocida: C++/WinRT headers at ${_mocida_sdk_ver_dir}/cppwinrt")
+        else()
+            message(WARNING "Mocida: cppwinrt headers not found under ${_mocida_sdk_ver_dir}")
+        endif()
+    endif()
+
+    # C++/WinRT's base.h needs the C++20 <coroutine> header under clang (the C++17
+    # <experimental/coroutine> path errors out). Build the one WinRT file as C++20
+    # and skip the C++17 precompiled header (a PCH can't span standards).
+    set_source_files_properties(
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/backdrop_composition.cpp"
+        PROPERTIES
+            SKIP_PRECOMPILE_HEADERS ON
+            COMPILE_FLAGS "-std=gnu++20")
 
     # WebView2 headers ALWAYS come from vcpkg (older API, what the
     # webview_dcomp.cpp was written against). The newer NuGet headers

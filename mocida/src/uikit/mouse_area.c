@@ -1,6 +1,7 @@
 #include <uikit/mouse_area.h>
 #include <uikit/container.h>
 #include <uikit/stack.h>
+#include <uikit/glass.h>
 #include <SDL3/SDL.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,6 +39,7 @@ static UIChildren* ContainerChildren(UIWidget* w) {
     UIWidgetBase* base = (UIWidgetBase*)w->data;
     const char* t = base->__widget_type;
     if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;
+    if (strcmp(t, UI_WIDGET_GLASS) == 0)     return ((UIGlass*)base)->items;
     if (strcmp(t, UI_WIDGET_GRID) == 0)      return ((UIGrid*)base)->items;
     if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) return (UIChildren*)((UIRectangle*)base)->children;
     // Descend into a UIScroll's content (its children are re-laid-out to

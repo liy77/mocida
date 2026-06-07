@@ -1,0 +1,5 @@
+00:00:00.000 INFO  [mocida.core] (crash.c:333 UICrash_Install) crash handler installed
+00:00:00.000 INFO  [mocida.core] (app.c:635 UIApp_Create) UIApp_Create 't' (900x600)
+00:00:00.128 INFO  [mocida.render] (window.c:794 UIWindow_Create) SDL render drivers available (8): direct3d11, direct3d12, direct3d, opengl, opengles2, vulkan, gpu, software
+00:00:00.320 INFO  [mocida.render] (window.c:867 UIWindow_Create) SDL renderer: direct3d11
+00:00:00.321 INFO  [mocida.render] (window.c:285 OptimizeSDLForHighPerformance) Renderer: direct3d11 | VSync: 0

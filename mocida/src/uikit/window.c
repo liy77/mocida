@@ -7,6 +7,8 @@
 #include <uikit/textarea.h>
 #include <uikit/webview.h>
 #include <uikit/stack.h>
+#include <uikit/glass.h>
+#include <uikit/backdrop.h>
 #include <uikit/dialog.h>
 #include <uikit/tab.h>
 #include <uikit/popup.h>
@@ -57,6 +59,27 @@ static UIWindow* g_activeWindow = NULL;
 // g_aaHintsApplied prevents re-applying OpenGL hints at the wrong time.
 static int g_aaSamplesPerSide = 4;
 static int g_aaHintsApplied   = 0;
+
+// Custom (client-side) window decorations. When set BEFORE UIWindow_Create
+// (via UIWindow_RequestCustomTitlebar), the window is created BORDERLESS so the
+// app paints its own title bar; the app then marks a draggable region + resize
+// borders via SDL_SetWindowHitTest (wired in app.c). Default 0 = native chrome.
+static int g_customTitlebar = 0;
+
+void UIWindow_RequestCustomTitlebar(int on) { g_customTitlebar = on ? 1 : 0; }
+int  UIWindow_WantsCustomTitlebar(void)     { return g_customTitlebar; }
+
+// Transparent (per-pixel alpha) window. Required for an OS system backdrop
+// (Mica/Acrylic) to composite through the app's transparent pixels: the window
+// must be created with SDL_WINDOW_TRANSPARENT so SDL builds a composition
+// swapchain (DirectComposition on the D3D11 renderer) that DWM can blend behind.
+// Set BEFORE UIWindow_Create. NOTE: only the D3D11 renderer honors this on
+// Windows — the Vulkan/GL SDL renderers create an opaque swapchain regardless.
+// Default 0 = opaque window. Mirrors the custom-titlebar request flag.
+static int g_wantTransparent = 0;
+
+void UIWindow_RequestTransparent(int on) { g_wantTransparent = on ? 1 : 0; }
+int  UIWindow_WantsTransparent(void)     { return g_wantTransparent; }
 
 // Full-frame AA pipeline. Matches UIAAMode in app.h:
 //   0 NONE, 1 COVERAGE (default - no postfx), 2 SSAA_2X, 3 SSAA_4X,
@@ -701,6 +724,33 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
 
     // Create window with simpler flags to avoid compatibility issues
     uint32_t window_flags = SDL_WINDOW_RESIZABLE;
+
+    // Per-pixel-alpha window for OS backdrops (Mica/Acrylic). Must be a creation
+    // flag — SDL wires up the composition swapchain at window-create time. The
+    // app still clears opaque by default, so a transparent window looks identical
+    // until a backdrop zeroes the clear alpha (UIWindow_SetBackdrop). Honored by
+    // the D3D11 renderer (DirectComposition); a no-op on Vulkan/GL swapchains.
+    if (g_wantTransparent) {
+        window_flags |= SDL_WINDOW_TRANSPARENT;
+    }
+
+    // Client-side decorations: drop the native title bar / frame but stay
+    // resizable. The app paints its own title bar and supplies a hit-test
+    // (SDL_SetWindowHitTest, wired in app.c) so the OS still handles dragging,
+    // double-click-maximize, Aero-snap and edge-resize on Windows.
+    //
+    // macOS is the exception: a fully BORDERLESS NSWindow loses native rounded
+    // corners, the drop shadow, the resize behaviour AND the traffic-light
+    // buttons. There the custom titlebar is done the Cocoa way — keep a normal
+    // titled+resizable window and make the titlebar transparent / full-size
+    // content (UIWindow_ApplyNativeDecorations → titlebar_cocoa.mm) so our
+    // content fills the bar while the OS keeps drawing the rounding/shadow and
+    // the traffic-lights. So: borderless on Windows/Linux only.
+    if (g_customTitlebar) {
+#if !defined(__APPLE__)
+        window_flags |= SDL_WINDOW_BORDERLESS;
+#endif
+    }
 #if defined(MOCIDA_IOS)
     // iOS windows already cover the screen. We deliberately do NOT request
     // HIGH_PIXEL_DENSITY (the renderer would otherwise draw at pixel size
@@ -889,7 +939,63 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
     // Apply additional optimizations
     OptimizeSDLForHighPerformance(sdlRenderer);
 
+    // Custom titlebar: restore the OS-native decorations the borderless flag
+    // (Windows/Linux) would otherwise strip — Win11 rounded corners + drop
+    // shadow — or, on macOS, switch the (non-borderless) window into the
+    // transparent full-size-content titlebar mode. See titlebar_native.c /
+    // titlebar_cocoa.mm.
+    if (g_customTitlebar) {
+        UIWindow_ApplyNativeDecorations(sdlWindow);
+    }
+
     return window;
+}
+
+void UIWindow_SetBackdrop(UIWindow* window, UIBackdropMaterial material,
+                          UIColor tint, float tintOpacity) {
+    if (!window) return;
+
+    if (material == UI_BACKDROP_AUTO) {
+        material = UIBackdrop_ResolveAuto();
+    }
+
+    window->backdrop            = material;
+    window->backdropTint        = tint;
+    window->backdropTintOpacity = tintOpacity;
+
+    if (material == UI_BACKDROP_NONE) {
+        // Disable: hand a NONE to the platform layer (it restores the opaque
+        // window) and forget the native flag so we clear opaque again. Restore
+        // the clear's opacity (it was zeroed when a native backdrop turned on).
+        if (window->sdlWindow) {
+            UIBackdrop_Apply(window->sdlWindow, UI_BACKDROP_NONE, tint, tintOpacity);
+        }
+        window->backdropNative = 0;
+        window->backgroundColor.a = 1.0f;
+        return;
+    }
+
+    int native = 0;
+    if (window->sdlWindow) {
+        native = UIBackdrop_Apply(window->sdlWindow, material, tint, tintOpacity);
+    }
+    window->backdropNative = native;
+
+    // A native backdrop (acrylic/mica) composites behind the window, so the
+    // per-frame clear is made transparent: wherever the app leaves alpha 0 (the
+    // window clear, or a widget drawn with a translucent fill) the OS-blurred
+    // backdrop shows through. Opaque widgets still cover it. On the SDL backends
+    // that DO composite swapchain alpha (Vulkan, and D3D11 flip-model on Win11)
+    // this yields a true acrylic region; on backends that don't, the area reads
+    // as the backdrop tint.
+    if (native) {
+        window->backgroundColor.a = 0.0f;
+        UI_INFO(UI_CAT_WINDOW, "window backdrop enabled (material=%d, native)", (int)material);
+    } else {
+        UI_INFO(UI_CAT_WINDOW,
+                "window backdrop requested (material=%d) but no native compositor "
+                "effect is available; using in-app fallback", (int)material);
+    }
 }
 
 void UIWindow_SetEventCallback(UIWindow* window, UI_EVENT event, UIEventCallback callback) {

@@ -1,0 +1,2 @@
+App() { title: "a" width: 300 height: 160 background: #ff00ff renderer: software aa: "ssaa2x" entry: Main }
+view Main() { Stack(orientation: vertical, justify: center, align: center, width: Window.width, height: Window.height, background: #ff00ff) { Text("O", size: 110, color: #000000, weight: bold) } }

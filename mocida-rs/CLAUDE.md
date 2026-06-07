@@ -2,11 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Start with the workspace master guide:** `../CLAUDE.md` (mocida workspace) — it
+> covers the full stack (C ↔ FFI ↔ runtime ↔ OndaEngine host), the exact
+> build/deploy workflow, the GUI test harness, and the debugging playbook. This file
+> is the **bindings + runtime internals** companion.
+
 ## What this repo is
 
-Rust bindings for [Mocida](https://github.com/liy77/mocida), a Windows-first C UI toolkit on SDL3. **Not a Rust reimplementation** — the C library does all the rendering and event handling; this workspace is an FFI layer (`mocida-sys`) plus an idiomatic wrapper (`mocida`).
+Rust bindings for [Mocida](https://github.com/liy77/mocida), a Windows-first C UI toolkit on SDL3. **Not a Rust reimplementation** — the C library does all the rendering and event handling; this workspace is an FFI layer (`mocida-sys`) plus an idiomatic wrapper (`mocida`) plus a markup interpreter (`mui-runtime`).
 
 Every public header in upstream `mocida/src/headers/uikit/*.h` has a corresponding Rust module under `mocida/src/`. The README's "API coverage" table is the source of truth for what's wrapped.
+
+Crates: `mocida-sys` (FFI), `mocida` (wrapper), `mui-runtime` (interprets `.mui` → live widget tree; the engine OndaEngine's host links), `mui-dev` (dev runner).
 
 ## Build commands
 
@@ -31,6 +38,18 @@ Other useful commands:
 
 `bindgen` needs `clang` on `PATH`.
 
+**Header changes** in the C lib require `cargo clean -p mocida-sys` before the next
+build so bindgen regenerates (`UITextArea` etc. are opaque; new accessors won't
+appear otherwise). C-only `.c`/`.inc` edits need a DLL rebuild + redeploy, **not** a
+Rust relink — see `../CLAUDE.md` §2 for the DLL build/copy steps.
+
+> **Incremental-build corruption (important):** after many rapid rebuilds — or a
+> single *aborted* build — `cargo`'s incremental artifacts can go inconsistent and
+> produce a binary that **contradicts the source** (classic symptom: `for`-loops in
+> the UI silently render nothing even though the lists are populated). It is not a
+> code bug. Fix with `cargo clean -p mui-runtime -p onda-launcher` and rebuild. When a
+> rendering bug makes no sense given your diff, clean-rebuild FIRST.
+
 ## Architecture
 
 ### Two-crate workspace
@@ -46,6 +65,36 @@ Other useful commands:
 - **Single-threaded.** Like mocida itself, every UI call assumes the main thread. Wrappers intentionally don't implement `Send`/`Sync`. `App::on_event` uses a TLS slot because the C event callback signature has no `userdata` pointer.
 - **`Signal<T>` is generic** over a `SignalValue` trait. Implemented for `i32`, `f32`, `bool` (transparently sharing `UI_SIGNAL_INT`), `String` (auto-`CString`), and `Opaque(*mut c_void)` for the pointer case. The subscription trampoline is type-erased (`Box<dyn FnMut(*mut UISignal)>`) so a single `extern "C"` function handles all `T`.
 - **bindgen enum style.** The `build.rs` uses `EnumVariation::NewType { is_global: true }`, so C enums become tuple structs like `sys::UIRenderQuality(pub i32)`. When forwarding Rust enums to the FFI, construct the newtype: `sys::UIRenderQuality(quality as i32)`.
+
+### mui-runtime (the `.mui` interpreter)
+
+`build_node` builds one element then attaches **live, no-rebuild reactive hooks** —
+each follows the same shape (find a signal-bound prop, capture the widget pointer +
+signal pointers, subscribe, write the value in place on change):
+- `subscribe_reactive_size` (`width`/`height`), `subscribe_reactive_position`
+  (`x`/`y`), `subscribe_reactive_visible` (`visible: <signal>`),
+  `subscribe_reactive_rect_color` (a `Rectangle`'s `background`/`gradientTo` bound to
+  string signals). Use these instead of structural toggles for anything overlaying
+  the editor.
+
+**Structural rebuilds are coarse and destructive.** Changing a signal used in a
+structural `if`/`for` rebuilds the *whole view*, recreating the editor `TextArea`:
+it steals focus, resets caret/scroll, **wipes the undo stack**, and flickers. Prefer
+reactive props. A popup over the editor should be **always-rendered + `visible:`-
+gated**, not `if open == "1"`. (See `../CLAUDE.md` §3.)
+
+**Subscription lifetime = use-after-free risk.** A subscription captures a raw
+widget pointer and lives in `ctx.reactive._subs`. If that widget can be freed by a
+rebuild while the watched signal can still fire, the callback writes to freed memory
+→ silent C crash / corruption. Only attach such subscriptions to widgets that
+persist (always-rendered). This bit us with a `dismiss`-catcher `SetEnabled`
+subscription under a structural `if`.
+
+**Editor edits & undo:** to make a programmatic text edit undoable via Ctrl+Z, route
+it through `UITextArea_InsertText` (records undo), not `UITextArea_SetText` (resets
+it). Replace a range undoably with `SetCaretByte(end)` then `SetSelAnchor(start)`
+then `InsertText`. Don't mirror it back through a `set_str("file_content")` that the
+two-way binding turns into a `SetText` (that wipes the undo you just recorded).
 
 ### Workflow notes from prior sessions
 

@@ -100,7 +100,19 @@ typedef struct UIText {
     char* fontFamily;          /**< Heap-owned font path (.ttf / .otf). */
 
     int fontStyle;             /**< Bitmask of FontStyle flags (Bold | Italic | ...). */
-    UIColor color;             /**< Glyph color. */
+    UIColor color;             /**< Glyph color (flat fill; ignored when hasGradient). */
+
+    /**
+     * 2-stop linear gradient fill. When `hasGradient` is non-zero the glyphs
+     * are filled with a gradient from `gradColor1` to `gradColor2` instead of
+     * the flat `color`. Direction is vertical (top → bottom) unless
+     * `gradHorizontal` is set (then left → right). The glyph texture is
+     * rasterized white and the gradient is applied per-vertex at draw time.
+     */
+    int     hasGradient;       /**< 1 = use the gradient fill below. */
+    UIColor gradColor1;        /**< Gradient start (top, or left when horizontal). */
+    UIColor gradColor2;        /**< Gradient end (bottom, or right when horizontal). */
+    int     gradHorizontal;    /**< 0 = vertical (top→bottom); 1 = horizontal (left→right). */
     UIRectangle* background;   /**< Owned background rect drawn behind the text. */
     char* text;                /**< Heap-owned UTF-8 text. */
     int textLength;            /**< Byte length of `text`, excluding the terminator. */
@@ -224,6 +236,21 @@ UIText* UIText_SetFontSize(UIText* text, float fontSize);
  * @return Pointer to the updated UIText object.
  */
 UIText* UIText_SetColor(UIText* text, UIColor color);
+
+/**
+ * Fills the glyphs with a 2-stop linear gradient (`c1` → `c2`) instead of a
+ * flat color. `horizontal` = 0 → vertical (top → bottom); non-zero → left →
+ * right. Invalidates the cached glyph texture (it is re-rasterized white so
+ * the gradient can modulate it at draw time).
+ * @return Pointer to the updated UIText object.
+ */
+UIText* UIText_SetGradient(UIText* text, UIColor c1, UIColor c2, int horizontal);
+
+/**
+ * Clears the gradient fill, reverting to the flat `color`.
+ * @return Pointer to the updated UIText object.
+ */
+UIText* UIText_ClearGradient(UIText* text);
 
 /**
  * Sets the background of the UIText object.

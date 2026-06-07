@@ -54,6 +54,7 @@ static UIChildren* WheelContainerChildren(UIWidget* w) {
     UIWidgetBase* base = (UIWidgetBase*)w->data;
     const char* t = base->__widget_type;
     if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;
+    if (strcmp(t, UI_WIDGET_GLASS) == 0)     return ((UIGlass*)base)->items;
     if (strcmp(t, UI_WIDGET_GRID) == 0)      return ((UIGrid*)base)->items;
     if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) return (UIChildren*)((UIRectangle*)base)->children;
     if (strcmp(t, UI_WIDGET_SCROLL) == 0) {
@@ -101,6 +102,11 @@ static void DispatchWheelToScrolls(UIChildren* children,
     const float speed = s->wheelSpeed > 0.0f ? s->wheelSpeed : 60.0f;
     if (shift) {
         if (s->allowHorizontal) s->scrollX -= dyNotches * speed;
+    } else if (s->allowHorizontal && !s->allowVertical) {
+        // Horizontal-only viewport (e.g. a VSCode-style tab strip): map the
+        // vertical wheel onto horizontal scroll so a normal mouse wheel scrolls
+        // it sideways, plus any genuine horizontal wheel delta.
+        s->scrollX -= (dyNotches + dxNotches) * speed;
     } else {
         if (s->allowVertical)   s->scrollY -= dyNotches * speed;
         if (s->allowHorizontal) s->scrollX -= dxNotches * speed;
@@ -287,6 +293,7 @@ static UIChildren* CursorContainerChildren(UIWidget* w) {
     UIWidgetBase* base = (UIWidgetBase*)w->data;
     const char* t = base->__widget_type;
     if (!strcmp(t, UI_WIDGET_STACK))     return ((UIStack*)base)->items;
+    if (!strcmp(t, UI_WIDGET_GLASS))     return ((UIGlass*)base)->items;
     if (!strcmp(t, UI_WIDGET_GRID))      return ((UIGrid*)base)->items;
     if (!strcmp(t, UI_WIDGET_RECTANGLE)) return (UIChildren*)((UIRectangle*)base)->children;
     if (!strcmp(t, UI_WIDGET_SCROLL)) {
@@ -296,78 +303,129 @@ static UIChildren* CursorContainerChildren(UIWidget* w) {
     return NULL;
 }
 
-// Walks children back-to-front and returns the cursor advertised by
-// the topmost widget under (x, y). Falls back to UI_CURSOR_DEFAULT when
-// nothing interactive is under the cursor.
-static UICursor PickHoverCursor(UIChildren* children, float x, float y) {
+// Walks children back-to-front and returns the cursor advertised by the topmost
+// widget under (x, y). Falls back to UI_CURSOR_DEFAULT when nothing interactive
+// is under the cursor.
+//
+// `*blocked` (when non-NULL) reports whether the point was COVERED by a sized,
+// opaque widget (or a container holding one). Callers use it so that an overlay
+// rooted in an intrinsic (sizeless) wrapper still blocks widgets behind it:
+// the Settings modal is a full-window dim layer wrapped in a sizeless view root,
+// so without propagating coverage the cursor would "leak" through the modal to
+// the editor's TextArea underneath, which then wrongly advertises the I-beam
+// over the dialog. A sized widget knows it covers the point (its bounds were
+// tested); a sizeless container inherits coverage from a child that does.
+static UICursor PickHoverCursorImpl(UIChildren* children, float x, float y, bool* blocked) {
+    if (blocked) *blocked = false;
     if (!children) return UI_CURSOR_DEFAULT;
     for (int i = children->count - 1; i >= 0; i--) {
         UIWidget* w = children->children[i];
         if (!w || !w->visible || !w->data) continue;
-        // Bounds-test ONLY widgets with an explicit size. Intrinsic-sized layout
-        // containers (a Stack/HStack with no width/height pointer) must still be
-        // recursed into — otherwise a nested interactive widget (a resize-handle
-        // MouseArea) is never reached. (The dispatch recurses unconditionally too.)
-        const bool sized = w->width && w->height;
-        if (sized) {
-            const float ww = *w->width, hh = *w->height;
-            if (x < w->x || x >= w->x + ww || y < w->y || y >= w->y + hh) continue;
-        }
 
         UIWidgetBase* base = (UIWidgetBase*)w->data;
+        const char* type = base->__widget_type;
+
+        // Does the point fall within this widget's own box? Intrinsic (sizeless)
+        // widgets have no box of their own, so they "contain" everything and are
+        // judged purely by their children.
+        const bool sized = w->width && w->height;
+        const bool inBounds = !sized ||
+            (x >= w->x && x < w->x + *w->width && y >= w->y && y < w->y + *w->height);
+
+        // CONTAINERS are recursed into UNCONDITIONALLY — never gated on the
+        // container's own bounds. This mirrors the mouse dispatch (button.c's
+        // ContainerChildren), which only bounds-tests leaf widgets: a free-layout
+        // overlay (the Settings dim layer) renders where its absolute x/y say, but
+        // its *stored* box may not enclose that spot, so a bounds-gated recursion
+        // would skip the whole modal and let the cursor leak to the editor's
+        // TextArea behind it. Child leaves carry correct absolute positions, so
+        // descending unconditionally and bounds-testing them is what's reliable.
+        UIChildren* kids = CursorContainerChildren(w);
+        if (kids) {
+            bool childBlocked = false;
+            UICursor c = PickHoverCursorImpl(kids, x, y, &childBlocked);
+            if (c != UI_CURSOR_DEFAULT) { if (blocked) *blocked = true; return c; }
+            // Nothing inside advertised a cursor, but coverage still propagates:
+            // a sized, opaque descendant (or this container itself) covering the
+            // point blocks widgets BEHIND it. This is what makes an empty area of
+            // the modal show the arrow instead of the editor's I-beam.
+            if (childBlocked || (sized && inBounds)) {
+                if (blocked) *blocked = true;
+                return UI_CURSOR_DEFAULT;
+            }
+            continue; // didn't claim, doesn't cover this point → try siblings
+        }
+
+        // LEAF widgets: bounds-test against their own (correct) absolute box.
+        if (!inBounds) continue;
+
         // WebView2 composition mode: defer to whatever cursor the page
         // most recently reported (link = pointer, input = text, etc).
-        if (!strcmp(base->__widget_type, UI_WIDGET_WEBVIEW)) {
+        if (!strcmp(type, UI_WIDGET_WEBVIEW)) {
             int wvCursor = UIWebView_HoverCursorAt(children, x, y);
+            if (blocked) *blocked = true;
             return (UICursor)wvCursor; /* 0 = DEFAULT if not in comp mode */
         }
-        if (!strcmp(base->__widget_type, UI_WIDGET_BUTTON)) {
+        if (!strcmp(type, UI_WIDGET_BUTTON)) {
             UIButton* b = (UIButton*)base;
+            if (blocked) *blocked = true;
             if (!b->enabled) return UI_CURSOR_NOT_ALLOWED;
             return b->cursor;
         }
-        if (!strcmp(base->__widget_type, UI_WIDGET_MOUSE_AREA)) {
+        if (!strcmp(type, UI_WIDGET_MOUSE_AREA)) {
             UIMouseArea* m = (UIMouseArea*)base;
+            if (blocked) *blocked = true;
             if (!m->enabled) return UI_CURSOR_DEFAULT;
             return m->cursor;
         }
-        if (!strcmp(base->__widget_type, UI_WIDGET_CHECKBOX)) {
+        if (!strcmp(type, UI_WIDGET_CHECKBOX)) {
+            if (blocked) *blocked = true;
             return ((UICheckbox*)base)->cursor;
         }
-        if (!strcmp(base->__widget_type, UI_WIDGET_SLIDER)) {
+        if (!strcmp(type, UI_WIDGET_SLIDER)) {
+            if (blocked) *blocked = true;
             return ((UISlider*)base)->cursor;
         }
-        if (!strcmp(base->__widget_type, UI_WIDGET_SWITCH)) {
+        if (!strcmp(type, UI_WIDGET_SWITCH)) {
+            if (blocked) *blocked = true;
             return ((UISwitch*)base)->cursor;
         }
-        if (!strcmp(base->__widget_type, UI_WIDGET_RADIO)) {
+        if (!strcmp(type, UI_WIDGET_RADIO)) {
+            if (blocked) *blocked = true;
             return ((UIRadioButton*)base)->cursor;
         }
-        if (!strcmp(base->__widget_type, UI_WIDGET_TEXTFIELD)) {
+        if (!strcmp(type, UI_WIDGET_TEXTFIELD)) {
+            if (blocked) *blocked = true;
             return ((UITextField*)base)->cursor;
         }
-        if (!strcmp(base->__widget_type, UI_WIDGET_TEXTAREA)) {
-            return ((UITextArea*)base)->cursor;
+        if (!strcmp(type, UI_WIDGET_TEXTAREA)) {
+            if (blocked) *blocked = true;
+            UITextArea* ta = (UITextArea*)base;
+            // Over an inline color swatch → the click (hand) cursor, not the I-beam.
+            for (int s = 0; s < ta->__swatchRectCount; s++) {
+                if (x >= ta->__swatchRX[s] && x < ta->__swatchRX[s] + ta->__swatchRW[s] &&
+                    y >= ta->__swatchRY[s] && y < ta->__swatchRY[s] + ta->__swatchRH[s]) {
+                    return UI_CURSOR_POINTER;
+                }
+            }
+            return ta->cursor;
         }
-        if (!strcmp(base->__widget_type, UI_WIDGET_TEXT)) {
+        if (!strcmp(type, UI_WIDGET_TEXT)) {
             UIText* t = (UIText*)base;
-            if (t->selectable) return t->cursor;
-            // Non-selectable text doesn't claim the cursor; keep
-            // looking at widgets behind it.
+            // Selectable text advertises (and covers with) the I-beam; plain text
+            // is transparent to the cursor — keep looking at widgets behind it.
+            if (t->selectable) { if (blocked) *blocked = true; return t->cursor; }
             continue;
         }
-        // A layout container: recurse so a nested interactive widget (e.g. a
-        // resize-handle MouseArea inside the panel's Stacks) can claim the cursor.
-        UIChildren* kids = CursorContainerChildren(w);
-        if (kids) {
-            UICursor c = PickHoverCursor(kids, x, y);
-            if (c != UI_CURSOR_DEFAULT) return c;
-        }
-        // A SIZED opaque widget blocks widgets behind it → stop. An intrinsic
-        // (unsized) container that claimed nothing keeps looking at its siblings.
-        if (sized) return UI_CURSOR_DEFAULT;
+        // Any other sized leaf (e.g. an Image, a plain Rectangle) is opaque and
+        // covers the point, blocking widgets behind it.
+        if (sized) { if (blocked) *blocked = true; return UI_CURSOR_DEFAULT; }
     }
     return UI_CURSOR_DEFAULT;
+}
+
+static UICursor PickHoverCursor(UIChildren* children, float x, float y) {
+    return PickHoverCursorImpl(children, x, y, NULL);
 }
 
 void HandleEvent(UIApp* app, SDL_Event* event) {
@@ -651,6 +709,9 @@ static void EnsureDebugConsole(void) { /* no-op */ }
 /// UIApp_Create). One app per process in practice.
 static UIApp* g_currentApp = NULL;
 
+// Forward decl: defined below, but UIApp_Create installs it at create time.
+static void UIApp_InstallHitTest(UIApp* app, int on);
+
 UIApp* UIApp_Create(const char* title, int width, int height) {
     /* Debug-only console attach. No-op in release (no logs to see
      * anyway; the WIN32 subsystem suppressed any auto-console). */
@@ -749,6 +810,13 @@ UIApp* UIApp_Create(const char* title, int width, int height) {
     // UIApp_SetAlwaysOnTop) can reach the window without threading the handle
     // through every caller — there is effectively one app per process.
     g_currentApp = app;
+
+    // If a custom title bar was requested before create, the window is already
+    // borderless — install the hit-test now so dragging/resize work. The host
+    // still feeds the live drag-region rect each frame (UIApp_SetDragRegion).
+    if (UIWindow_WantsCustomTitlebar()) {
+        UIApp_InstallHitTest(app, 1);
+    }
     return app;
 }
 
@@ -758,6 +826,194 @@ void UIApp_SetAlwaysOnTop(int on) {
     if (g_currentApp && g_currentApp->window && g_currentApp->window->sdlWindow) {
         SDL_SetWindowAlwaysOnTop(g_currentApp->window->sdlWindow, on ? true : false);
     }
+}
+
+// --------------------------------------------------------------------
+// Custom (client-side) title bar: hit-test + window controls.
+//
+// When the app requested a borderless window (UIWindow_RequestCustomTitlebar
+// before create) it paints its own title bar. The OS still needs to know which
+// pixels drag the window and which resize it: SDL_SetWindowHitTest calls back
+// per mouse-down with a window-space point, and we answer DRAGGABLE / RESIZE_*
+// / NORMAL. The whole behaviour (drag, double-click-maximize, Aero-snap,
+// edge-resize) is then handled natively by Windows/macOS/X11.
+//
+// The drag region is a rect (window-logical coords) the app updates each frame
+// from the title bar's live bounds (UIApp_SetDragRegion). A point inside it is
+// DRAGGABLE *unless* an interactive widget (button / menu / icon) sits under it
+// — we reuse PickHoverCursor to detect that, so the in-bar controls keep
+// receiving their clicks instead of the hit-test swallowing them as a drag.
+// --------------------------------------------------------------------
+static int   g_dragRegionSet = 0;
+static float g_dragX = 0, g_dragY = 0, g_dragW = 0, g_dragH = 0;
+
+// Is an INTERACTIVE leaf widget (button / mouse-area / menu icon / input / etc.)
+// under (x, y)? Used by the title-bar hit-test to decide whether a point in the
+// drag region is a real control (keep it clickable → NORMAL) or empty chrome
+// (→ DRAGGABLE). Unlike PickHoverCursor this recurses through EVERY container
+// unconditionally and bounds-tests only leaves, with NO "opaque container
+// blocks what's behind it" early-out — that coverage logic (correct for cursor
+// selection) wrongly reported the whole toolbar row as blank because the
+// editor's sized body/root containers short-circuit the search before the
+// toolbar's buttons are reached. A plain "any interactive leaf here?" test is
+// exactly what the drag-vs-click decision needs.
+static int PointHitsInteractive(UIChildren* children, float x, float y) {
+    if (!children) return 0;
+    for (int i = children->count - 1; i >= 0; i--) {
+        UIWidget* w = children->children[i];
+        if (!w || !w->visible || !w->data) continue;
+        UIWidgetBase* base = (UIWidgetBase*)w->data;
+        const char* type = base->__widget_type;
+
+        // Recurse into any container first (free-layout overlays carry correct
+        // absolute child positions, so a deep button is still found).
+        UIChildren* kids = CursorContainerChildren(w);
+        if (kids && PointHitsInteractive(kids, x, y)) return 1;
+
+        // Leaf bounds test (sizeless widgets have no box → can't be "hit").
+        if (!w->width || !w->height) continue;
+        const bool in = (x >= w->x && x < w->x + *w->width &&
+                         y >= w->y && y < w->y + *w->height);
+        if (!in) continue;
+
+        if (!strcmp(type, UI_WIDGET_BUTTON)) {
+            if (((UIButton*)base)->enabled) return 1;
+        } else if (!strcmp(type, UI_WIDGET_MOUSE_AREA)) {
+            if (((UIMouseArea*)base)->enabled) return 1;
+        } else if (!strcmp(type, UI_WIDGET_CHECKBOX) ||
+                   !strcmp(type, UI_WIDGET_SWITCH)   ||
+                   !strcmp(type, UI_WIDGET_RADIO)    ||
+                   !strcmp(type, UI_WIDGET_SLIDER)   ||
+                   !strcmp(type, UI_WIDGET_TEXTFIELD)||
+                   !strcmp(type, UI_WIDGET_TEXTAREA) ||
+                   !strcmp(type, UI_WIDGET_WEBVIEW)) {
+            return 1;
+        } else if (!strcmp(type, UI_WIDGET_TEXT)) {
+            if (((UIText*)base)->selectable) return 1;
+        }
+        // Plain Rectangles / Images / Stacks are NOT interactive — they don't
+        // block the drag decision, so keep scanning siblings (a draggable bar
+        // typically has a background Rectangle the user SHOULD be able to drag).
+    }
+    return 0;
+}
+// Resize-border thickness (logical px) on the window edges of a borderless
+// window. 6px matches the JetBrains/VSCode feel and is comfortable to grab.
+#define MOCIDA_RESIZE_BORDER 6
+
+static SDL_HitTestResult SDLCALL MocidaHitTest(SDL_Window* win, const SDL_Point* area, void* data) {
+    UIApp* app = (UIApp*)data;
+    if (!app || !app->window) return SDL_HITTEST_NORMAL;
+
+    int w = 0, h = 0;
+    SDL_GetWindowSize(win, &w, &h);
+    const int x = area->x, y = area->y;
+    const int b = MOCIDA_RESIZE_BORDER;
+
+    // Resize borders take priority on the window edges so the user can always
+    // grab them — but only when not maximized (a maximized window can't be
+    // edge-resized, and snapping a resize there would feel broken).
+    const SDL_WindowFlags flags = SDL_GetWindowFlags(win);
+    const int maximized = (flags & SDL_WINDOW_MAXIMIZED) != 0;
+    if (!maximized) {
+        const int left   = x < b;
+        const int right  = x >= w - b;
+        const int top    = y < b;
+        const int bottom = y >= h - b;
+        if (top && left)     return SDL_HITTEST_RESIZE_TOPLEFT;
+        if (top && right)    return SDL_HITTEST_RESIZE_TOPRIGHT;
+        if (bottom && left)  return SDL_HITTEST_RESIZE_BOTTOMLEFT;
+        if (bottom && right) return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
+        if (top)             return SDL_HITTEST_RESIZE_TOP;
+        if (bottom)          return SDL_HITTEST_RESIZE_BOTTOM;
+        if (left)            return SDL_HITTEST_RESIZE_LEFT;
+        if (right)           return SDL_HITTEST_RESIZE_RIGHT;
+    }
+
+    // Inside the app-declared title-bar drag region?
+    if (g_dragRegionSet &&
+        (float)x >= g_dragX && (float)x < g_dragX + g_dragW &&
+        (float)y >= g_dragY && (float)y < g_dragY + g_dragH) {
+        // The hit-test point is in WINDOW (logical) space; the widget tree is
+        // laid out in the renderer's logical space. They coincide for a
+        // 1:1-presented window, but convert defensively so a letterboxed /
+        // DPI-scaled presentation still maps correctly.
+        float rx = (float)x, ry = (float)y;
+        if (app->window->sdlRenderer) {
+            SDL_RenderCoordinatesFromWindow(app->window->sdlRenderer,
+                                            (float)x, (float)y, &rx, &ry);
+        }
+        // If an interactive widget (button, menu, icon, input) is under the
+        // point, it owns the click — don't make that pixel draggable. Otherwise
+        // the empty chrome drags the window.
+        if (!PointHitsInteractive(app->window->children, rx, ry)) {
+            return SDL_HITTEST_DRAGGABLE;
+        }
+    }
+    return SDL_HITTEST_NORMAL;
+}
+
+// Install (or, when on==0, remove) the custom-titlebar hit-test on the current
+// window. Called from UIApp_SetCustomTitlebar. Safe to call repeatedly.
+static void UIApp_InstallHitTest(UIApp* app, int on) {
+    if (!app || !app->window || !app->window->sdlWindow) return;
+    if (on) {
+        SDL_SetWindowHitTest(app->window->sdlWindow, MocidaHitTest, app);
+    } else {
+        SDL_SetWindowHitTest(app->window->sdlWindow, NULL, NULL);
+    }
+}
+
+// Enable/disable client-side decorations on the (already created) window. The
+// BORDERLESS flag itself must be requested before create (UIWindow_Request-
+// CustomTitlebar); this toggles the border live and wires the hit-test. Returns
+// nothing — cosmetic best-effort.
+void UIApp_SetCustomTitlebar(int on) {
+    if (!g_currentApp || !g_currentApp->window || !g_currentApp->window->sdlWindow) return;
+    SDL_SetWindowBordered(g_currentApp->window->sdlWindow, on ? false : true);
+    UIApp_InstallHitTest(g_currentApp, on);
+}
+
+// Update the title-bar drag region (window-logical coords). Call every frame
+// from the host with the title bar's live bounds. A zero/negative size clears
+// the region (nothing draggable).
+void UIApp_SetDragRegion(float x, float y, float w, float h) {
+    if (w <= 0.0f || h <= 0.0f) { g_dragRegionSet = 0; return; }
+    g_dragRegionSet = 1;
+    g_dragX = x; g_dragY = y; g_dragW = w; g_dragH = h;
+}
+
+// Window controls for the custom title bar's min/max/close buttons.
+void UIApp_MinimizeG(void) {
+    if (g_currentApp && g_currentApp->window && g_currentApp->window->sdlWindow)
+        SDL_MinimizeWindow(g_currentApp->window->sdlWindow);
+}
+
+int UIApp_IsMaximizedG(void) {
+    if (!g_currentApp || !g_currentApp->window || !g_currentApp->window->sdlWindow) return 0;
+    return (SDL_GetWindowFlags(g_currentApp->window->sdlWindow) & SDL_WINDOW_MAXIMIZED) ? 1 : 0;
+}
+
+// Toggle maximize <-> restore. SDL_MaximizeWindow respects the work area
+// (won't cover the taskbar) on Windows.
+void UIApp_ToggleMaximizeG(void) {
+    if (!g_currentApp || !g_currentApp->window || !g_currentApp->window->sdlWindow) return;
+    SDL_Window* w = g_currentApp->window->sdlWindow;
+    if (SDL_GetWindowFlags(w) & SDL_WINDOW_MAXIMIZED) {
+        SDL_RestoreWindow(w);
+    } else {
+        SDL_MaximizeWindow(w);
+    }
+}
+
+void UIApp_CloseG(void) {
+    if (!g_currentApp || !g_currentApp->window) return;
+    // Mirror the SDL_EVENT_QUIT path so UIApp_Run's loop exits cleanly and the
+    // normal teardown (UIApp_Destroy) runs.
+    g_currentApp->window->visible = 0;
+    g_currentApp->runInBackground = 0;
+    SDL_Event q; SDL_zero(q); q.type = SDL_EVENT_QUIT;
+    SDL_PushEvent(&q);
 }
 
 // ---- Global (current-app) convenience wrappers, for the MUI App.*/Window.*

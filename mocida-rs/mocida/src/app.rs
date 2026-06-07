@@ -471,12 +471,70 @@ impl App {
         self
     }
 
+    /// Enables (or disables) a custom client-side title bar on the
+    /// already-created window: drops the native chrome and installs the
+    /// drag/resize hit-test. The window must have been created borderless via
+    /// [`request_custom_titlebar`] for the bar to be fully frameless.
+    pub fn set_custom_titlebar(&mut self, on: bool) -> &mut Self {
+        unsafe { sys::UIApp_SetCustomTitlebar(on as c_int) };
+        self
+    }
+
+    /// Updates the title-bar drag region (window-logical coords). Call every
+    /// frame with the live bounds of the widget acting as the title bar. Empty
+    /// areas of the region drag the window; interactive widgets under it still
+    /// receive clicks. A zero/negative size clears the region.
+    pub fn set_drag_region(&mut self, x: f32, y: f32, w: f32, h: f32) -> &mut Self {
+        unsafe { sys::UIApp_SetDragRegion(x, y, w, h) };
+        self
+    }
+
     /// Runs the main loop until the window closes. Blocks.
     pub fn run(&mut self) {
         unsafe {
             sys::UIApp_Run(self.ptr);
         }
     }
+}
+
+/// Requests client-side window decorations (a custom title bar). Must be called
+/// **before** [`App::new`] — it controls the borderless window flag at creation
+/// time. The app then paints its own bar and feeds the live drag region via
+/// [`App::set_drag_region`]. Pass `false` for the default native chrome.
+pub fn request_custom_titlebar(on: bool) {
+    unsafe { sys::UIWindow_RequestCustomTitlebar(on as c_int) };
+}
+
+/// Requests a transparent (per-pixel alpha) window. Must be called **before**
+/// [`App::new`] — it adds the SDL transparent-window flag at creation time so an
+/// OS system backdrop (Mica/Acrylic, via [`Window::set_backdrop`]) can composite
+/// through the app's transparent pixels. Only the D3D11 renderer honors this on
+/// Windows; the Vulkan/GL renderers create an opaque swapchain. The window still
+/// clears opaque by default, so it looks identical until a backdrop is enabled.
+pub fn request_transparent(on: bool) {
+    unsafe { sys::UIWindow_RequestTransparent(on as c_int) };
+}
+
+/// Minimizes the current app's window to the taskbar.
+pub fn window_minimize() {
+    unsafe { sys::UIApp_MinimizeG() };
+}
+
+/// Toggles the current window between maximized and restored (respects the
+/// desktop work area, so it won't cover the taskbar).
+pub fn window_toggle_maximize() {
+    unsafe { sys::UIApp_ToggleMaximizeG() };
+}
+
+/// Returns `true` if the current window is maximized.
+pub fn window_is_maximized() -> bool {
+    unsafe { sys::UIApp_IsMaximizedG() != 0 }
+}
+
+/// Requests the app to quit (clean main-loop teardown). Used by the custom
+/// title bar's close button.
+pub fn window_close() {
+    unsafe { sys::UIApp_CloseG() };
 }
 
 impl Drop for App {

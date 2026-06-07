@@ -1,6 +1,7 @@
 #include <uikit/button.h>
 #include <uikit/container.h>
 #include <uikit/stack.h>
+#include <uikit/glass.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -234,6 +235,9 @@ static UIChildren* ContainerChildren(UIWidget* w) {
     const char* t = base->__widget_type;
     if (strcmp(t, UI_WIDGET_STACK) == 0) {
         return ((UIStack*)base)->items;
+    }
+    if (strcmp(t, UI_WIDGET_GLASS) == 0) {
+        return ((UIGlass*)base)->items;
     }
     if (strcmp(t, UI_WIDGET_GRID) == 0) {
         return ((UIGrid*)base)->items;

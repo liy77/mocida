@@ -207,6 +207,7 @@ is the starter surface). Element → mocida type; common props in parentheses.
 | MUI element | mocida type | Common props |
 | ----------- | ----------- | ------------ |
 | `Stack`     | `UIStack`   | `orientation` (vertical\|horizontal), `gap`, `padding` |
+| `Glass`     | `UIGlass`   | `effect`, `radius`, `tint`, `tintOpacity`, `thickness`, `blur`, `refraction`, `noise`, `state` + all `Stack` layout props |
 | `Grid` / `GridView` | `UIGrid` / `UIGridView` | `columns`, `gap` |
 | `ListView`  | `UIListView` | `gap` |
 | `Scroll`    | `UIScroll`  | `direction` |
@@ -231,6 +232,41 @@ is the starter surface). Element → mocida type; common props in parentheses.
 Enums (`FontStyle`, `FillMode`, alignment, `Ease`, …) are referenced by their
 mocida names (`FontStyle.Bold`). `theme.h` values and `anim.h` easings are
 available as Copper values.
+
+### 7.1 Glass & window backdrops
+
+Two surfaces opt into OS "glass":
+
+**`app { backdrop: ... }`** — a *window-wide* effect the compositor draws behind
+the whole window. Values: `auto` (platform default — Mica on Win11, vibrancy on
+macOS, KDE blur on Linux, opaque elsewhere), `off`/`none`, `mica`, `mica-alt`,
+`acrylic`, `acrylic-legacy`, `kde-window`. Pair with a transparent
+`background: #0000` so the backdrop shows through. Where no native compositor
+effect exists the window stays opaque and the request is a no-op.
+
+```mui
+app { title: "Glassy", width: 1000, height: 700, background: #0000, backdrop: "auto" }
+```
+
+**`Glass { ... }`** — a *region* container (lays children like a `Stack`) that
+paints a glass surface: the native region effect where wired, otherwise an
+in-app tinted approximation that is also the universal fallback.
+
+```mui
+Glass(effect: "acrylic", radius: 12, tint: #ffffff[20], tintOpacity: 0.5, blur: 24) {
+  Stack(gap: 8) { Text("Frosted panel") }
+}
+```
+
+Props are *effect-aware*: universal ones (`radius`, `tint`, `tintOpacity`,
+`thickness`) always apply; effect-specific ones are best-effort — `blur` (KDE),
+`refraction` (Liquid Glass), `noise` (Acrylic/HUD), `state`
+(`active`/`inactive`/`pressed`, AppKit vibrancy) — and are ignored by materials
+that don't expose them. Effect values: `auto`, `acrylic`, `acrylic-legacy`,
+`liquid`, `vibrancy-sidebar`/`-header`/`-menu`/`-popover`/`-hud`, `kde-region`.
+The *window-wide* materials (`mica`, `mica-alt`, `kde-window`) belong in
+`app { backdrop }`, not a `Glass` widget — used on `Glass` they warn and fall
+back to the in-app paint.
 
 ---
 

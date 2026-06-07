@@ -122,6 +122,21 @@ struct UITextArea {
     int           __cachedWrapMode; /**< Internal: wrapMode the cache was built for. */
     int           __cachedWrapW;    /**< Internal: wrap width the cache was built for. */
 
+    /**
+     * Virtualization. The line INDEX (lineStarts/lineLengths/lineIsSoft) is built
+     * for the whole document on a text change (cheap O(n) scan), but the expensive
+     * per-line GLYPH TEXTURE + char-offset table are built lazily, only for lines
+     * inside the viewport (+ a small overscan), and freed when they scroll far out
+     * of view. `__hlSpans` caches the whole-document highlight spans for the current
+     * text so a lazily-built visible line can be colored without re-running the
+     * highlighter. `__builtLo/__builtHi` track the [lo,hi) line range whose content
+     * is currently built (so the renderer knows what to free as the view moves).
+     */
+    UITextSpan*   __hlSpans;        /**< Internal: cached highlight spans for the current text. */
+    int           __hlSpanCount;    /**< Internal: number of cached spans. */
+    int           __builtLo;        /**< Internal: first line index with built content. */
+    int           __builtHi;        /**< Internal: one past the last built line index. */
+
     UITextAreaChangedCallback onChange; /**< Fires on every textual change. */
     void* userdata;                     /**< Opaque pointer forwarded to onChange. */
 
@@ -172,6 +187,34 @@ struct UITextArea {
     int    __suppressHistory;
     int    __lastEditKind;
     int    __lastEditCaret;
+
+    /**
+     * Inline gaps: extra horizontal space reserved BEFORE a byte offset, shifting
+     * that byte and everything after it to the right (the text before is untouched).
+     * Generic layout feature — a host uses it to reserve room for an inline
+     * decoration (e.g. a color swatch) so the box never overlaps a glyph, the way
+     * VSCode inserts space before a color. Folded into the per-char offset table
+     * (so caret / click / selection stay correct) and into the line draw (the
+     * texture is split at each gap and the right part shifted). `__gapVersion`
+     * bumps whenever the set changes so the line cache rebuilds.
+     */
+    int*   __gapAt;    float* __gapW;   int __gapCount;  int __gapCap;
+    int    __gapVersion;   int __cachedGapVersion;
+
+    /**
+     * Inline color swatches (VSCode-style). Each entry reserves a gap (via the
+     * arrays above) BEFORE its byte offset and draws a small color box in that
+     * reserved space during the same render pass — so the box tracks the text
+     * exactly while scrolling/zooming and never overlaps a glyph, with no host
+     * overlay or position race. `__swatchColor[i]` is the box fill; the per-frame
+     * `__swatchRX/RY/RW/RH` are the boxes' on-screen rects, recorded each render so
+     * a mouse-down can hit-test them and fire `onSwatchClick` (host opens a picker).
+     */
+    UIColor* __swatchColor;  int __swatchCount;  int __swatchCap;
+    float* __swatchRX; float* __swatchRY; float* __swatchRW; float* __swatchRH;
+    int*   __swatchByte;     int __swatchRectCount;  int __swatchRectCap;
+    void (*onSwatchClick)(UITextArea* ta, int byteOffset, void* ud);
+    void*  onSwatchClickUd;
 };
 
 UITextArea* UITextArea_Create        (const char* initialText, float fontSize);
@@ -186,6 +229,40 @@ int  UITextArea_GetCaretByte        (const UITextArea* ta);
 /** Move the caret to byte offset `pos` (clamped). Used to restore the caret
  *  after a host-driven structural rebuild recreates the widget. */
 void UITextArea_SetCaretByte        (UITextArea* ta, int pos);
+/** Selection anchor byte offset (-1 = no selection); the selection spans
+ *  [anchor, caret]. Get/Set lets a host snapshot a selection before a structural
+ *  rebuild recreates the widget and restore it afterwards (e.g. an Edit menu's
+ *  Cut/Copy, which must act on what the user had selected). */
+int  UITextArea_GetSelAnchor        (const UITextArea* ta);
+void UITextArea_SetSelAnchor        (UITextArea* ta, int anchor);
+/** Vertical scroll offset in pixels — snapshot/restore alongside the caret so a
+ *  rebuild doesn't jump the viewport. */
+float UITextArea_GetScrollY         (const UITextArea* ta);
+/** Screen (window-space) top-left of the glyph at byte offset `pos`, mirroring
+ *  GetCaretScreenPos but for an arbitrary byte. Returns the line top (NOT the
+ *  baseline). Lets a host position overlays (e.g. inline color swatches) against
+ *  any token, off-screen offsets included (clip with the widget bounds). */
+void UITextArea_GetByteScreenPos    (const UITextArea* ta, int pos, float* x, float* y);
+/** The widget's laid-out top-left in window space (cached each render). Combined
+ *  with GetByteScreenPos + GetScrollY a host can derive a token's position
+ *  RELATIVE to the content (scroll-independent), to drive a swatch overlay that
+ *  follows scroll via a single reactive offset instead of re-emitting per frame. */
+void UITextArea_GetContentOrigin    (const UITextArea* ta, float* x, float* y);
+/** Reserve `count` inline gaps: `widths[i]` pixels of empty space inserted just
+ *  before byte `offsets[i]`, shifting that byte and the rest of its line right
+ *  (text before it is unchanged). Used to make room for inline decorations (color
+ *  swatches) so they never overlap a glyph. Pass count=0 to clear. Copies the
+ *  arrays; offsets need not be sorted. */
+void UITextArea_SetInlineGaps        (UITextArea* ta, const int* offsets, const float* widths, int count);
+/** Inline color swatches: draw a small color box before each byte in `offsets`
+ *  (reserving space so it never overlaps text). `colors[i]` is the box fill. The
+ *  box size/gap scale with the font; the boxes follow the text while scrolling.
+ *  Pass count=0 to clear. Copies the arrays. */
+void UITextArea_SetColorSwatches     (UITextArea* ta, const int* offsets, const UIColor* colors, int count);
+/** Fired when a color-swatch box is clicked; `byteOffset` is the token's '#'. */
+typedef void (*UISwatchClickFn)(UITextArea* ta, int byteOffset, void* ud);
+UITextArea* UITextArea_SetOnSwatchClick(UITextArea* ta, UISwatchClickFn cb, void* ud);
+void  UITextArea_SetScrollY         (UITextArea* ta, float y);
 /** Insert `s` at the caret (advances the caret past it; fires onChange). */
 void UITextArea_InsertText          (UITextArea* ta, const char* s);
 /** Edit commands — same effect as the Ctrl+Z/Y/X/C/V/A key handlers, for a menu

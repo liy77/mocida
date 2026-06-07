@@ -180,6 +180,22 @@ static int WidgetCulled(UIWindow* window, UIWidget* el) {
     const float w = *el->width;
     const float h = *el->height;
     if (w <= 0 || h <= 0) return 1;
+    // A free-layout container positions its children at arbitrary absolute
+    // coordinates, so the container's OWN bounds say nothing about where its
+    // children paint (e.g. an overlay wrapper flowed off-screen whose popup card
+    // sits at the cursor, on-screen). Never cull such a container by its own box
+    // — its children get their own per-widget cull test when recursed into.
+    if (el->data) {
+        UIWidgetBase* b = (UIWidgetBase*)el->data;
+        if (UIWidget_TypeIs(b->__widget_type, UI_WIDGET_STACK) &&
+            ((UIStack*)b)->freeLayout) {
+            return 0;
+        }
+        if (UIWidget_TypeIs(b->__widget_type, UI_WIDGET_GLASS) &&
+            ((UIGlass*)b)->freeLayout) {
+            return 0;
+        }
+    }
     int rw = 0, rh = 0;
     SDL_GetWindowSize(window->sdlWindow, &rw, &rh);
     if (el->x + w < 0 || el->y + h < 0 ||
@@ -274,6 +290,10 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
     }
     if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_STACK)) {
         RenderWidget_Stack(window, el, base, op);
+        return;
+    }
+    if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_GLASS)) {
+        RenderWidget_Glass(window, el, base, op);
         return;
     }
     if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_DIALOG)) {

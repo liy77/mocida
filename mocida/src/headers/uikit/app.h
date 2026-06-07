@@ -17,6 +17,8 @@
 #include <uikit/textarea.h>
 #include <uikit/webview.h>
 #include <uikit/stack.h>
+#include <uikit/glass.h>
+#include <uikit/backdrop.h>
 #include <uikit/dialog.h>
 #include <uikit/tab.h>
 #include <uikit/theme.h>
@@ -215,6 +217,32 @@ void        UIApp_SetMaxFpsG(int fps);
 int         UIApp_GetWidthG (void);
 int         UIApp_GetHeightG(void);
 const char* UIApp_GetTitleG (void);
+
+/* ---- Custom (client-side) title bar -------------------------------------
+ * Run the window with a custom title bar instead of the native OS chrome.
+ *
+ * Usage:
+ *   1. BEFORE creating the app, call UIWindow_RequestCustomTitlebar(1) so the
+ *      window is created borderless (still resizable). UIApp_Create then
+ *      installs the hit-test automatically.
+ *   2. Each frame, feed the live bounds of the widget acting as the title bar
+ *      via UIApp_SetDragRegion(x, y, w, h) (window-logical coords). Empty areas
+ *      of that region drag the window (and double-click maximizes); interactive
+ *      widgets (buttons/menus/icons) under the region still receive clicks.
+ *   3. Window edges (6px border) resize the window natively.
+ *   4. Wire the custom min / max-restore / close buttons to the helpers below.
+ *
+ * UIApp_SetCustomTitlebar toggles the chrome + hit-test on an already-created
+ * window (the BORDERLESS flag itself is fixed at create time). */
+void UIApp_SetCustomTitlebar(int on);
+void UIApp_SetDragRegion(float x, float y, float w, float h);
+
+/* Window controls for the custom title bar's buttons. All act on the current
+ * app's window and are no-ops if there is none. */
+void UIApp_MinimizeG(void);        /**< Minimize to the taskbar. */
+void UIApp_ToggleMaximizeG(void);  /**< Maximize <-> restore (respects work area). */
+int  UIApp_IsMaximizedG(void);     /**< 1 if the window is currently maximized. */
+void UIApp_CloseG(void);           /**< Request quit (clean UIApp_Run teardown). */
 
 /**
  * Gets a property of the UIApp object.

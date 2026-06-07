@@ -162,6 +162,16 @@ impl Text {
         self
     }
 
+    /// Fills the glyphs with a 2-stop linear gradient (`c1` → `c2`) instead of
+    /// a flat color. `horizontal = false` → vertical (top → bottom); `true` →
+    /// left → right.
+    pub fn gradient(self, c1: Color, c2: Color, horizontal: bool) -> Self {
+        unsafe {
+            sys::UIText_SetGradient(self.ptr, c1.into_raw(), c2.into_raw(), horizontal as i32);
+        }
+        self
+    }
+
     /// Sets the outer margins (left, top, right, bottom).
     pub fn margins(self, left: f32, top: f32, right: f32, bottom: f32) -> Self {
         unsafe {

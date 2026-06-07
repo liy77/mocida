@@ -36,11 +36,12 @@ use std::rc::Rc;
 use copper_syntax::expr::{BinOp, Expr, ExprKind, Literal, StrPart, StrTemplate};
 use mocida::text::by_ptr;
 use mocida::{
-    Button, Checkbox, Children, Color, Cursor, Dialog, FillMode, FontStyle, Grid, GridView,
+    BackdropMaterial, Button, Checkbox, Children, Color, Cursor, Dialog, FillMode, FontStyle, Glass,
+    GlassThickness, Grid, GridView,
     HorizontalAlign, Image, ListView, MouseArea, MouseAreaEvent, ProgressBar, RadioButton,
     Rectangle, Scroll, Shadow, Signal, Slider, Sound, Spinner, Stack, StackAlign, StackJustify,
     StackOrientation, Switch, Text, TextArea, TextField, TextHAlign, TextVAlign, VerticalAlign,
-    Video, WebView, Widget, WrapMode,
+    VibrancyState, Video, WebView, Widget, WrapMode,
 };
 use mui_syntax::ast::{Element, Handler, HandlerAction, MuiValue, Node, Prop, PropValue, View};
 use mui_syntax::loader::Registry;
@@ -206,12 +207,24 @@ pub struct WindowConfig {
     pub max_height: i32,
     /// Render tuning (desktop). Empty/None = leave the engine default.
     pub renderer: Option<String>,
+    /// Per-OS renderer overrides (from the `.mui` `rendererWindows`/`rendererMacos`/
+    /// `rendererLinux` keys). When the running OS's key is set it wins over
+    /// `renderer`. Resolve with [`WindowConfig::resolved_renderer`].
+    pub renderer_windows: Option<String>,
+    pub renderer_macos: Option<String>,
+    pub renderer_linux: Option<String>,
     pub msaa: Option<i32>,
     pub aa: Option<String>,
     pub render_quality: Option<String>,
     pub taa_blend: Option<f32>,
     /// Window background as 0-255 RGBA.
     pub background: (u8, u8, u8, u8),
+    /// Optional OS window backdrop (`auto`/`off`/`mica`/`acrylic`/…). `None` =
+    /// opaque window.
+    pub backdrop: Option<String>,
+    /// `"custom"` = client-side decorations (borderless; the app paints its own
+    /// title bar). `None`/other = native OS chrome.
+    pub titlebar: Option<String>,
 }
 
 impl Default for WindowConfig {
@@ -227,12 +240,41 @@ impl Default for WindowConfig {
             max_width: 0,
             max_height: 0,
             renderer: None,
+            renderer_windows: None,
+            renderer_macos: None,
+            renderer_linux: None,
             msaa: None,
             aa: None,
             render_quality: None,
             taa_blend: None,
             background: (241, 245, 249, 255),
+            backdrop: None,
+            titlebar: None,
         }
+    }
+}
+
+impl WindowConfig {
+    /// True when the document asked for a custom (client-side) title bar.
+    pub fn wants_custom_titlebar(&self) -> bool {
+        self.titlebar.as_deref().map(|t| {
+            matches!(t.to_ascii_lowercase().as_str(), "custom" | "client" | "none")
+        }).unwrap_or(false)
+    }
+
+    /// The renderer the `.mui` asks for on the CURRENT OS: the per-OS override
+    /// (`rendererWindows`/`rendererMacos`/`rendererLinux`) if set, else the
+    /// cross-platform `renderer`. `None` = leave SDL's default. The `.mui` is
+    /// authoritative — the host does not override this.
+    pub fn resolved_renderer(&self) -> Option<String> {
+        let per_os = if cfg!(target_os = "windows") {
+            &self.renderer_windows
+        } else if cfg!(target_os = "macos") {
+            &self.renderer_macos
+        } else {
+            &self.renderer_linux
+        };
+        per_os.clone().or_else(|| self.renderer.clone())
     }
 }
 
@@ -270,6 +312,9 @@ pub fn window_config(doc: &mui_syntax::ast::Document, entry_view_name: &str) -> 
             cfg.max_height = v;
         }
         cfg.renderer = app.renderer.clone();
+        cfg.renderer_windows = app.renderer_windows.clone();
+        cfg.renderer_macos = app.renderer_macos.clone();
+        cfg.renderer_linux = app.renderer_linux.clone();
         cfg.msaa = app.msaa;
         cfg.aa = app.aa.clone();
         cfg.render_quality = app.render_quality.clone();
@@ -277,8 +322,20 @@ pub fn window_config(doc: &mui_syntax::ast::Document, entry_view_name: &str) -> 
         if let Some(bg) = app.background {
             cfg.background = bg;
         }
+        cfg.backdrop = app.backdrop.clone();
+        cfg.titlebar = app.titlebar.clone();
     }
     cfg
+}
+
+/// Request a custom (client-side) title bar BEFORE the app/window is created,
+/// when the document's `app { titlebar: custom }` asked for one. Must be called
+/// before [`mocida::App::new`] (it sets the borderless window flag at creation).
+/// No-op when native chrome is requested.
+pub fn prefer_custom_titlebar(cfg: &WindowConfig) {
+    if cfg.wants_custom_titlebar() {
+        mocida::app::request_custom_titlebar(true);
+    }
 }
 
 /// Pick the view a document should mount as its root: the `app { entry: }`
@@ -331,7 +388,9 @@ fn renderer_sdl_name(r: &str) -> Option<&'static str> {
 /// renderer to a window), so this sets the `SDL_RENDER_DRIVER` env var that SDL
 /// reads when it creates the renderer. Call before `App::new`.
 pub fn prefer_renderer(cfg: &WindowConfig) {
-    if let Some(name) = cfg.renderer.as_deref().and_then(renderer_sdl_name) {
+    // Honour the .mui's per-OS choice (rendererWindows/Macos/Linux) else its
+    // cross-platform `renderer`. The document is authoritative.
+    if let Some(name) = cfg.resolved_renderer().as_deref().and_then(renderer_sdl_name) {
         std::env::set_var("SDL_RENDER_DRIVER", name);
     }
 }
@@ -375,6 +434,24 @@ pub fn apply_render_config(app: &mut mocida::App, cfg: &WindowConfig) {
     }
     if let Some(b) = cfg.taa_blend {
         app.set_taa_blend(b);
+    }
+}
+
+/// Apply the `app { backdrop: }` setting to the active window. Call AFTER the
+/// app/window is created (`App::new`). Resolves the effect string to a material
+/// (`auto` → platform default) and enables the OS backdrop; `off`/`none`/unset
+/// leaves the window opaque. A no-op when no native compositor effect exists —
+/// the window stays opaque and any in-app `Glass` widgets still paint.
+pub fn apply_backdrop(cfg: &WindowConfig) {
+    let Some(spec) = cfg.backdrop.as_deref() else { return };
+    let material = BackdropMaterial::from_effect(spec);
+    if material == BackdropMaterial::None {
+        return;
+    }
+    if let Some(mut w) = mocida::window::Window::active() {
+        // White/zero-opacity tint = let the OS pick the backdrop's own color;
+        // a tinted window backdrop can be set later via the C API if needed.
+        w.set_backdrop(material, Color::rgba(255, 255, 255, 0.0), 0.0);
     }
 }
 
@@ -809,6 +886,19 @@ fn build_node(ctx: &mut Ctx, node: &Node, layout: &mut Layout) -> Result<Option<
             // Live width/height: a signal-bound dimension updates the widget in
             // place (no rebuild) — see subscribe_reactive_size.
             subscribe_reactive_size(ctx, el, w.as_ptr());
+            // Live x/y: a signal-bound position updates the widget in place too —
+            // used by the color-swatch overlay to follow editor scroll without a
+            // structural rebuild (which would steal the editor's focus).
+            subscribe_reactive_position(ctx, el, w.as_ptr());
+            // Live visibility: `visible: <signal>` shows/hides without a rebuild
+            // (the color picker toggles this instead of a structural `if`).
+            subscribe_reactive_visible(ctx, el, w.as_ptr());
+            // `clip: true` clips children to this widget's box (UIWidget_SetClipChildren)
+            // — the swatch overlay clips so scrolled-out swatches don't paint over the
+            // toolbar/gutter.
+            if prop_bool(el, "clip") == Some(true) && !w.as_ptr().is_null() {
+                unsafe { mocida::sys::UIWidget_SetClipChildren(w.as_ptr(), 1); }
+            }
             Ok(Some(w))
         }
         // Bindings created their signals in `declare_signals`; no widget here.
@@ -888,9 +978,41 @@ fn build_for(
         })
         .map(|el| find_prop(el, "x").is_some() && find_prop(el, "y").is_some())
         .unwrap_or(false);
-    let mut stack = Stack::new(StackOrientation::Vertical)?.spacing(4.0);
+    // The loop normally flows items top-to-bottom (vertical). A `for` whose body
+    // root carries `flow: horizontal` (an explicit opt-in, e.g. a VSCode-style
+    // tab strip) lays the items out left-to-right instead, with no inter-item gap
+    // (the body element owns its own spacing). This is opt-in so existing loops
+    // whose body happens to be a horizontal Stack (the file tree) keep flowing
+    // vertically as before.
+    let body_root = body.iter().find_map(|n| match n {
+        Node::Element(el) => Some(el),
+        _ => None,
+    });
+    let horizontal = body_root
+        .and_then(|el| style::enum_member(el, "flow"))
+        .map(|o| o == "horizontal")
+        .unwrap_or(false);
+    // A horizontal `flow` loop lays its items left-to-right using a real
+    // horizontal Stack (each item flows after the previous), exactly like a
+    // hand-written `Stack(orientation: horizontal)` — the items keep their
+    // natural width and the parent (e.g. a horizontal `Scroll`) can scroll the
+    // overflowing strip. Default (vertical) loops keep their top-to-bottom Stack.
+    let mut stack = Stack::new(if horizontal {
+        StackOrientation::Horizontal
+    } else {
+        StackOrientation::Vertical
+    })?
+    .spacing(if horizontal { 0.0 } else { 4.0 });
+    // `absolute` items (canvas objects with both x/y) still need free layout so
+    // their own positions are honoured; a horizontal flow does NOT.
     if absolute {
         stack = stack.free_layout(true);
+    }
+    // While building the items of a horizontal flow, the parent IS horizontal —
+    // so a child Stack sizes/aligns against the cross (height) axis correctly.
+    let saved_orient = ctx.parent_horizontal;
+    if horizontal {
+        ctx.parent_horizontal = Some(true);
     }
     let saved = ctx.env.vars.get(pattern).cloned();
     // Aux bindings a structured item adds (cleared after the loop).
@@ -936,9 +1058,24 @@ fn build_for(
         }
         let mut item_layout = Layout::root();
         if let Some(w) = build_first(ctx, body, &mut item_layout)? {
-            stack.add(w)?;
-            content_w = content_w.max(item_layout.content_width());
-            content_h += (item_layout.content_height() - layout::ROW_GAP).max(0.0);
+            if horizontal {
+                // Horizontal flow: let the horizontal Stack flow the item after
+                // the previous one (its own width/height come from `place`). Widths
+                // sum; height is the tallest item.
+                let iw = item_layout.content_width().max(0.0);
+                let ih = item_layout.content_height().max(0.0);
+                stack.add(w)?;
+                content_w += iw;
+                content_h = content_h.max(ih);
+            } else {
+                // Vertical (default) flow: add the item to the stack so it
+                // actually paints. (The refactor that added the horizontal
+                // branch accidentally dropped this `stack.add` from the vertical
+                // path, making every for-loop row build but never render.)
+                stack.add(w)?;
+                content_w = content_w.max(item_layout.content_width());
+                content_h += (item_layout.content_height() - layout::ROW_GAP).max(0.0);
+            }
             count += 1;
         }
     }
@@ -954,9 +1091,16 @@ fn build_for(
     for a in &aux {
         ctx.env.vars.remove(a);
     }
+    ctx.parent_horizontal = saved_orient;
 
-    let h = (content_h + 4.0 * (count.saturating_sub(1) as f32)).max(1.0);
-    let w = content_w.max(1.0);
+    let (w, h) = if horizontal {
+        (content_w.max(1.0), content_h.max(1.0))
+    } else {
+        (
+            content_w.max(1.0),
+            (content_h + 4.0 * (count.saturating_sub(1) as f32)).max(1.0),
+        )
+    };
     let (x, y) = layout.next_sized(w, h);
     let widget = stack.into_widget_sized(w, h)?.position(x, y);
     Ok(Some(widget))
@@ -1021,6 +1165,7 @@ fn build_element(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wid
         match el.name.as_str() {
             "Rectangle" | "Rect" | "Box" => build_rectangle(ctx, el, layout)?,
             "Stack" => build_stack(ctx, el, layout)?,
+            "Glass" => build_glass(ctx, el, layout)?,
             "Grid" => build_grid(ctx, el, layout)?,
             "Scroll" => build_scroll(ctx, el, layout)?,
             "ListView" => build_listview(ctx, el, layout)?,
@@ -1084,6 +1229,7 @@ fn is_builtin(name: &str) -> bool {
             | "Rect"
             | "Box"
             | "Stack"
+            | "Glass"
             | "Grid"
             | "Scroll"
             | "ListView"
@@ -1250,6 +1396,17 @@ fn build_rectangle(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
         });
     rect = rect.color(to_color(fill));
 
+    // `gradientTo:` turns the fill into a 2-stop linear gradient from the fill
+    // color to `gradientTo`; `gradientDir: horizontal` (default vertical). Used to
+    // build the color-picker square / hue / alpha bars.
+    if let Some(g2) = color_eval(ctx, el, "gradientTo") {
+        let horizontal = matches!(
+            style::enum_member(el, "gradientDir").as_deref(),
+            Some("horizontal") | Some("h") | Some("x")
+        );
+        rect = rect.gradient(to_color(fill), to_color(g2), horizontal);
+    }
+
     if let Some(r) = style::f32_prop(el, "radius") {
         rect = rect.radius(r);
     }
@@ -1334,6 +1491,7 @@ fn build_rectangle(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
     if let Some(py) = dim_prop(ctx, el, "y") {
         y = py;
     }
+    let rect_ptr = rect.as_ptr();
     let mut widget = rect.into_widget_sized(w, h)?.position(x, y);
     if let Some(op) = style::f32_prop(el, "opacity") {
         widget = widget.opacity(op);
@@ -1341,7 +1499,89 @@ fn build_rectangle(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
     if let Some(rot) = style::f32_prop(el, "rotation") {
         widget = widget.rotation(rot);
     }
+    // Live fill/gradient: when `background`/`gradientTo` are bound to string signals
+    // (the color picker), update the rect's color/gradient in place on change — no
+    // rebuild, so the picker's bars + preview track the drag smoothly.
+    subscribe_reactive_rect_color(ctx, el, rect_ptr);
     Ok(apply_anchor(widget, style::anchor(el)))
+}
+
+/// Parse `#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa` into an Rgba (a 0-255).
+fn rgba_from_hex(s: &str) -> Option<Rgba> {
+    let h = s.trim().trim_start_matches('#');
+    let exp = |c: &str| u8::from_str_radix(c, 16).ok();
+    let (r, g, b, a) = match h.len() {
+        3 => (exp(&h[0..1])? * 17, exp(&h[1..2])? * 17, exp(&h[2..3])? * 17, 255),
+        4 => (exp(&h[0..1])? * 17, exp(&h[1..2])? * 17, exp(&h[2..3])? * 17, exp(&h[3..4])? * 17),
+        6 => (u8::from_str_radix(&h[0..2], 16).ok()?, u8::from_str_radix(&h[2..4], 16).ok()?, u8::from_str_radix(&h[4..6], 16).ok()?, 255),
+        8 => (u8::from_str_radix(&h[0..2], 16).ok()?, u8::from_str_radix(&h[2..4], 16).ok()?, u8::from_str_radix(&h[4..6], 16).ok()?, u8::from_str_radix(&h[6..8], 16).ok()?),
+        _ => return None,
+    };
+    Some(Rgba { r, g, b, a })
+}
+
+/// The string-signal a color prop is bound to (a bare ident), if any.
+fn color_prop_signal(ctx: &Ctx, el: &Element, names: &[&str]) -> Option<Rc<RefCell<Signal<String>>>> {
+    for name in names {
+        if let Some(p) = find_prop(el, name) {
+            if let PropValue::Expr(e) = &p.value {
+                if let ExprKind::Ident(n) = &e.kind {
+                    if let Some(s) = ctx.string_signal(n) {
+                        return Some(s.clone());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Reactively update a Rectangle's flat color / 2-stop gradient when its
+/// `background`/`gradientTo` are bound to string signals (the color picker).
+fn subscribe_reactive_rect_color(ctx: &mut Ctx, el: &Element, ptr: *mut mocida::sys::UIRectangle) {
+    if ptr.is_null() {
+        return;
+    }
+    let bg_sig = color_prop_signal(ctx, el, &["background", "fill", "bg", "color"]);
+    let to_sig = color_prop_signal(ctx, el, &["gradientTo"]);
+    if bg_sig.is_none() && to_sig.is_none() {
+        return;
+    }
+    // Static fallbacks for whichever side ISN'T signal-bound.
+    let static_bg = color_eval(ctx, el, "background")
+        .or_else(|| color_eval(ctx, el, "fill"))
+        .or_else(|| color_eval(ctx, el, "bg"))
+        .or_else(|| color_eval(ctx, el, "color"))
+        .unwrap_or(Rgba { r: 0, g: 0, b: 0, a: 255 });
+    let static_to = color_eval(ctx, el, "gradientTo");
+    let horizontal = matches!(
+        style::enum_member(el, "gradientDir").as_deref(),
+        Some("horizontal") | Some("h") | Some("x")
+    );
+    let has_grad = to_sig.is_some() || static_to.is_some();
+    let bg_ptr = bg_sig.as_ref().map(|s| s.borrow().as_ptr());
+    let to_ptr = to_sig.as_ref().map(|s| s.borrow().as_ptr());
+    let updater = move || unsafe {
+        let c1 = match bg_ptr {
+            Some(p) => rgba_from_hex(&str_from_signal(p)).unwrap_or(static_bg),
+            None => static_bg,
+        };
+        if has_grad {
+            let c2 = match to_ptr {
+                Some(p) => rgba_from_hex(&str_from_signal(p)).unwrap_or(static_to.unwrap_or(static_bg)),
+                None => static_to.unwrap_or(static_bg),
+            };
+            mocida::sys::UIRectangle_SetGradient(ptr, to_color(c1).into_raw(), to_color(c2).into_raw(), horizontal as i32);
+        } else {
+            mocida::sys::UIRectangle_SetColor(ptr, to_color(c1).into_raw());
+        }
+    };
+    for sig in [bg_sig, to_sig].into_iter().flatten() {
+        let u = updater.clone();
+        if let Ok(sub) = sig.borrow_mut().subscribe(move |_: &Signal<String>| u()) {
+            ctx.reactive._subs.push(sub);
+        }
+    }
 }
 
 fn build_stack(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
@@ -1373,10 +1613,13 @@ fn build_stack(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
         stack = stack.align(al);
     }
     // Main-axis distribution of children (`justify: center`/`end`/`spaceBetween`).
+    // `enum_member` lowercases the token, so match lowercased keywords — otherwise
+    // `spaceBetween` arrives as `spacebetween` and silently falls through to start
+    // (the long-standing right-pin bug in the Agents header).
     let justify = style::enum_member(el, "justify").and_then(|a| match a.as_str() {
         "center" | "middle" => Some(StackJustify::Center),
         "end" => Some(StackJustify::End),
-        "spaceBetween" | "between" | "space-between" => Some(StackJustify::SpaceBetween),
+        "spacebetween" | "between" | "space-between" => Some(StackJustify::SpaceBetween),
         "start" => Some(StackJustify::Start),
         _ => None,
     });
@@ -1388,6 +1631,12 @@ fn build_stack(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     // own x/y instead of flowing them — otherwise this stack's normal layout
     // would overwrite the child's position with the flow cursor. Mirrors the
     // for-loop's free-layout detection.
+    // Look through `if`/`else` (and `for`) branches too: an overlay is authored
+    // as `if open == "1" { Stack(x: …, y: …) { … } }`, so the absolutely-placed
+    // node is the FIRST element of a conditional branch, not a direct child. A
+    // parent that hosts such overlays (e.g. the editor root) must therefore be
+    // free-layout, or the conditional wrapper gets flowed off-screen by the
+    // parent's normal vertical layout and its absolute children never show.
     let child_absolute = el.children.iter().any(|n| match n {
         Node::Element(child) => {
             find_prop(child, "x").is_some() && find_prop(child, "y").is_some()
@@ -1465,9 +1714,58 @@ fn build_stack(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     let mut content_w: f32 = 0.0;
     let mut content_h: f32 = 0.0;
     let mut count: usize = 0;
+
+    // `dismiss: "signal"` turns this container into a dismissible popup: a full-window
+    // click-catcher is inserted BEHIND the content; a press OUTSIDE the first child's
+    // bounds sets the signal to "0" (closing the `if signal == "1"` that gates it).
+    // Clicks on the popup's own widgets capture first (dispatch stops); clicks on the
+    // popup's empty padding fall to the catcher but test inside-bounds → no close.
+    let dismiss_sig = prop_string_value(ctx, el, "dismiss").and_then(|n| ctx.string_signal(&n).cloned());
+    let card_ptr: std::rc::Rc<std::cell::Cell<usize>> = std::rc::Rc::new(std::cell::Cell::new(0));
+    if let Some(sig) = &dismiss_sig {
+        let cp = card_ptr.clone();
+        let s = sig.clone();
+        let catcher_ma = MouseArea::new()?
+            .on(MouseAreaEvent::MouseDown, move |ev| {
+                let p = cp.get() as *mut mocida::sys::UIWidget;
+                if p.is_null() { return; }
+                let inside = unsafe {
+                    let wx = (*p).x;
+                    let wy = (*p).y;
+                    let ww = if (*p).width.is_null() { 0.0 } else { *(*p).width };
+                    let wh = if (*p).height.is_null() { 0.0 } else { *(*p).height };
+                    ev.x >= wx && ev.x < wx + ww && ev.y >= wy && ev.y < wy + wh
+                };
+                if !inside {
+                    let _ = s.borrow_mut().set("0".to_string());
+                }
+            });
+        // The popup is ALWAYS rendered (hidden via `visible`), so this full-window
+        // catcher persists and would eat every editor click. Enable it only while the
+        // popup is shown (signal == "1"). Safe: the catcher isn't freed on close
+        // (always-rendered); on an EditorScreen rebuild the old subscription drops with
+        // the old reactive before it could fire on a stale pointer.
+        let catcher_ptr = catcher_ma.as_ptr();
+        let truthy = |v: &str| !(v.is_empty() || v == "0" || v == "false");
+        let sp = sig.borrow().as_ptr();
+        unsafe { mocida::sys::UIMouseArea_SetEnabled(catcher_ptr, if truthy(&str_from_signal(sp)) { 1 } else { 0 }); }
+        let upd = move || unsafe {
+            mocida::sys::UIMouseArea_SetEnabled(catcher_ptr, if truthy(&str_from_signal(sp)) { 1 } else { 0 });
+        };
+        if let Ok(sub) = sig.borrow_mut().subscribe(move |_| upd()) {
+            ctx.reactive._subs.push(sub);
+        }
+        let catcher = catcher_ma.into_widget_sized(100000.0, 100000.0)?.position(0.0, 0.0);
+        stack.add(catcher)?;
+    }
+
     for node in &el.children {
         let mut child_layout = Layout::root();
         if let Some(mut widget) = build_node(ctx, node, &mut child_layout)? {
+            // Record the first child's widget so the dismiss catcher can bounds-test it.
+            if dismiss_sig.is_some() && card_ptr.get() == 0 {
+                card_ptr.set(widget.as_ptr() as usize);
+            }
             // A child with its own `align` positions itself on the cross axis,
             // overriding the stack's `align` for that child.
             if let Some(a) = child_self_align(node) {
@@ -1519,6 +1817,186 @@ fn build_stack(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     Ok(apply_anchor(widget, style::anchor(el)))
 }
 
+/// `Glass(effect:, radius:, tint:, tintOpacity:, blur:, …)` → `mocida::Glass`.
+/// A region-backdrop container: lays children exactly like a `Stack` but paints
+/// a glass background. Native OS region effects aren't wired per-widget (the
+/// window-wide backdrop is — see `app { backdrop }`); the widget renders the
+/// in-app tinted approximation, which is also the universal fallback.
+fn build_glass(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
+    // --- material + glass styling ---
+    let effect = style::enum_member(el, "effect").unwrap_or_else(|| "auto".to_string());
+    let material = BackdropMaterial::from_effect(&effect);
+    if material.is_window_wide() {
+        eprintln!(
+            "Glass: effect \"{effect}\" is a window-wide material — it belongs in \
+             `app {{ backdrop: \"{effect}\" }}`, not a Glass widget. Rendering the \
+             in-app fallback instead."
+        );
+    }
+
+    let mut glass = Glass::new(material)?;
+    if let Some(r) = style::f32_prop(el, "radius") {
+        glass = glass.radius(r);
+    }
+    // tint + tintOpacity are the two universal knobs.
+    if let Some(t) = style::color_prop(el, "tint").or_else(|| style::fill_only(el)) {
+        glass = glass.tint(to_color(t));
+    }
+    if let Some(o) = style::f32_prop(el, "tintOpacity") {
+        glass = glass.tint_opacity(o);
+    }
+    if let Some(th) = style::enum_member(el, "thickness") {
+        let thickness = match th.as_str() {
+            "thin" => Some(GlassThickness::Thin),
+            "thick" => Some(GlassThickness::Thick),
+            "regular" | "medium" => Some(GlassThickness::Regular),
+            _ => None,
+        };
+        if let Some(t) = thickness {
+            glass = glass.thickness(t);
+        }
+    }
+    // Effect-specific knobs (applied best-effort; the C side ignores those the
+    // active material doesn't understand).
+    if let Some(b) = style::f32_prop(el, "blur") {
+        glass = glass.blur(b);
+    }
+    if let Some(r) = style::f32_prop(el, "refraction") {
+        glass = glass.refraction(r);
+    }
+    if let Some(n) = style::f32_prop(el, "noise") {
+        glass = glass.noise(n);
+    }
+    if let Some(s) = style::enum_member(el, "state") {
+        let st = match s.as_str() {
+            "inactive" => Some(VibrancyState::Inactive),
+            "pressed" => Some(VibrancyState::Pressed),
+            "active" => Some(VibrancyState::Active),
+            _ => None,
+        };
+        if let Some(v) = st {
+            glass = glass.vibrancy_state(v);
+        }
+    }
+
+    // --- layout (identical model to build_stack) ---
+    let horizontal = matches!(
+        style::enum_member(el, "orientation").as_deref(),
+        Some("horizontal")
+    );
+    let gap = style::f32_prop(el, "gap").unwrap_or(8.0);
+    let (pl, pt, pr, pb) = style::box_spacing(el, "padding").unwrap_or((0.0, 0.0, 0.0, 0.0));
+    glass = glass.horizontal(horizontal).spacing(gap);
+    if pl != 0.0 || pt != 0.0 || pr != 0.0 || pb != 0.0 {
+        glass = glass.padding(pl, pt, pr, pb);
+    }
+
+    let align = style::enum_member(el, "align").and_then(|a| match a.as_str() {
+        "center" | "middle" => Some(1),
+        "end" | "right" | "bottom" => Some(2),
+        "start" | "left" | "top" => Some(0),
+        _ => None,
+    });
+    if let Some(al) = align {
+        glass = glass.align(al);
+    }
+    let justify = style::enum_member(el, "justify").and_then(|a| match a.as_str() {
+        "center" | "middle" => Some(1),
+        "end" => Some(2),
+        "spacebetween" | "between" | "space-between" => Some(3),
+        "start" => Some(0),
+        _ => None,
+    });
+    if let Some(j) = justify {
+        glass = glass.justify(j);
+    }
+
+    let child_absolute = el.children.iter().any(|n| match n {
+        Node::Element(child) => {
+            find_prop(child, "x").is_some() && find_prop(child, "y").is_some()
+        }
+        _ => false,
+    });
+    if child_absolute {
+        glass = glass.free_layout(true);
+    }
+
+    let cross_fill = matches!(align, Some(1) | Some(2));
+    let main_fill = matches!(justify, Some(1) | Some(2) | Some(3));
+    let width_free = ctx.parent_horizontal != Some(true);
+    let height_free = ctx.parent_horizontal != Some(false);
+    let fill_w = (if horizontal { main_fill } else { cross_fill }) && width_free;
+    let fill_h = (if horizontal { cross_fill } else { main_fill }) && height_free;
+
+    ctx.declare_signals(&el.children);
+
+    let explicit_w = dim_prop(ctx, el, "width");
+    let explicit_h = dim_prop(ctx, el, "height");
+    let self_w_known = explicit_w.or(if fill_w && ctx.avail_w > 0.0 {
+        Some(ctx.avail_w)
+    } else {
+        None
+    });
+    let self_h_known = explicit_h.or(if fill_h && ctx.avail_h > 0.0 {
+        Some(ctx.avail_h)
+    } else {
+        None
+    });
+
+    let saved_avail = (ctx.avail_w, ctx.avail_h);
+    let saved_orient = ctx.parent_horizontal;
+    ctx.avail_w = (self_w_known.unwrap_or(ctx.avail_w) - pl - pr).max(0.0);
+    ctx.avail_h = (self_h_known.unwrap_or(ctx.avail_h) - pt - pb).max(0.0);
+    ctx.parent_horizontal = Some(horizontal);
+
+    let mut content_w: f32 = 0.0;
+    let mut content_h: f32 = 0.0;
+    let mut count: usize = 0;
+    for node in &el.children {
+        let mut child_layout = Layout::root();
+        if let Some(mut widget) = build_node(ctx, node, &mut child_layout)? {
+            if let Some(a) = child_self_align(node) {
+                widget = widget.self_align(a);
+            }
+            let (ml, mt, mr, mb) = child_margin(node);
+            if ml != 0.0 || mt != 0.0 || mr != 0.0 || mb != 0.0 {
+                widget = widget.margin(ml, mt, mr, mb);
+            }
+            glass.add(widget)?;
+            let cw = child_layout.content_width();
+            let ch = (child_layout.content_height() - layout::ROW_GAP).max(0.0);
+            if horizontal {
+                content_w += cw + ml + mr;
+                content_h = content_h.max(ch + mt + mb);
+            } else {
+                content_h += ch + mt + mb;
+                content_w = content_w.max(cw + ml + mr);
+            }
+            count += 1;
+        }
+    }
+    ctx.avail_w = saved_avail.0;
+    ctx.avail_h = saved_avail.1;
+    ctx.parent_horizontal = saved_orient;
+
+    let gaps = gap * (count.saturating_sub(1) as f32);
+    let (inner_w, inner_h) = if horizontal {
+        (content_w + gaps, content_h)
+    } else {
+        (content_w, content_h + gaps)
+    };
+    let w = self_w_known.unwrap_or((inner_w + pl + pr).max(1.0));
+    let h = self_h_known.unwrap_or((inner_h + pt + pb).max(1.0));
+    let (mut x, mut y) = place(el, layout, w, h);
+    if let Some(px) = dim_prop(ctx, el, "x") { x = px; }
+    if let Some(py) = dim_prop(ctx, el, "y") { y = py; }
+    let mut widget = glass.into_widget_sized(w, h)?.position(x, y);
+    if let Some(op) = style::f32_prop(el, "opacity") {
+        widget = widget.opacity(op);
+    }
+    Ok(apply_anchor(widget, style::anchor(el)))
+}
+
 /// `Text(label, size:, color:)` → `mocida::Text`. When the label interpolates
 /// signals (`${count}`), subscribe the widget so it re-renders on change.
 fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
@@ -1557,6 +2035,16 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
         }
     });
     let mut text = Text::new(&label, size)?.color(color);
+    // Gradient fill: `gradientFrom:`/`gradientTo:` (aliases `gradientTop:`/
+    // `gradientBottom:`) set a 2-stop gradient over the glyphs. Vertical
+    // (top→bottom) by default; `gradientHorizontal: true` makes it left→right.
+    if let (Some(c1), Some(c2)) = (
+        color_eval(ctx, el, "gradientFrom").or_else(|| color_eval(ctx, el, "gradientTop")),
+        color_eval(ctx, el, "gradientTo").or_else(|| color_eval(ctx, el, "gradientBottom")),
+    ) {
+        let horizontal = prop_bool(el, "gradientHorizontal").unwrap_or(false);
+        text = text.gradient(to_color(c1), to_color(c2), horizontal);
+    }
     // Typography: weight / fontStyle / font family.
     text = apply_text_font(text, el)?;
     // Alignment + wrapping within the widget bounds.
@@ -1972,7 +2460,27 @@ fn build_textarea(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
     if let Some(ls) = style::f32_prop(el, "lineSpacing") {
         ta = ta.line_spacing(ls);
     }
-    if let Some(wm) = style::enum_member(el, "wrap").and_then(|s| wrap_from(&s)) {
+    // `wrap:` accepts a literal enum (`wrap: word` / `wrap: none`) OR a bound
+    // STRING signal whose value is one of those keywords (`wrap: word_wrap`,
+    // where the host writes "word"/"none"). For the signal case we read the
+    // live value for the INITIAL mode here and subscribe below so toggling the
+    // signal reflows the wrap in place (no structural rebuild → keeps focus).
+    let wrap_sig: Option<String> = match find_prop(el, "wrap").map(|p| &p.value) {
+        Some(PropValue::Expr(e)) => match &e.kind {
+            ExprKind::Ident(name) if ctx.string_signal(name).is_some() => Some(name.clone()),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(name) = &wrap_sig {
+        // Initial mode from the signal's current value.
+        if let Some(sig) = ctx.string_signal(name) {
+            let cur = sig.borrow().get();
+            if let Some(wm) = wrap_from(&cur) {
+                ta = ta.wrap_mode(wm);
+            }
+        }
+    } else if let Some(wm) = style::enum_member(el, "wrap").and_then(|s| wrap_from(&s)) {
         ta = ta.wrap_mode(wm);
     }
     if let Some(fam) = style::font_family(el) {
@@ -2106,6 +2614,32 @@ fn build_textarea(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
                 if v > 0.0 {
                     unsafe { mocida::sys::UITextArea_SetFontSize(ta_ptr, v) };
                 }
+            }) {
+                ctx.reactive._subs.push(sub);
+            }
+        }
+    }
+
+    // Reactive wrap: when `wrap:` is bound to a string signal, re-apply the
+    // wrap mode IN PLACE whenever it changes (e.g. a status-bar "Word Wrap"
+    // toggle). UITextArea_SetWrapMode invalidates the line cache so the text
+    // reflows on the next render WITHOUT a structural rebuild — the editor
+    // keeps focus / caret / scroll. The host writes "word" or "none".
+    if let Some(name) = &wrap_sig {
+        if let Some(sig) = ctx.reactive.strings.get(name) {
+            let sptr = sig.borrow().as_ptr();
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_: &Signal<String>| {
+                let val = unsafe { str_from_signal(sptr) };
+                let mode = match wrap_from(&val) {
+                    Some(WrapMode::None) => 0,
+                    Some(WrapMode::Word) => 1,
+                    Some(WrapMode::Char) => 2,
+                    Some(WrapMode::Fit) => 3,
+                    None => return,
+                };
+                unsafe {
+                    mocida::sys::UITextArea_SetWrapMode(ta_ptr, mocida::sys::UIWrapMode(mode));
+                };
             }) {
                 ctx.reactive._subs.push(sub);
             }
@@ -2782,6 +3316,19 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
             }
         });
     }
+    // `clickXSignal`/`clickYSignal: "name"` write the press position (absolute
+    // renderer coords) into int signals — the color picker maps a click in the
+    // sat/val square / hue bar to a value. Press-based (not drag) so the popup can
+    // rebuild on each pick without cancelling an in-flight drag.
+    let click_x_sig = prop_string_value(ctx, el, "clickXSignal").and_then(|n| ctx.signal(&n).cloned());
+    let click_y_sig = prop_string_value(ctx, el, "clickYSignal").and_then(|n| ctx.signal(&n).cloned());
+    if click_x_sig.is_some() || click_y_sig.is_some() {
+        area = area.on(MouseAreaEvent::MouseDown, move |ev| {
+            if let Some(s) = &click_x_sig { let _ = s.borrow_mut().set(ev.x.round() as i32); }
+            if let Some(s) = &click_y_sig { let _ = s.borrow_mut().set(ev.y.round() as i32); }
+        });
+    }
+
     const EVENTS: &[(&str, MouseAreaEvent)] = &[
         ("onClick", MouseAreaEvent::MouseUp),
         ("onRelease", MouseAreaEvent::MouseUp),
@@ -2801,17 +3348,88 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
         ("onDrag", MouseAreaEvent::Drag),
         ("onDragEnd", MouseAreaEvent::DragEnd),
     ];
+    // `onRightClick: { … }` — recognised state mutations on a RIGHT mouse-button
+    // RELEASE (button == 3), so the host can pop a context menu. Using the release
+    // (not the press) means the matching button-up of the very same right-click
+    // can't immediately re-close a freshly opened popup via its full-window
+    // dismiss layer. Optional `rightClickXSignal`/`rightClickYSignal: "name"`
+    // capture the position (absolute renderer coords) into int signals so the menu
+    // can be placed at the cursor. Because MouseUp is a single callback slot, the
+    // left-button `onClick` and the right-button `onRightClick` are merged into
+    // ONE MouseUp handler dispatched by button (registering both separately would
+    // have the later one clobber the earlier).
+    let rc_x_sig =
+        prop_string_value(ctx, el, "rightClickXSignal").and_then(|n| ctx.signal(&n).cloned());
+    let rc_y_sig =
+        prop_string_value(ctx, el, "rightClickYSignal").and_then(|n| ctx.signal(&n).cloned());
+    let mut rc_handler = handler_apply_closure(ctx, el, "onRightClick");
+    let has_right = rc_handler.is_some() || rc_x_sig.is_some() || rc_y_sig.is_some();
+
     for (prop, ev) in EVENTS {
+        // MouseUp is handled below when an onRightClick is present (so the two
+        // can share the single slot); skip the plain registration here.
+        if has_right && *ev == MouseAreaEvent::MouseUp {
+            continue;
+        }
         if let Some(mut f) = handler_apply_closure(ctx, el, prop) {
             area = area.on(*ev, move |_| f());
         }
     }
+
+    if has_right {
+        // The left-button release handler (onClick/onRelease/onMouseUp), if any.
+        let mut up = handler_apply_closure(ctx, el, "onClick")
+            .or_else(|| handler_apply_closure(ctx, el, "onRelease"))
+            .or_else(|| handler_apply_closure(ctx, el, "onMouseUp"));
+        area = area.on(MouseAreaEvent::MouseUp, move |ev| {
+            if ev.button == 3 {
+                if let Some(s) = &rc_x_sig {
+                    let _ = s.borrow_mut().set(ev.x.round() as i32);
+                }
+                if let Some(s) = &rc_y_sig {
+                    let _ = s.borrow_mut().set(ev.y.round() as i32);
+                }
+                if let Some(f) = &mut rc_handler {
+                    f();
+                }
+            } else if let Some(f) = &mut up {
+                f();
+            }
+        });
+    }
+    // `hoverBackground:` — recolor the visible card on hover (the MouseArea
+    // itself is invisible; the wrapping Rectangle is the card). We grab the
+    // rect's raw pointer and flip its fill on HoverEnter/HoverExit via
+    // UIRectangle_SetColor. The pointer stays valid for the tree's lifetime
+    // (the MouseArea is the rect's own child), so the 'static callbacks are
+    // safe. Gives the VSCode/JetBrains title-bar buttons their hover state
+    // (subtle grey; red for close) without a structural rebuild.
+    if let Some(hover_bg) = style::color_prop(el, "hoverBackground") {
+        let rect_ptr = rect.as_ptr();
+        let normal = to_color(style::background(el).unwrap_or(Rgba { r: 0, g: 0, b: 0, a: 0 }));
+        let hover = to_color(hover_bg);
+        let p_enter = rect_ptr as usize;
+        let p_exit = rect_ptr as usize;
+        area = area.on(MouseAreaEvent::HoverEnter, move |_| unsafe {
+            mocida::sys::UIRectangle_SetColor(p_enter as *mut _, hover.into_raw());
+        });
+        area = area.on(MouseAreaEvent::HoverExit, move |_| unsafe {
+            mocida::sys::UIRectangle_SetColor(p_exit as *mut _, normal.into_raw());
+        });
+    }
+
     let area_widget = area
         .into_widget_sized(w, h)?
         .margin(0.0, -content_h, 0.0, 0.0);
     rect.add_child(area_widget);
 
-    let (x, y) = place(el, layout, w, h);
+    // Absolute placement: honour `x:`/`y:` (resolved via dim_prop so they can be
+    // bound vars/signals — e.g. a color-swatch overlay item positioned from a
+    // for-loop aux var), mirroring build_rectangle. Without this a MouseArea only
+    // flow-positions, so an absolutely-placed clickable box piled at the origin.
+    let (mut x, mut y) = place(el, layout, w, h);
+    if let Some(px) = dim_prop(ctx, el, "x") { x = px; }
+    if let Some(py) = dim_prop(ctx, el, "y") { y = py; }
     Ok(apply_anchor(
         rect.into_widget_sized(w, h)?.position(x, y),
         style::anchor(el),
@@ -2883,6 +3501,19 @@ fn build_scroll(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
         scroll = scroll.scrollbar_style(thumb, track, bar_width.unwrap_or(8.0));
     }
 
+    // `scrollX:` may bind an int signal — the host drives the horizontal scroll
+    // offset (e.g. to reveal the active tab in a VSCode-style strip). Whenever the
+    // signal changes we push it onto the live UIScroll (no rebuild, re-entrancy
+    // safe: read the C int, set the C scroll; mirrors build_progressbar).
+    let scrollx_signal: Option<String> = find_prop(el, "scrollX")
+        .and_then(|p| match &p.value {
+            PropValue::Expr(e) => Some(names_read(e)),
+            _ => None,
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .find(|n| ctx.signal(n).is_some());
+
     let gap = style::f32_prop(el, "gap").unwrap_or(8.0);
     let mut inner = Stack::new(StackOrientation::Vertical)?.spacing(gap);
     ctx.declare_signals(&el.children);
@@ -2903,6 +3534,28 @@ fn build_scroll(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
     let iw = content_w.max(1.0);
     let ih = (content_h + gaps).max(1.0);
     scroll = scroll.content(inner.into_widget_sized(iw, ih)?);
+
+    // Host-driven scroll offset: subscribe the bound signal to UIScroll_SetScroll.
+    // We ALSO apply the signal's current value at build time so a structural
+    // rebuild (the tab `for` re-runs whenever open_tabs changes) restores the
+    // scroll position — otherwise the fresh Scroll starts at 0 and the signal,
+    // already holding the target value, never fires its subscriber again.
+    let scroll_ptr = scroll.as_ptr();
+    if let Some(name) = &scrollx_signal {
+        if let Some(sig) = ctx.reactive.signals.get(name) {
+            let cur = sig.borrow().get() as f32;
+            if cur != 0.0 {
+                unsafe { mocida::sys::UIScroll_SetScroll(scroll_ptr, cur, 0.0) };
+            }
+            let sig_ptr = sig.borrow().as_ptr();
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_: &Signal<i32>| {
+                let v = unsafe { mocida::sys::UISignal_GetInt(sig_ptr) } as f32;
+                unsafe { mocida::sys::UIScroll_SetScroll(scroll_ptr, v, 0.0) };
+            }) {
+                ctx.reactive._subs.push(sub);
+            }
+        }
+    }
 
     let w = dim_prop(ctx, el, "width").unwrap_or_else(|| iw.max(120.0));
     let h = dim_prop(ctx, el, "height").unwrap_or(200.0);
@@ -3341,11 +3994,15 @@ fn handler_apply_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn 
             StrAction::TwoWay { .. } => {}
         }
     }
-    // `App.setTitle(…)` / `Screen.alwaysOnTop = …` etc. (a global side effect,
-    // not a signal set).
-    let screen_raw = if handler.raw.contains("App.")
-        || handler.raw.contains("Window.")
-        || handler.raw.contains("Screen.")
+    // `App.setTitle(…)` / `App.minimize()` / `Screen.alwaysOnTop = …` etc. (a
+    // global side effect, not a signal set). The handler `raw` is the tokenizer
+    // round-trip, which inserts spaces around punctuation ("App . minimize ( )"),
+    // so we match on whitespace-stripped text — otherwise `contains("App.")`
+    // never fires for a re-serialized handler.
+    let raw_nospace: String = handler.raw.chars().filter(|c| !c.is_whitespace()).collect();
+    let screen_raw = if raw_nospace.contains("App.")
+        || raw_nospace.contains("Window.")
+        || raw_nospace.contains("Screen.")
     {
         Some(handler.raw.clone())
     } else {
@@ -4165,6 +4822,129 @@ fn eval_f32_live(e: &Expr, vals: &HashMap<String, f32>) -> Option<f32> {
 /// mocida re-lays-out from child sizes every render frame, so the change applies
 /// LIVE — no tree rebuild (which is what makes drag-resize smooth, and avoids
 /// cancelling an in-flight MouseArea drag). Called once per element at build.
+/// Live position: mirrors [`subscribe_reactive_size`] but writes the widget's
+/// `x`/`y` (plain f32 fields, not pointers) when a signal-bound `x:`/`y:` changes,
+/// so the widget moves WITHOUT a structural rebuild. The swatch overlay binds its
+/// `y:` to `editorTop - scrollY` and updates that one signal each frame.
+fn subscribe_reactive_position(ctx: &mut Ctx, el: &Element, ptr: *mut mocida::sys::UIWidget) {
+    if ptr.is_null() {
+        return;
+    }
+    let expr_of = |name: &str| match find_prop(el, name).map(|p| &p.value) {
+        Some(PropValue::Expr(e)) => Some(e.clone()),
+        _ => None,
+    };
+    let x_expr = expr_of("x");
+    let y_expr = expr_of("y");
+    if x_expr.is_none() && y_expr.is_none() {
+        return;
+    }
+    let mut reads: Vec<String> = Vec::new();
+    if let Some(e) = &x_expr {
+        reads.extend(names_read(e));
+    }
+    if let Some(e) = &y_expr {
+        reads.extend(names_read(e));
+    }
+    reads.retain(|n| ctx.signal(n).is_some() || ctx.string_signal(n).is_some());
+    reads.sort();
+    reads.dedup();
+    if reads.is_empty() {
+        return;
+    }
+    let baked: HashMap<String, f32> = ctx
+        .env
+        .vars
+        .iter()
+        .filter_map(|(k, v)| v.parse::<f32>().ok().map(|f| (k.clone(), f)))
+        .collect();
+    let int_ptrs: Vec<(String, *mut mocida::sys::UISignal)> = reads
+        .iter()
+        .filter_map(|n| ctx.signal(n).map(|s| (n.clone(), s.borrow().as_ptr())))
+        .collect();
+    let str_ptrs: Vec<(String, *mut mocida::sys::UISignal)> = reads
+        .iter()
+        .filter_map(|n| ctx.string_signal(n).map(|s| (n.clone(), s.borrow().as_ptr())))
+        .collect();
+    let updater = move || {
+        let mut vals = baked.clone();
+        for (n, p) in &int_ptrs {
+            vals.insert(n.clone(), unsafe { mocida::sys::UISignal_GetInt(*p) } as f32);
+        }
+        for (n, p) in &str_ptrs {
+            if let Ok(f) = unsafe { str_from_signal(*p) }.parse::<f32>() {
+                vals.insert(n.clone(), f);
+            }
+        }
+        // SAFETY: `ptr` is a live UIWidget owned by the tree; x/y are plain cells.
+        unsafe {
+            if let Some(e) = &x_expr {
+                if let Some(v) = eval_f32_live(e, &vals) {
+                    (*ptr).x = v;
+                }
+            }
+            if let Some(e) = &y_expr {
+                if let Some(v) = eval_f32_live(e, &vals) {
+                    (*ptr).y = v;
+                }
+            }
+        }
+    };
+    let mut subs = Vec::new();
+    for n in &reads {
+        let u = updater.clone();
+        if let Some(sig) = ctx.signal(n) {
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_| u()) {
+                subs.push(sub);
+            }
+        } else if let Some(sig) = ctx.string_signal(n) {
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_| u()) {
+                subs.push(sub);
+            }
+        }
+    }
+    ctx.reactive._subs.extend(subs);
+}
+
+/// Make a widget's visibility REACTIVE: `visible: <ident>` bound to a signal toggles
+/// the widget (and its children) in place — no structural rebuild. A string signal is
+/// truthy unless "", "0" or "false"; an int signal is truthy when non-zero. Used so a
+/// popup (e.g. the color picker) can show/hide without rebuilding the editor (which
+/// flickers + steals focus). Called once per element at build.
+fn subscribe_reactive_visible(ctx: &mut Ctx, el: &Element, ptr: *mut mocida::sys::UIWidget) {
+    if ptr.is_null() {
+        return;
+    }
+    let name = match find_prop(el, "visible").map(|p| &p.value) {
+        Some(PropValue::Expr(e)) => match &e.kind {
+            ExprKind::Ident(n) => Some(n.clone()),
+            _ => None,
+        },
+        _ => None,
+    };
+    let Some(name) = name else { return };
+    let truthy = |s: &str| !(s.is_empty() || s == "0" || s == "false");
+    if let Some(sig) = ctx.string_signal(&name).cloned() {
+        let p = sig.borrow().as_ptr();
+        unsafe { (*ptr).visible = if truthy(&str_from_signal(p)) { 1 } else { 0 }; }
+        let updater = move || unsafe {
+            (*ptr).visible = if truthy(&str_from_signal(p)) { 1 } else { 0 };
+        };
+        if let Ok(sub) = sig.borrow_mut().subscribe(move |_| updater()) {
+            ctx.reactive._subs.push(sub);
+        }
+    } else if let Some(sig) = ctx.signal(&name).cloned() {
+        let p = sig.borrow().as_ptr();
+        unsafe { (*ptr).visible = if mocida::sys::UISignal_GetInt(p) != 0 { 1 } else { 0 }; }
+        let updater = move || unsafe {
+            (*ptr).visible = if mocida::sys::UISignal_GetInt(p) != 0 { 1 } else { 0 };
+        };
+        if let Ok(sub) = sig.borrow_mut().subscribe(move |_| updater()) {
+            ctx.reactive._subs.push(sub);
+        }
+    }
+}
+
 fn subscribe_reactive_size(ctx: &mut Ctx, el: &Element, ptr: *mut mocida::sys::UIWidget) {
     if ptr.is_null() {
         return;
@@ -4385,6 +5165,13 @@ fn dispatch_host_call(field: &str, args: &[Expr]) {
                 unsafe { mocida::sys::UIApp_SetAlwaysOnTop(b as i32) };
             }
         }
+        // Custom title-bar window controls (no args). `App.minimize()`,
+        // `App.maximize()` (toggle maximize/restore), `App.close()`/`quit()`.
+        "minimize" => unsafe { mocida::sys::UIApp_MinimizeG() },
+        "maximize" | "toggleMaximize" | "restore" => unsafe {
+            mocida::sys::UIApp_ToggleMaximizeG()
+        },
+        "close" | "quit" => unsafe { mocida::sys::UIApp_CloseG() },
         _ => {}
     }
 }

@@ -3,6 +3,7 @@
 #include <uikit/text.h>
 #include <uikit/window.h>
 #include <uikit/stack.h>
+#include <uikit/glass.h>
 #include <uikit/container.h>
 #include <uikit/rect.h>
 #include <uikit/font.h>
@@ -481,6 +482,7 @@ static UIChildren* TF_ContainerChildren(UIWidget* w) {
     UIWidgetBase* base = (UIWidgetBase*)w->data;
     const char* t = base->__widget_type;
     if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;
+    if (strcmp(t, UI_WIDGET_GLASS) == 0)     return ((UIGlass*)base)->items;
     if (strcmp(t, UI_WIDGET_GRID) == 0)      return ((UIGrid*)base)->items;
     if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) return (UIChildren*)((UIRectangle*)base)->children;
     // Descend into scroll content so text fields inside a Scroll get events.

@@ -28,6 +28,14 @@ typedef struct {
     int hasShadow;
     UIShadow shadow;           /**< Shadow parameters (offset, blur, spread, color). */
 
+    /** 2-stop linear gradient fill (instead of the flat `color`) — set via
+     *  UIRectangle_SetGradient. Drawn as a colored quad (per-corner colors) so it
+     *  honours alpha (used to build a color-picker square/bars). */
+    int     hasGradient;
+    UIColor gradColor1;        /**< Start (top, or left when horizontal). */
+    UIColor gradColor2;        /**< End (bottom, or right when horizontal). */
+    int     gradHorizontal;    /**< 1 = left→right, 0 = top→bottom. */
+
     /**
      * Optional inner content. A rectangle is the most basic container:
      * any widget added via UIRectangle_AddChild is rendered *inside* the
@@ -89,6 +97,9 @@ UIRectangle* UIRectangle_SetBorderWidth(UIRectangle* rect, float width);
  * @return Pointer to the updated UIRectangle object.
  */
 UIRectangle* UIRectangle_SetColor(UIRectangle* rect, UIColor color);
+/** Fill with a 2-stop linear gradient (`c1`→`c2`); `horizontal` 1 = left→right,
+ *  0 = top→bottom. Honours alpha. Pass equal colors / call SetColor to clear. */
+UIRectangle* UIRectangle_SetGradient(UIRectangle* rect, UIColor c1, UIColor c2, int horizontal);
 
 /**
  * Sets the border color of the rectangle.

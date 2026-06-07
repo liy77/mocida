@@ -16,6 +16,7 @@
 #include <uikit/children.h>
 
 #include <uikit/stack.h>
+#include <uikit/glass.h>
 #include <uikit/container.h>
 #include <uikit/tab.h>
 #include <uikit/dialog.h>
@@ -36,6 +37,10 @@ static int walk_widget_children(UIWidget* w, int depth, UIWidgetVisitor visit, v
     if (!strcmp(t, UI_WIDGET_STACK)) {
         UIStack* s = (UIStack*)base;
         return walk_children(s->items, depth + 1, visit, user);
+    }
+    if (!strcmp(t, UI_WIDGET_GLASS)) {
+        UIGlass* g = (UIGlass*)base;
+        return walk_children(g->items, depth + 1, visit, user);
     }
     if (!strcmp(t, UI_WIDGET_GRID)) {
         UIGrid* g = (UIGrid*)base;

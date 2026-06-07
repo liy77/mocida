@@ -575,7 +575,14 @@ def main(argv=None):
         build_dir = ROOT / "build" / PLATFORM / f"example-{args.example}-{config_lc}"
     else:
         src_dir = ROOT
-        build_dir = ROOT / "build" / PLATFORM / config_lc
+        # Shared and static builds land in separate dirs so they can
+        # coexist (the Rust workspace links the shared DLL, while C
+        # consumers / distribution may want the static archive). The
+        # `-shared` suffix keeps `MOCIDA_BUILD_SHARED=ON` artefacts
+        # (mocida.dll + import lib + dep DLLs) from clobbering the
+        # static `mocida.lib` in the plain config dir.
+        suffix = "-shared" if args.shared else ""
+        build_dir = ROOT / "build" / PLATFORM / (config_lc + suffix)
 
     label = f"example {args.example}" if args.example else "Build"
     print(_c(f"Mocida {label}" + (" (installer)" if args.installer else ""), "35;1"))

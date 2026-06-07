@@ -85,6 +85,54 @@ impl Window {
     pub fn render(&mut self) -> i32 {
         unsafe { sys::UIWindow_Render(self.ptr) }
     }
+
+    /// Enable / update / disable the OS-level window backdrop (Mica, Acrylic,
+    /// KDE blur, …). [`BackdropMaterial::Auto`](crate::BackdropMaterial::Auto)
+    /// resolves to the platform default; [`None`](crate::BackdropMaterial::None)
+    /// disables. When a native compositor effect is applied the window is made
+    /// transparent so the blur shows through; otherwise in-app `Glass` widgets
+    /// still paint their own tint.
+    pub fn set_backdrop(
+        &mut self,
+        material: crate::glass::BackdropMaterial,
+        tint: crate::color::Color,
+        tint_opacity: f32,
+    ) {
+        unsafe { sys::UIWindow_SetBackdrop(self.ptr, material.raw(), tint.into_raw(), tint_opacity) };
+    }
+
+    /// Enable the backdrop **companion** window — a borderless helper carrying a
+    /// real DWM acrylic blur, parked directly behind this window so its acrylic
+    /// shows through this window's transparent (alpha-0) holes (e.g. glass
+    /// sidebars). Windows only; a no-op elsewhere. Call [`sync_backdrop_companion`]
+    /// every frame so it tracks the window's rect + z-order, and
+    /// [`disable_backdrop_companion`] to tear it down.
+    pub fn enable_backdrop_companion(
+        &mut self,
+        material: crate::glass::BackdropMaterial,
+        tint: crate::color::Color,
+        tint_opacity: f32,
+    ) {
+        unsafe {
+            sys::UIBackdropCompanion_Enable(
+                self.sdl_window(),
+                material.raw(),
+                tint.into_raw(),
+                tint_opacity,
+            )
+        };
+    }
+
+    /// Re-sync the backdrop companion to this window's current screen rect and
+    /// z-order. Cheap; call once per frame while the companion is enabled.
+    pub fn sync_backdrop_companion(&self) {
+        unsafe { sys::UIBackdropCompanion_Sync(self.sdl_window()) };
+    }
+}
+
+/// Tear down the backdrop companion window (Windows only; no-op elsewhere).
+pub fn disable_backdrop_companion() {
+    unsafe { sys::UIBackdropCompanion_Disable() };
 }
 
 /// Set the active window pointer. Pass `None` to clear.

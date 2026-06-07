@@ -163,6 +163,8 @@ fn run(path: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     }
     // Renderer backend + AA/MSAA tuning from the App block.
     mui_runtime::apply_render_config(&mut app, &cfg);
+    // OS window backdrop (Mica / Acrylic / KDE blur) from `app { backdrop }`.
+    mui_runtime::apply_backdrop(&cfg);
     search_fonts();
     let _ = get_font("Arial");
 

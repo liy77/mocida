@@ -94,6 +94,16 @@ UIRectangle* UIRectangle_SetBorderWidth(UIRectangle* rect, float width) {
 
 UIRectangle* UIRectangle_SetColor(UIRectangle* rect, UIColor color) {
     rect->color = color;
+    rect->hasGradient = 0;   // a flat color clears any gradient
+    return rect;
+}
+
+UIRectangle* UIRectangle_SetGradient(UIRectangle* rect, UIColor c1, UIColor c2, int horizontal) {
+    if (!rect) return rect;
+    rect->hasGradient    = 1;
+    rect->gradColor1     = c1;
+    rect->gradColor2     = c2;
+    rect->gradHorizontal = horizontal ? 1 : 0;
     return rect;
 }
 

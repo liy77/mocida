@@ -9,6 +9,7 @@
 #include <uikit/event.h>
 #include <uikit/image.h>
 #include <uikit/extra.h>
+#include <uikit/glass.h>
 
 // SDL includes
 #include <SDL3/SDL.h>
@@ -70,7 +71,25 @@ typedef struct {
     SDL_Window*   sdlWindow;         /**< Backing SDL window; NULL after destroy. */
     UIEventCallbackData** events;    /**< Sparse array of registered callbacks, indexed by UI_EVENT. */
     UIProps __ui_props;              /**< Internal property bag (see UIWindow_GetProperty). */
+
+    UIBackdropMaterial backdrop;     /**< Active window-wide OS backdrop (Mica/Acrylic/KDE), or NONE. */
+    UIColor backdropTint;            /**< Optional tint forwarded to the OS backdrop. */
+    float   backdropTintOpacity;     /**< 0..1 strength of backdropTint. */
+    int     backdropNative;          /**< 1 when a native compositor effect is active (window made transparent). */
 } UIWindow;
+
+/**
+ * Enables (or updates / disables) the OS-level window backdrop. `material`
+ * should be a window-wide family (Mica / Mica Alt / KDE blur-window);
+ * UI_BACKDROP_AUTO resolves to the platform default and UI_BACKDROP_NONE
+ * disables. When a native effect is applied the window clear color is made
+ * transparent so the compositor's blur shows through.
+ *
+ * Region materials (Acrylic / Liquid Glass / Vibrancy) passed here degrade to
+ * the closest window-wide equivalent.
+ */
+void UIWindow_SetBackdrop(UIWindow* window, UIBackdropMaterial material,
+                          UIColor tint, float tintOpacity);
 
 /**
  * Sets how many samples-per-side the analytic-coverage AA pipeline uses
@@ -135,6 +154,65 @@ int UIWindow_Render(UIWindow* window);
  * @return A pointer to the created UIWindow object.
  */
 UIWindow* UIWindow_Create(const char* title, int width, int height);
+
+/**
+ * Requests client-side window decorations (a custom title bar). Must be
+ * called BEFORE UIWindow_Create / UIApp_Create — it controls the
+ * SDL_WINDOW_BORDERLESS flag at creation time. When on, the window is created
+ * without the native title bar/frame (still resizable); the app paints its own
+ * bar and marks the drag region + resize borders via the hit-test wired in
+ * app.c (see UIApp_SetDragRegion). Pass 0 for the default native chrome.
+ */
+void UIWindow_RequestCustomTitlebar(int on);
+
+/** Returns 1 if a custom (client-side) title bar was requested. */
+int  UIWindow_WantsCustomTitlebar(void);
+
+/**
+ * Requests a transparent (per-pixel alpha) window. Must be called BEFORE
+ * UIWindow_Create / UIApp_Create — it adds SDL_WINDOW_TRANSPARENT at creation
+ * time so SDL builds a composition swapchain (DirectComposition on the D3D11
+ * renderer) that DWM can blend its system backdrop (Mica/Acrylic) behind. The
+ * app still clears opaque by default, so the window looks identical until a
+ * backdrop zeroes the clear alpha (UIWindow_SetBackdrop). Only the D3D11
+ * renderer honors this on Windows; Vulkan/GL create an opaque swapchain. Pass 0
+ * for the default opaque window.
+ */
+void UIWindow_RequestTransparent(int on);
+
+/** Returns 1 if a transparent (per-pixel alpha) window was requested. */
+int  UIWindow_WantsTransparent(void);
+
+/**
+ * Re-applies the native OS decorations (rounded corners + drop shadow + snap)
+ * to a custom-titlebar window. Going SDL_WINDOW_BORDERLESS strips the DWM frame
+ * on Win11, which kills the rounded corners and shadow; this asks the OS to put
+ * them back without bringing back the caption:
+ *
+ *   - Windows 11: DWMWA_WINDOW_CORNER_PREFERENCE = ROUND so DWM rounds the
+ *     borderless window, plus a 1px DwmExtendFrameIntoClientArea so the drop
+ *     shadow is drawn. Aero-snap / maximize-to-workarea already work through
+ *     SDL's borderless hit-test. No-op on Win10 (no corner-preference API).
+ *   - macOS: the NSWindow is configured for a full-size content view with a
+ *     transparent, hidden titlebar (NSWindowStyleMaskFullSizeContentView +
+ *     titlebarAppearsTransparent + titleVisibility=Hidden), which keeps native
+ *     rounding, shadow, resize and the traffic-light buttons. Implemented in
+ *     titlebar_cocoa.mm. (The window must NOT be created borderless on macOS;
+ *     UIWindow_Create honours that — see the g_customTitlebar branch.)
+ *   - Linux / other: no-op (the borderless + SSD path is left as-is).
+ *
+ * Safe to call repeatedly; called automatically by UIWindow_Create right after
+ * the window exists when a custom titlebar was requested.
+ */
+void UIWindow_ApplyNativeDecorations(SDL_Window* window);
+
+/**
+ * 1 when running on macOS, 0 elsewhere. The MUI/host uses this to keep its own
+ * min/max/close window-control buttons Windows/Linux-only (macOS keeps its
+ * native traffic-lights) and to offset the top bar for the traffic-lights.
+ * A compile-time constant — no window needed.
+ */
+int  UIWindow_IsMacOS(void);
 
 /**
  * Returns the active window - the last one created via UIWindow_Create

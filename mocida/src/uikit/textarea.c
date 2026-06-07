@@ -3,6 +3,7 @@
 #include <uikit/window.h>
 #include <uikit/font.h>
 #include <uikit/stack.h>
+#include <uikit/glass.h>
 #include <uikit/container.h>
 #include <uikit/rect.h>
 #include <stdlib.h>
@@ -42,6 +43,7 @@ static UIChildren* TA_ContainerChildren(UIWidget* w) {
     UIWidgetBase* base = (UIWidgetBase*)w->data;
     const char* t = base->__widget_type;
     if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;
+    if (strcmp(t, UI_WIDGET_GLASS) == 0)     return ((UIGlass*)base)->items;
     if (strcmp(t, UI_WIDGET_GRID) == 0)      return ((UIGrid*)base)->items;
     if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) return (UIChildren*)((UIRectangle*)base)->children;
     if (strcmp(t, UI_WIDGET_SCROLL) == 0) {
@@ -137,6 +139,10 @@ static void InvalidateLineCache(UITextArea* ta) {
     free(ta->lineCharOffsets);    ta->lineCharOffsets = NULL;
     free(ta->lineCharOffsetsLen); ta->lineCharOffsetsLen = NULL;
     free(ta->lineIsSoft);         ta->lineIsSoft = NULL;
+    free(ta->__hlSpans);          ta->__hlSpans = NULL;
+    ta->__hlSpanCount = 0;
+    ta->__builtLo = 0;
+    ta->__builtHi = 0;
     ta->linesLen = 0;
     ta->linesCap = 0;
     ta->__cachedTextLen  = -1;
@@ -210,7 +216,90 @@ UITextArea* UITextArea_Create(const char* initialText, float fontSize) {
     ta->cursor            = UI_CURSOR_TEXT;
     ta->placeholderAnimated = 0;
     ta->caretBlinkMs        = 530;
+    ta->__gapAt = NULL; ta->__gapW = NULL; ta->__gapCount = 0; ta->__gapCap = 0;
+    ta->__gapVersion = 0; ta->__cachedGapVersion = -1;
+    ta->__swatchColor = NULL; ta->__swatchCount = 0; ta->__swatchCap = 0;
+    ta->__swatchRX = NULL; ta->__swatchRY = NULL; ta->__swatchRW = NULL; ta->__swatchRH = NULL;
+    ta->__swatchByte = NULL; ta->__swatchRectCount = 0; ta->__swatchRectCap = 0;
+    ta->onSwatchClick = NULL; ta->onSwatchClickUd = NULL;
+    ta->__hlSpans = NULL; ta->__hlSpanCount = 0;
+    ta->__builtLo = 0; ta->__builtHi = 0;
     return ta;
+}
+
+// Swatch geometry derived from the font size (so it scales with zoom).
+static float TA_SwatchBox(const UITextArea* ta)    { return ta->fontSize * 0.86f; }
+static float TA_SwatchMargin(const UITextArea* ta) { return ta->fontSize * 0.15f; }
+static float TA_SwatchGap(const UITextArea* ta)    { return TA_SwatchBox(ta) + 2.0f * TA_SwatchMargin(ta); }
+
+void UITextArea_SetColorSwatches(UITextArea* ta, const int* offsets, const UIColor* colors, int count) {
+    if (!ta) return;
+    if (count < 0) count = 0;
+    // Reserve a gap of TA_SwatchGap before each swatch (so the box has room).
+    const float gw = TA_SwatchGap(ta);
+    // Does the GAP layout (count / offsets / width) change? Colors alone don't —
+    // the swatch draw reads __swatchColor live each render — so a color-only update
+    // must NOT force a line-cache rebuild (that flashes the whole editor while you
+    // drag the picker). Only re-fold + re-split the line cache when gaps move.
+    int gaps_changed = (count != ta->__gapCount);
+    if (!gaps_changed) {
+        for (int i = 0; i < count; i++) {
+            if (ta->__gapAt[i] != (offsets ? offsets[i] : 0) || ta->__gapW[i] != gw) {
+                gaps_changed = 1;
+                break;
+            }
+        }
+    }
+    if (count > ta->__gapCap) {
+        int*   na = (int*)realloc(ta->__gapAt, (size_t)count * sizeof(int));
+        float* nw = (float*)realloc(ta->__gapW, (size_t)count * sizeof(float));
+        if (na) ta->__gapAt = na;
+        if (nw) ta->__gapW = nw;
+        if (!na || !nw) return;
+        ta->__gapCap = count;
+    }
+    if (count > ta->__swatchCap) {
+        UIColor* nc = (UIColor*)realloc(ta->__swatchColor, (size_t)count * sizeof(UIColor));
+        if (!nc) return;
+        ta->__swatchColor = nc;
+        ta->__swatchCap = count;
+    }
+    for (int i = 0; i < count; i++) {
+        ta->__gapAt[i]      = offsets ? offsets[i] : 0;
+        ta->__gapW[i]       = gw;
+        ta->__swatchColor[i]= colors ? colors[i] : (UIColor){0,0,0,1.0f};
+    }
+    ta->__gapCount = count;
+    ta->__swatchCount = count;
+    if (gaps_changed) {
+        ta->__gapVersion++;
+        ta->__cachedTextLen = -1; // force the offset fold + texture split to rebuild
+    }
+}
+
+UITextArea* UITextArea_SetOnSwatchClick(UITextArea* ta, UISwatchClickFn cb, void* ud) {
+    if (ta) { ta->onSwatchClick = cb; ta->onSwatchClickUd = ud; }
+    return ta;
+}
+
+void UITextArea_SetInlineGaps(UITextArea* ta, const int* offsets, const float* widths, int count) {
+    if (!ta) return;
+    if (count < 0) count = 0;
+    if (count > ta->__gapCap) {
+        int nc = count;
+        int*   na = (int*)realloc(ta->__gapAt, (size_t)nc * sizeof(int));
+        float* nw = (float*)realloc(ta->__gapW, (size_t)nc * sizeof(float));
+        if (na) ta->__gapAt = na;
+        if (nw) ta->__gapW = nw;
+        if (!na || !nw) return;
+        ta->__gapCap = nc;
+    }
+    for (int i = 0; i < count; i++) {
+        ta->__gapAt[i] = offsets ? offsets[i] : 0;
+        ta->__gapW[i]  = widths  ? widths[i]  : 0.0f;
+    }
+    ta->__gapCount = count;
+    ta->__gapVersion++;     // force the line cache (offsets + texture split) to rebuild
 }
 
 UITextArea* UITextArea_SetWrapMode(UITextArea* ta, UIWrapMode mode) {
@@ -408,6 +497,10 @@ void UITextArea_Destroy(UITextArea* ta) {
     free(ta->placeholder);
     free(ta->fontFamily);
     InvalidateLineCache(ta);
+    free(ta->__gapAt); free(ta->__gapW);
+    free(ta->__swatchColor);
+    free(ta->__swatchRX); free(ta->__swatchRY); free(ta->__swatchRW); free(ta->__swatchRH);
+    free(ta->__swatchByte);
     free(ta);
 }
 
@@ -656,6 +749,32 @@ void UITextArea_SetCaretByte(UITextArea* ta, int pos) {
     ClampCaretAndSelection(ta);
 }
 
+int UITextArea_GetSelAnchor(const UITextArea* ta) {
+    return ta ? ta->selAnchor : -1;
+}
+
+void UITextArea_SetSelAnchor(UITextArea* ta, int anchor) {
+    if (!ta) return;
+    // Call AFTER SetCaretByte (which collapses the selection to the caret), so the
+    // anchor sticks. -1 = no selection; otherwise clamp into the buffer.
+    if (anchor >= 0) {
+        if (anchor > ta->textLen) anchor = ta->textLen;
+    } else {
+        anchor = -1;
+    }
+    ta->selAnchor = anchor;
+    ClampCaretAndSelection(ta);
+}
+
+float UITextArea_GetScrollY(const UITextArea* ta) {
+    return ta ? ta->scrollY : 0.0f;
+}
+
+void UITextArea_SetScrollY(UITextArea* ta, float y) {
+    if (!ta) return;
+    ta->scrollY = y < 0.0f ? 0.0f : y;
+}
+
 void UITextArea_InsertText(UITextArea* ta, const char* s) {
     if (!ta || !s) return;
     InsertChars(ta, s, (int)strlen(s));
@@ -696,6 +815,40 @@ void UITextArea_GetCaretScreenPos(UITextArea* ta, float* ox, float* oy) {
     if (ox) *ox = ta->__lastX + ta->paddingLeft + ta->__gutterW + cx;
     if (oy) *oy = ta->__lastY + ta->paddingTop
                   + (float)caretLine * lineH - ta->scrollY + lineH;
+}
+
+void UITextArea_GetByteScreenPos(const UITextArea* ta, int pos, float* ox, float* oy) {
+    if (ox) *ox = 0.0f;
+    if (oy) *oy = 0.0f;
+    if (!ta) return;
+    const float lineH = ta->fontSize * ta->lineSpacing;
+    if (pos < 0) pos = 0;
+    if (pos > ta->textLen) pos = ta->textLen;
+    int line = 0;
+    if (ta->lineStarts && ta->linesLen > 0) {
+        int lo = 0, hi = ta->linesLen - 1;
+        while (lo < hi) {
+            int mid = (lo + hi + 1) / 2;
+            if (ta->lineStarts[mid] <= pos) lo = mid; else hi = mid - 1;
+        }
+        line = lo;
+    }
+    float cx = 0.0f;
+    if (ta->lineCharOffsets && ta->lineStarts && ta->lineCharOffsetsLen &&
+        line < ta->linesLen && ta->lineCharOffsets[line]) {
+        int col = pos - ta->lineStarts[line];
+        if (col >= 0 && col < ta->lineCharOffsetsLen[line]) {
+            cx = (float)ta->lineCharOffsets[line][col];
+        }
+    }
+    if (ox) *ox = ta->__lastX + ta->paddingLeft + ta->__gutterW + cx;
+    // Line TOP (caret version adds +lineH for the baseline-ish bottom).
+    if (oy) *oy = ta->__lastY + ta->paddingTop + (float)line * lineH - ta->scrollY;
+}
+
+void UITextArea_GetContentOrigin(const UITextArea* ta, float* x, float* y) {
+    if (x) *x = ta ? ta->__lastX : 0.0f;
+    if (y) *y = ta ? ta->__lastY : 0.0f;
 }
 
 // ---------------------------------------------------------------------
@@ -854,6 +1007,20 @@ void UITextArea_DispatchMouseDown(UIChildren* children, SDL_Window* win,
     if (!hit) return;
 
     UITextArea* ta = hit;
+
+    // Color-swatch click: if the press landed on a swatch box, fire its callback
+    // and consume the click (don't focus / move the caret) so the host can open a
+    // picker. Rects were recorded in window space by the last render.
+    if (ta->onSwatchClick && ta->__swatchRectCount > 0) {
+        for (int i = 0; i < ta->__swatchRectCount; i++) {
+            if (x >= ta->__swatchRX[i] && x < ta->__swatchRX[i] + ta->__swatchRW[i] &&
+                y >= ta->__swatchRY[i] && y < ta->__swatchRY[i] + ta->__swatchRH[i]) {
+                ta->onSwatchClick(ta, ta->__swatchByte[i], ta->onSwatchClickUd);
+                return;
+            }
+        }
+    }
+
     SetFocused(ta, win, 1);
     UIWidget_SetFocus(hitW, 1);
 

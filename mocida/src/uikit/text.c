@@ -96,6 +96,42 @@ UIText* UIText_SetColor(UIText* text, UIColor color) {
     return text;
 }
 
+UIText* UIText_SetGradient(UIText* text, UIColor c1, UIColor c2, int horizontal) {
+    if (text == NULL) {
+        return NULL;
+    }
+    horizontal = horizontal ? 1 : 0;
+    const int same = text->hasGradient &&
+                     text->gradHorizontal == horizontal &&
+                     text->gradColor1.r == c1.r && text->gradColor1.g == c1.g &&
+                     text->gradColor1.b == c1.b && text->gradColor1.a == c1.a &&
+                     text->gradColor2.r == c2.r && text->gradColor2.g == c2.g &&
+                     text->gradColor2.b == c2.b && text->gradColor2.a == c2.a;
+    text->hasGradient    = 1;
+    text->gradColor1     = c1;
+    text->gradColor2     = c2;
+    text->gradHorizontal = horizontal;
+    // The cached glyph texture is baked in the flat color; gradient mode needs
+    // it re-rasterized WHITE so the per-vertex gradient can modulate it. Drop
+    // the cache so the next render rebuilds it white.
+    if (!same) {
+        UIText_DestroyTexture(text);
+    }
+    return text;
+}
+
+UIText* UIText_ClearGradient(UIText* text) {
+    if (text == NULL) {
+        return NULL;
+    }
+    if (text->hasGradient) {
+        text->hasGradient = 0;
+        // Re-rasterize in the flat color on the next render.
+        UIText_DestroyTexture(text);
+    }
+    return text;
+}
+
 UIText* UIText_SetBackground(UIText* text, UIRectangle* backgroundRect) {
     if (text == NULL) {
         return NULL;

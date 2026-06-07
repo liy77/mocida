@@ -52,11 +52,11 @@ RSDIR = ROOT / "mocida-rs"    # Rust workspace package
 # --- platform detection -------------------------------------------------
 _SYS = platform.system()
 if _SYS == "Windows":
-    PLATFORM, LIBFILE = "win32", "mocida.lib"
+    PLATFORM = "win32"
 elif _SYS == "Darwin":
-    PLATFORM, LIBFILE = "darwin", "libmocida.a"
+    PLATFORM = "darwin"
 else:
-    PLATFORM, LIBFILE = "linux", "libmocida.a"
+    PLATFORM = "linux"
 
 # --- task-graph dependency edges (who must run before whom) -------------
 DEPENDS = {
@@ -118,8 +118,23 @@ class TaskError(Exception):
 
 
 # --- helpers ------------------------------------------------------------
-def c_build_dir(cfg):
-    return CDIR / "build" / PLATFORM / cfg
+def c_build_dir(cfg, shared=False):
+    suffix = "-shared" if shared else ""
+    return CDIR / "build" / PLATFORM / (cfg + suffix)
+
+
+def libfile(shared):
+    """Name of the artefact the consumer links against.
+
+    On Windows a DLL build still emits an import lib named `mocida.lib`,
+    so the filename is identical to the static archive — only the build
+    dir differs. On Unix the shared build produces a `.dylib` / `.so`
+    while the static build produces `libmocida.a`."""
+    if PLATFORM == "win32":
+        return "mocida.lib"
+    if shared:
+        return "libmocida.dylib" if PLATFORM == "darwin" else "libmocida.so"
+    return "libmocida.a"
 
 
 def cflag(cfg):
@@ -161,17 +176,17 @@ def task_setup(opts):
 # ========================================================================
 #  TASK: c  (build the C toolkit via build.bat / build.sh)
 # ========================================================================
-def task_c(opts):
-    head(f"c - build C toolkit (mocida/) [{PLATFORM}/{opts.config}]")
-    t0 = time.perf_counter()
-    script = CDIR / "build.py"
-    if not script.exists():
-        raise TaskError(f"build.py not found at {script}")
+def _run_c_pass(opts, shared):
+    """Build the C toolkit once in one mode (static or shared).
 
-    lib = c_build_dir(opts.config) / LIBFILE
+    Returns the path to the produced link artefact. Raises TaskError on
+    failure or if the expected artefact is missing."""
+    mode = "shared" if shared else "static"
+    lf = libfile(shared)
+    lib = c_build_dir(opts.config, shared) / lf
     prev = mtime(lib)
 
-    flags = [cflag(opts.config)]
+    flags = [cflag(opts.config), "--shared" if shared else "--static"]
     if opts.force:
         flags.append("--force")
     if opts.tests:
@@ -181,19 +196,35 @@ def task_c(opts):
     if opts.verbose:
         flags.append("--verbose")
 
+    t0 = time.perf_counter()
     run_line(f"python mocida/build.py {' '.join(flags)}")
     code = run_c_script(flags)
     ms = (time.perf_counter() - t0) * 1000
 
     if code != 0:
-        add_result("c", "FAIL", ms, f"exit {code}")
-        raise TaskError(f"C build failed (exit {code})")
+        add_result(f"c:{mode}", "FAIL", ms, f"exit {code}")
+        raise TaskError(f"C {mode} build failed (exit {code})")
     if not lib.exists():
-        add_result("c", "FAIL", ms, f"{LIBFILE} missing")
-        raise TaskError(f"C build produced no {LIBFILE} at {lib}")
+        add_result(f"c:{mode}", "FAIL", ms, f"{lf} missing")
+        raise TaskError(f"C {mode} build produced no {lf} at {lib}")
 
     cached = prev is not None and not opts.force and mtime(lib) == prev
-    add_result("c", "CACHED" if cached else "OK", ms, str(lib))
+    add_result(f"c:{mode}", "CACHED" if cached else "OK", ms, str(lib))
+    return lib
+
+
+def task_c(opts):
+    head(f"c - build C toolkit (mocida/) [{PLATFORM}/{opts.config}]")
+    script = CDIR / "build.py"
+    if not script.exists():
+        raise TaskError(f"build.py not found at {script}")
+
+    # Build BOTH flavours: the shared DLL (what the Rust workspace links)
+    # and the static archive (for C consumers / single-binary
+    # distribution). They live in separate build dirs so neither
+    # clobbers the other.
+    _run_c_pass(opts, shared=False)
+    _run_c_pass(opts, shared=True)
 
 
 # ========================================================================
@@ -203,13 +234,18 @@ def task_rust(opts):
     head(f"rust - build Rust workspace (mocida-rs/) [{PLATFORM}/{opts.config}]")
     t0 = time.perf_counter()
 
-    libdir = c_build_dir(opts.config)
-    lib = libdir / LIBFILE
+    # The Rust workspace links the SHARED mocida: the DLL self-contains
+    # SDL/ttf/image/mimalloc and exposes only mocida's C API via the
+    # import lib, so there's no transitive-static-lib juggling and no
+    # debug-CRT (/MDd vs Rust's /MD) conflict. The DLLs are staged next
+    # to the built .exe by mocida-sys/build.rs.
+    libdir = c_build_dir(opts.config, shared=True)
+    lib = libdir / libfile(shared=True)
     incdir = CDIR / "src" / "headers"
     sdlinc = CDIR / "SDL" / "include"
 
     if not lib.exists():
-        raise TaskError(f"C lib not found at {lib} - run "
+        raise TaskError(f"C shared lib not found at {lib} - run "
                         f"'python build.py c --config {opts.config}' first.")
     if not incdir.exists():
         raise TaskError(f"C headers not found at {incdir}")
@@ -221,13 +257,13 @@ def task_rust(opts):
     env["MOCIDA_INCLUDE_DIR"] = str(incdir.resolve())
     env["MOCIDA_LIB_DIR"] = str(libdir.resolve())
     env["MOCIDA_LIB_NAME"] = "mocida"
-    env["MOCIDA_STATIC"] = "1"
+    env["MOCIDA_STATIC"] = "0"
     if sdlinc.exists():
         env["SDL3_INCLUDE_DIR"] = str(sdlinc.resolve())
 
     note(f"MOCIDA_INCLUDE_DIR = {env['MOCIDA_INCLUDE_DIR']}")
     note(f"MOCIDA_LIB_DIR     = {env['MOCIDA_LIB_DIR']}")
-    note(f"MOCIDA_STATIC      = 1  (lib: {LIBFILE})")
+    note(f"MOCIDA_STATIC      = 0  (shared DLL: {lib.name})")
 
     if opts.force:
         run_line("cargo clean")
@@ -254,10 +290,10 @@ def task_rust(opts):
 def task_clean(opts):
     head(f"clean - wipe C build [{PLATFORM}/{opts.config}] + cargo clean")
     t0 = time.perf_counter()
-    cbuild = c_build_dir(opts.config)
-    if cbuild.exists():
-        run_line(f"rm -rf {cbuild}")
-        shutil.rmtree(cbuild, ignore_errors=True)
+    for cbuild in (c_build_dir(opts.config), c_build_dir(opts.config, shared=True)):
+        if cbuild.exists():
+            run_line(f"rm -rf {cbuild}")
+            shutil.rmtree(cbuild, ignore_errors=True)
     if (RSDIR / "Cargo.toml").exists():
         run_line("cargo clean")
         subprocess.run(["cargo", "clean"], cwd=str(RSDIR))
@@ -327,7 +363,9 @@ def persist_env(pairs):
 def task_env(opts):
     head(f"env - publish MOCIDA_* to persistent system env [{PLATFORM}]")
     t0 = time.perf_counter()
-    libdir = c_build_dir(opts.config)
+    # Persist the SHARED build dir: that's what the Rust workspace (and
+    # any other DLL consumer) links against, matching task_rust.
+    libdir = c_build_dir(opts.config, shared=True)
     incdir = CDIR / "src" / "headers"
     if not incdir.exists():
         raise TaskError(f"C headers not found at {incdir}")

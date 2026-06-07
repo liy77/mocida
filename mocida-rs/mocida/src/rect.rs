@@ -27,6 +27,12 @@ impl Rectangle {
         Ok(Self { ptr, moved: false })
     }
 
+    /// Borrow the raw `UIRectangle*` (e.g. to drive its fill reactively).
+    #[inline]
+    pub fn as_ptr(&self) -> *mut sys::UIRectangle {
+        self.ptr
+    }
+
     /// Sets the corner radius. Equal to `min(w, h) / 2` to draw a circle.
     pub fn radius(self, radius: f32) -> Self {
         unsafe {
@@ -47,6 +53,14 @@ impl Rectangle {
     pub fn color(self, color: Color) -> Self {
         unsafe {
             sys::UIRectangle_SetColor(self.ptr, color.into_raw());
+        }
+        self
+    }
+
+    /// Fills with a 2-stop linear gradient (`c1`→`c2`); `horizontal` true = left→right.
+    pub fn gradient(self, c1: Color, c2: Color, horizontal: bool) -> Self {
+        unsafe {
+            sys::UIRectangle_SetGradient(self.ptr, c1.into_raw(), c2.into_raw(), horizontal as i32);
         }
         self
     }

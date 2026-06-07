@@ -1,4 +1,5 @@
 #include <uikit/widget.h>
+#include <uikit/glass.h>
 #include <uikit/debug.h>
 #include <uikit/text.h>
 #include <uikit/button.h>
@@ -206,6 +207,8 @@ void UIWidget_Destroy(UIWidget* widget) {
             UITextArea_Destroy((UITextArea*)base);
         } else if (UIWidget_TypeIs(t, UI_WIDGET_STACK)) {
             UIStack_Destroy((UIStack*)base);
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_GLASS)) {
+            UIGlass_Destroy((UIGlass*)base);
         } else if (UIWidget_TypeIs(t, UI_WIDGET_DIALOG)) {
             UIDialog_Destroy((UIDialog*)base);
         } else if (UIWidget_TypeIs(t, UI_WIDGET_TABVIEW)) {
@@ -323,6 +326,7 @@ static int UIWidget_SubtreeHas(UIWidget* w, const UIWidget* target) {
     const char* t = base->__widget_type;
     if (!t) return 0;
     if (strcmp(t, UI_WIDGET_STACK) == 0)     return UIWidget_ChildrenHave(((UIStack*)base)->items, target);
+    if (strcmp(t, UI_WIDGET_GLASS) == 0)     return UIWidget_ChildrenHave(((UIGlass*)base)->items, target);
     if (strcmp(t, UI_WIDGET_GRID) == 0)      return UIWidget_ChildrenHave(((UIGrid*)base)->items, target);
     if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) return UIWidget_ChildrenHave((UIChildren*)((UIRectangle*)base)->children, target);
     if (strcmp(t, UI_WIDGET_SCROLL) == 0)    return UIWidget_SubtreeHas(((UIScroll*)base)->content, target);
@@ -447,6 +451,7 @@ static UIChildren* KeyContainerChildren(UIWidget* w) {
     UIWidgetBase* base = (UIWidgetBase*)w->data;
     const char* t = base->__widget_type;
     if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;
+    if (strcmp(t, UI_WIDGET_GLASS) == 0)     return ((UIGlass*)base)->items;
     if (strcmp(t, UI_WIDGET_GRID) == 0)      return ((UIGrid*)base)->items;
     if (strcmp(t, UI_WIDGET_RECTANGLE) == 0) return (UIChildren*)((UIRectangle*)base)->children;
     return NULL;

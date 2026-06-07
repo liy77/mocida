@@ -104,6 +104,110 @@ static void RenderWidget_Stack(UIWindow* window, UIWidget* el,
         }
 }
 
+// Glass: a styled container. Where the OS provides a native region backdrop
+// (Acrylic / Liquid Glass / Vibrancy / KDE region) the compositor draws the
+// blur behind the transparent window, and this widget only paints the tint +
+// edge highlight on top. Where there is no native effect, the same tint +
+// highlight stands in as a flat in-app approximation. Either way the layout of
+// the children is identical to a UIStack.
+static void RenderWidget_Glass(UIWindow* window, UIWidget* el,
+                                UIWidgetBase* base, float op) {
+
+        UIGlass* g = (UIGlass*)base;
+        if (!g->items) return;
+        UIChildren_SortByZ(g->items);
+
+        // --- glass background (tint + soft edge highlight) ---
+        if (el->width && el->height && *el->width > 0 && *el->height > 0) {
+            g_tempRect1.x = el->x;
+            g_tempRect1.y = el->y;
+            g_tempRect1.w = *el->width;
+            g_tempRect1.h = *el->height;
+
+            // thin/regular/thick nudge the painted opacity a little.
+            float thick = (g->thickness == UI_GLASS_THIN)  ? 0.8f
+                        : (g->thickness == UI_GLASS_THICK) ? 1.25f
+                        :                                     1.0f;
+
+            UIColor fillC = g->tint;
+            fillC.a *= g->tintOpacity * thick * op;
+            if (fillC.a > 1.0f) fillC.a = 1.0f;
+
+            // Faint white edge so the panel reads as a glass surface even on a
+            // dark backdrop. Alpha scales with the tint so a near-invisible
+            // glass stays edgeless.
+            UIColor edgeC = (UIColor){ 255, 255, 255, 0.14f * op };
+            DrawRoundedRectWithBorder(window->sdlRenderer, g_tempRect1,
+                                      fillC, g->radius, 1, edgeC);
+        }
+
+        // --- children layout (identical to RenderWidget_Stack) ---
+        const float innerW = (el->width  ? *el->width  : 0.0f) - g->paddingLeft - g->paddingRight;
+        const float innerH = (el->height ? *el->height : 0.0f) - g->paddingTop  - g->paddingBottom;
+        float mainStart = 0.0f, betweenGap = 0.0f;
+        if (g->justify != UI_STACK_JUSTIFY_START) {
+            int   visN     = 0;
+            float mainUsed = 0.0f;
+            for (int i = 0; i < g->items->count; i++) {
+                UIWidget* it = g->items->children[i];
+                if (!it || !it->visible) continue;
+                mainUsed += (g->orientation == UI_STACK_HORIZONTAL)
+                          ? (it->width  ? *it->width  : 0.0f) + it->marginLeft + it->marginRight
+                          : (it->height ? *it->height : 0.0f) + it->marginTop  + it->marginBottom;
+                visN++;
+            }
+            const float mainAvail = (g->orientation == UI_STACK_HORIZONTAL) ? innerW : innerH;
+            if (g->justify == UI_STACK_JUSTIFY_BETWEEN) {
+                if (visN > 1) betweenGap = (mainAvail - mainUsed) / (float)(visN - 1);
+                if (betweenGap < g->spacing) betweenGap = g->spacing;
+            } else {
+                const float content = mainUsed + g->spacing * (float)(visN > 0 ? visN - 1 : 0);
+                float slack = mainAvail - content;
+                if (slack < 0.0f) slack = 0.0f;
+                mainStart = (g->justify == UI_STACK_JUSTIFY_CENTER) ? slack * 0.5f : slack;
+            }
+        }
+        const float gap = (g->justify == UI_STACK_JUSTIFY_BETWEEN) ? betweenGap : g->spacing;
+        float cursorX = el->x + g->paddingLeft + ((g->orientation == UI_STACK_HORIZONTAL) ? mainStart : 0.0f);
+        float cursorY = el->y + g->paddingTop  + ((g->orientation == UI_STACK_HORIZONTAL) ? 0.0f : mainStart);
+        for (int i = 0; i < g->items->count; i++) {
+            UIWidget* item = g->items->children[i];
+            if (!item || !item->visible) continue;
+            if (g->freeLayout) {
+                RenderSingleWidget(window, item);
+                continue;
+            }
+            const float iw = item->width  ? *item->width  : 0.0f;
+            const float ih = item->height ? *item->height : 0.0f;
+            const float mL = item->marginLeft, mT = item->marginTop;
+            const float mR = item->marginRight, mB = item->marginBottom;
+            const int ea = item->selfAlign ? (item->selfAlign - 1) : g->align;
+            if (g->orientation == UI_STACK_HORIZONTAL) {
+                const float ew = ih + mT + mB;
+                float off = (ea == UI_STACK_ALIGN_CENTER) ? (innerH - ew) * 0.5f
+                          : (ea == UI_STACK_ALIGN_END)    ? (innerH - ew)
+                          :                                  0.0f;
+                if (off < 0.0f) off = 0.0f;
+                cursorX += mL;
+                item->x = cursorX;
+                item->y = cursorY + off + mT;
+                RenderSingleWidget(window, item);
+                cursorX += iw + mR + gap;
+            } else {
+                const float ew = iw + mL + mR;
+                float off = (ea == UI_STACK_ALIGN_CENTER) ? (innerW - ew) * 0.5f
+                          : (ea == UI_STACK_ALIGN_END)    ? (innerW - ew)
+                          :                                  0.0f;
+                if (off < 0.0f) off = 0.0f;
+                cursorY += mT;
+                item->x = cursorX + off + mL;
+                item->y = cursorY;
+                RenderSingleWidget(window, item);
+                cursorY += ih + mB + gap;
+            }
+        }
+}
+
 static void RenderWidget_Dialog(UIWindow* window, UIWidget* el,
                                 UIWidgetBase* base, float op) {
 
@@ -288,7 +392,33 @@ static void RenderWidget_Rectangle(UIWindow* window, UIWidget* el,
         if (rect->hasShadow) {
             DrawDropShadow(window->sdlRenderer, g_tempRect1, rect->radius, sh);
         }
-        if (g_tempRect1.w > 0 && g_tempRect1.h > 0) {
+        if (g_tempRect1.w > 0 && g_tempRect1.h > 0 && rect->hasGradient && el->rotation == 0.0f) {
+            // 2-stop linear gradient fill (drawn as a colored quad with per-corner
+            // colors — honours alpha; used for the color-picker square / hue / alpha
+            // bars). Border, if any, is stroked over it.
+            const float gx0 = g_tempRect1.x, gy0 = g_tempRect1.y;
+            const float gx1 = gx0 + g_tempRect1.w, gy1 = gy0 + g_tempRect1.h;
+            const SDL_FColor gc1 = { rect->gradColor1.r / 255.0f, rect->gradColor1.g / 255.0f,
+                                     rect->gradColor1.b / 255.0f, rect->gradColor1.a * op };
+            const SDL_FColor gc2 = { rect->gradColor2.r / 255.0f, rect->gradColor2.g / 255.0f,
+                                     rect->gradColor2.b / 255.0f, rect->gradColor2.a * op };
+            const SDL_FColor cTL = gc1;
+            const SDL_FColor cTR = rect->gradHorizontal ? gc2 : gc1;
+            const SDL_FColor cBR = gc2;
+            const SDL_FColor cBL = rect->gradHorizontal ? gc1 : gc2;
+            SDL_Vertex gv[4];
+            gv[0].position = (SDL_FPoint){ gx0, gy0 }; gv[0].tex_coord = (SDL_FPoint){ 0, 0 }; gv[0].color = cTL;
+            gv[1].position = (SDL_FPoint){ gx1, gy0 }; gv[1].tex_coord = (SDL_FPoint){ 0, 0 }; gv[1].color = cTR;
+            gv[2].position = (SDL_FPoint){ gx1, gy1 }; gv[2].tex_coord = (SDL_FPoint){ 0, 0 }; gv[2].color = cBR;
+            gv[3].position = (SDL_FPoint){ gx0, gy1 }; gv[3].tex_coord = (SDL_FPoint){ 0, 0 }; gv[3].color = cBL;
+            const int gidx[6] = { 0, 1, 2, 0, 2, 3 };
+            SDL_RenderGeometry(window->sdlRenderer, NULL, gv, 4, gidx, 6);
+            if (rect->borderWidth > 0) {
+                UIColor clear = { 0, 0, 0, 0.0f };
+                DrawRoundedRectWithBorder(window->sdlRenderer, g_tempRect1, clear,
+                                          rect->radius, (int)rect->borderWidth, borderC);
+            }
+        } else if (g_tempRect1.w > 0 && g_tempRect1.h > 0) {
             // Rotated path: render the rect's shape into an offscreen
             // target at 4× resolution, then RenderTextureRotated it onto
             // the final destination. The 4× supersample + the linear
@@ -681,10 +811,15 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
             if (font) {
                 // Hinting set once at font load (GetFont).
                 TTF_SetFontStyle(font, (TTF_FontStyleFlags)twid->fontStyle);
-                SDL_Color sc = {(Uint8)twid->color.r,
-                                (Uint8)twid->color.g,
-                                (Uint8)twid->color.b,
-                                (Uint8)SDL_clamp((int)(twid->color.a * 255), 0, 255)};
+                // Gradient fill rasterizes the glyphs WHITE so the per-vertex
+                // gradient (applied via SDL_RenderGeometry at draw time) shows
+                // through unmodified; a flat fill bakes its color in here.
+                SDL_Color sc = twid->hasGradient
+                    ? (SDL_Color){255, 255, 255, 255}
+                    : (SDL_Color){(Uint8)twid->color.r,
+                                  (Uint8)twid->color.g,
+                                  (Uint8)twid->color.b,
+                                  (Uint8)SDL_clamp((int)(twid->color.a * 255), 0, 255)};
                 SDL_Surface *surf = NULL;
                 if (effMode == UI_WRAP_WORD && effWrapW > 0) {
                     surf = TTF_RenderText_Blended_Wrapped(font, twid->text,
@@ -873,7 +1008,37 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
         g_tempRect2.w = txw + 2 * TEXT_TEX_PAD;
         g_tempRect2.h = txh + 2 * TEXT_TEX_PAD;
 
-        if (el->rotation != 0.0f) {
+        if (twid->hasGradient && el->rotation == 0.0f) {
+            // Gradient fill: draw the (white) glyph texture as a textured quad
+            // whose vertex colors carry the 2-stop gradient. SDL multiplies the
+            // per-vertex color by the sampled texel, so white glyphs take the
+            // interpolated gradient color and the glyph alpha masks it.
+            const float gx0 = g_tempRect2.x,            gy0 = g_tempRect2.y;
+            const float gx1 = g_tempRect2.x + g_tempRect2.w;
+            const float gy1 = g_tempRect2.y + g_tempRect2.h;
+            const SDL_FColor c1 = { twid->gradColor1.r / 255.0f,
+                                    twid->gradColor1.g / 255.0f,
+                                    twid->gradColor1.b / 255.0f,
+                                    twid->gradColor1.a * op };
+            const SDL_FColor c2 = { twid->gradColor2.r / 255.0f,
+                                    twid->gradColor2.g / 255.0f,
+                                    twid->gradColor2.b / 255.0f,
+                                    twid->gradColor2.a * op };
+            // Per-corner color: vertical → top=c1, bottom=c2; horizontal →
+            // left=c1, right=c2. Corner order: TL, TR, BR, BL.
+            const SDL_FColor cTL = c1;
+            const SDL_FColor cTR = twid->gradHorizontal ? c2 : c1;
+            const SDL_FColor cBR = c2;
+            const SDL_FColor cBL = twid->gradHorizontal ? c1 : c2;
+            SDL_Vertex gv[4];
+            gv[0].position = (SDL_FPoint){ gx0, gy0 }; gv[0].tex_coord = (SDL_FPoint){ 0.0f, 0.0f }; gv[0].color = cTL;
+            gv[1].position = (SDL_FPoint){ gx1, gy0 }; gv[1].tex_coord = (SDL_FPoint){ 1.0f, 0.0f }; gv[1].color = cTR;
+            gv[2].position = (SDL_FPoint){ gx1, gy1 }; gv[2].tex_coord = (SDL_FPoint){ 1.0f, 1.0f }; gv[2].color = cBR;
+            gv[3].position = (SDL_FPoint){ gx0, gy1 }; gv[3].tex_coord = (SDL_FPoint){ 0.0f, 1.0f }; gv[3].color = cBL;
+            const int gi[6] = { 0, 1, 2, 0, 2, 3 };
+            SDL_RenderGeometry(window->sdlRenderer, twid->__SDL_textTexture,
+                               gv, 4, gi, 6);
+        } else if (el->rotation != 0.0f) {
             SDL_FPoint pivot = { g_tempRect2.w * 0.5f, g_tempRect2.h * 0.5f };
             SDL_RenderTextureRotated(window->sdlRenderer, twid->__SDL_textTexture,
                                      NULL, &g_tempRect2,
@@ -2335,6 +2500,75 @@ static SDL_Texture* GetLineNumTexture(SDL_Renderer* r, TTF_Font* font,
     return g_lnTex[slot];
 }
 
+// Sum of inline-gap widths inserted within a single line, from its start `segStart`
+// up to and including byte `b`. Only gaps ON THIS LINE shift its x-offsets — a gap
+// on an earlier line must NOT push the current line's glyphs right.
+static float TA_GapInLine(const UITextArea* ta, int segStart, int b) {
+    if (!ta || ta->__gapCount <= 0) return 0.0f;
+    float g = 0.0f;
+    for (int i = 0; i < ta->__gapCount; i++)
+        if (ta->__gapAt[i] >= segStart && ta->__gapAt[i] <= b) g += ta->__gapW[i];
+    return g;
+}
+
+// Build (lazily) the glyph texture + per-char offset table for a single visual
+// line `li`, if not already built. Cheap no-op when already cached. `font` is the
+// logical-metrics font, `rfont` the g_textSS× rasterization font. Used by the
+// virtualized renderer so only on-screen lines pay the shaping/texture cost.
+static void TA_EnsureLineBuilt(UIWindow* window, UITextArea* ta,
+                               TTF_Font* font, TTF_Font* rfont, int li) {
+    if (!ta || li < 0 || li >= ta->linesLen) return;
+    if (ta->lineCharOffsets[li]) return;   // already built
+
+    const int segStart = ta->lineStarts[li];
+    const int segLen   = ta->lineLengths[li];
+
+    const UIColor c = ta->textColor;
+    const SDL_Color sc = { (Uint8)c.r, (Uint8)c.g, (Uint8)c.b,
+                           (Uint8)SDL_clamp((int)(c.a * 255.0f), 0, 255) };
+
+    if (segLen > 0) {
+        // Wrap the cached whole-document spans as a sink view for RenderLineColored.
+        UISpanSink hl = { ta->__hlSpans, ta->__hlSpanCount, ta->__hlSpanCount };
+        ta->lineTextures[li] = RenderLineColored(
+            window->sdlRenderer, rfont, ta->text, segStart, segLen, &hl, sc);
+        if (ta->lineTextures[li]) {
+            SDL_SetTextureScaleMode(ta->lineTextures[li], SDL_SCALEMODE_LINEAR);
+        }
+    } else {
+        ta->lineTextures[li] = NULL;
+    }
+
+    const int need = segLen + 1;
+    ta->lineCharOffsetsLen[li] = need;
+    ta->lineCharOffsets[li] = (int*)calloc(need, sizeof(int));
+    if (ta->lineCharOffsets[li]) {
+        // Fold inline gaps into the offsets so caret / click / selection and
+        // GetByteScreenPos account for the reserved space (draw splits to match).
+        ta->lineCharOffsets[li][0] = (int)(TA_GapInLine(ta, segStart, segStart) + 0.5f);
+        for (int k = 1; k < need; k++) {
+            int w = 0, h = 0;
+            TTF_GetStringSize(font, ta->text + segStart, (size_t)k, &w, &h);
+            ta->lineCharOffsets[li][k] = w + (int)(TA_GapInLine(ta, segStart, segStart + k) + 0.5f);
+        }
+    }
+}
+
+// Free a single built line's content (texture + offset table) so it can be
+// rebuilt lazily if it scrolls back into view. Keeps the index intact.
+static void TA_FreeLineBuilt(UITextArea* ta, int li) {
+    if (!ta || li < 0 || li >= ta->linesLen) return;
+    if (ta->lineTextures && ta->lineTextures[li]) {
+        SDL_DestroyTexture(ta->lineTextures[li]);
+        ta->lineTextures[li] = NULL;
+    }
+    if (ta->lineCharOffsets && ta->lineCharOffsets[li]) {
+        free(ta->lineCharOffsets[li]);
+        ta->lineCharOffsets[li] = NULL;
+        ta->lineCharOffsetsLen[li] = 0;
+    }
+}
+
 static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                                 UIWidgetBase* base, float op) {
 
@@ -2399,12 +2633,19 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
             ta->__cachedTextLen  != ta->textLen ||
             ta->__cachedWrapMode != (int)ta->wrapMode ||
             ta->__cachedWrapW    != wrapW ||
-            ta->__cachedHlVersion != ta->__hlVersion;
+            ta->__cachedHlVersion != ta->__hlVersion ||
+            ta->__cachedGapVersion != ta->__gapVersion;
 
-        // Rebuild the per-line cache when the text/wrap config changed.
-        // Each visual line gets its own glyph texture + char-offset array.
+        // ── Virtualized line cache ──────────────────────────────────────────
+        // The line INDEX (lineStarts / lineLengths / lineIsSoft) is built for the
+        // WHOLE document on a text/wrap/gap change — a single O(n) byte scan, no
+        // glyph shaping and no GPU textures, so opening a multi-thousand-line file
+        // is instant. The expensive per-line glyph TEXTURE + char-offset table are
+        // built lazily below, only for the lines inside the viewport (+ overscan).
+        // This is the standard editor virtualization: cost is O(visible lines), not
+        // O(document lines), per frame.
         if (needRebuild) {
-            // Reuse InvalidateLineCache: it frees and zeroes.
+            // Free everything (textures + per-line offset arrays + index + spans).
             if (ta->lineTextures) {
                 for (int i = 0; i < ta->linesLen; i++) {
                     if (ta->lineTextures[i]) SDL_DestroyTexture(ta->lineTextures[i]);
@@ -2421,11 +2662,13 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
             free(ta->lineCharOffsets);    ta->lineCharOffsets = NULL;
             free(ta->lineCharOffsetsLen); ta->lineCharOffsetsLen = NULL;
             free(ta->lineIsSoft);         ta->lineIsSoft = NULL;
+            free(ta->__hlSpans);          ta->__hlSpans = NULL;
+            ta->__hlSpanCount = 0;
             ta->linesLen = 0;
+            ta->__builtLo = ta->__builtHi = 0;
 
-            // Initial capacity: hard line count, with extra room when
-            // wrap is on (each logical line may produce several visual
-            // segments). The arrays grow on demand inside the loop.
+            // Initial capacity: hard line count, with extra room when wrap is on
+            // (each logical line may produce several visual segments).
             int cap = 1;
             for (int i = 0; i < ta->textLen; i++) if (ta->text[i] == '\n') cap++;
             if (wrapW > 0) { cap = cap * 2 + 4; }
@@ -2439,20 +2682,18 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
             ta->lineCharOffsetsLen  = (int*)calloc(cap, sizeof(int));
             ta->lineIsSoft          = (int*)calloc(cap, sizeof(int));
 
-            const UIColor c = ta->textColor;
-            const SDL_Color sc = { (Uint8)c.r, (Uint8)c.g, (Uint8)c.b,
-                                   (Uint8)SDL_clamp((int)(c.a * 255.0f), 0, 255) };
-
-            // Syntax-highlight spans for the whole text (empty when no
-            // highlighter is installed). Reused for every line below.
+            // Syntax-highlight spans for the whole text — computed ONCE here and
+            // cached on the area so lazily-built visible lines can be coloured
+            // without re-running the highlighter every frame.
             UISpanSink hl = { NULL, 0, 0 };
             if (ta->highlighter) {
                 ta->highlighter(ta->highlighterUd, ta->text, ta->textLen, &hl, UISpanSink_Emit);
             }
+            ta->__hlSpans     = hl.items;   // take ownership (freed on next rebuild)
+            ta->__hlSpanCount = hl.count;
 
-            // Iterate over logical lines (separated by '\n'). Inside
-            // each, either emit a single segment (wrap off) or break
-            // it into visual segments that fit in wrapW.
+            // Build ONLY the index (offsets + lengths + soft flags). No textures,
+            // no per-char offset tables — those come lazily, per visible line.
             int logicalStart = 0;
             for (int i = 0; i <= ta->textLen; i++) {
                 if (i < ta->textLen && ta->text[i] != '\n') continue;
@@ -2466,14 +2707,12 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                     if (wrapW <= 0 || lineEnd - segStart == 0) {
                         segEnd = lineEnd;
                     } else {
-                        // Does the whole remainder fit on one line?
                         int w = 0, h = 0;
                         TTF_GetStringSize(font, ta->text + segStart,
                                           (size_t)(lineEnd - segStart), &w, &h);
                         if (w <= wrapW) {
                             segEnd = lineEnd;
                         } else {
-                            // Binary-search the longest prefix that fits.
                             int lo = 1, hi = lineEnd - segStart, fit = 1;
                             while (lo <= hi) {
                                 int mid = (lo + hi) / 2;
@@ -2485,12 +2724,6 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                             }
                             int cut = fit;
                             if (ta->wrapMode == UI_WRAP_WORD) {
-                                // Back up to just after the last
-                                // whitespace inside the fitting prefix
-                                // so trailing spaces stay with this
-                                // line. Falls back to char-wrap when
-                                // no whitespace was found (a single
-                                // very long word).
                                 int spAfter = -1;
                                 for (int k = cut; k > 0; k--) {
                                     char ch = ta->text[segStart + k - 1];
@@ -2503,7 +2736,6 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                         }
                     }
 
-                    // Grow the arrays if we ran out of capacity.
                     if (ta->linesLen >= ta->linesCap) {
                         int newCap = ta->linesCap * 2;
                         if (newCap < ta->linesLen + 1) newCap = ta->linesLen + 8;
@@ -2524,35 +2756,13 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                         ta->linesCap = newCap;
                     }
 
-                    const int li     = ta->linesLen;
-                    const int segLen = segEnd - segStart;
+                    const int li = ta->linesLen;
                     ta->lineStarts[li]  = segStart;
-                    ta->lineLengths[li] = segLen;
+                    ta->lineLengths[li] = segEnd - segStart;
                     ta->lineIsSoft[li]  = firstInLine ? 0 : 1;
-
-                    if (segLen > 0) {
-                        // rfont -> the texture is g_textSS×; it is drawn into a
-                        // logical-sized dst (size / g_textSS) in the glyph loop.
-                        ta->lineTextures[li] = RenderLineColored(
-                            window->sdlRenderer, rfont, ta->text, segStart, segLen, &hl, sc);
-                        if (ta->lineTextures[li]) {
-                            SDL_SetTextureScaleMode(ta->lineTextures[li], SDL_SCALEMODE_LINEAR);
-                        }
-                    } else {
-                        ta->lineTextures[li] = NULL;
-                    }
-
-                    const int need = segLen + 1;
-                    ta->lineCharOffsetsLen[li] = need;
-                    ta->lineCharOffsets[li] = (int*)calloc(need, sizeof(int));
-                    if (ta->lineCharOffsets[li]) {
-                        ta->lineCharOffsets[li][0] = 0;
-                        for (int k = 1; k < need; k++) {
-                            int w = 0, h = 0;
-                            TTF_GetStringSize(font, ta->text + segStart, (size_t)k, &w, &h);
-                            ta->lineCharOffsets[li][k] = w;
-                        }
-                    }
+                    ta->lineTextures[li]       = NULL;   // lazy
+                    ta->lineCharOffsets[li]    = NULL;   // lazy
+                    ta->lineCharOffsetsLen[li] = 0;
 
                     ta->linesLen++;
                     firstInLine = 0;
@@ -2562,11 +2772,11 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                 logicalStart = lineEnd + 1; // skip the '\n'
             }
 
-            free(hl.items);
-            ta->__cachedTextLen   = ta->textLen;
-            ta->__cachedWrapMode  = (int)ta->wrapMode;
-            ta->__cachedWrapW     = wrapW;
-            ta->__cachedHlVersion = ta->__hlVersion;
+            ta->__cachedTextLen    = ta->textLen;
+            ta->__cachedWrapMode   = (int)ta->wrapMode;
+            ta->__cachedWrapW      = wrapW;
+            ta->__cachedHlVersion  = ta->__hlVersion;
+            ta->__cachedGapVersion = ta->__gapVersion;
         }
 
         // Keep the caret in view — but only when the caret actually moved
@@ -2602,6 +2812,31 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
             if (maxScroll < 0.0f) maxScroll = 0.0f;
             if (ta->scrollY > maxScroll) ta->scrollY = maxScroll;
             if (ta->scrollY < 0.0f) ta->scrollY = 0.0f;
+        }
+
+        // ── Virtualization: build only the visible window of lines ──────────
+        // Compute the [visLo, visHi) line range inside the viewport and build
+        // their glyph textures + char-offset tables on demand (cheap no-op if
+        // already cached). Lines that drifted well outside the window are freed
+        // so memory stays bounded on a huge file. Overscan a few lines so a wheel
+        // nudge doesn't flash. Cost per frame is O(visible lines), not O(file).
+        if (ta->linesLen > 0 && lineH > 0.0f) {
+            const float viewH2 = bounds.h - (ta->paddingTop + ta->paddingBottom);
+            const int OVERSCAN = 8;
+            int visLo = (int)(ta->scrollY / lineH) - OVERSCAN;
+            int visHi = (int)((ta->scrollY + viewH2) / lineH) + OVERSCAN + 1;
+            if (visLo < 0) visLo = 0;
+            if (visHi > ta->linesLen) visHi = ta->linesLen;
+            // Free lines that fell outside the (slightly padded) keep window.
+            const int KEEP = OVERSCAN * 4;
+            for (int li = ta->__builtLo; li < ta->__builtHi; li++) {
+                if (li < visLo - KEEP || li >= visHi + KEEP) TA_FreeLineBuilt(ta, li);
+            }
+            for (int li = visLo; li < visHi; li++) {
+                TA_EnsureLineBuilt(window, ta, font, rfont, li);
+            }
+            ta->__builtLo = visLo;
+            ta->__builtHi = visHi;
         }
 
         // Line-number gutter — drawn before the text clip so the numbers sit in
@@ -2760,15 +2995,101 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                 if (!ta->lineTextures[li]) continue;
                 float tw, th;
                 SDL_GetTextureSize(ta->lineTextures[li], &tw, &th);
-                tw /= g_textSS; th /= g_textSS;   // texture is g_textSS× — logical
-                SDL_FRect dst = {
-                    bounds.x + ta->paddingLeft + gutterW,
-                    bounds.y + ta->paddingTop + li * lineH - ta->scrollY,
-                    tw, th
-                };
+                const float lw = tw / g_textSS, lh = th / g_textSS;  // logical size
+                const float baseX = bounds.x + ta->paddingLeft + gutterW;
+                const float baseY = bounds.y + ta->paddingTop + li * lineH - ta->scrollY;
                 SDL_SetTextureAlphaMod(ta->lineTextures[li], (Uint8)(op * 255.0f + 0.5f));
-                SDL_RenderTexture(window->sdlRenderer, ta->lineTextures[li], NULL, &dst);
+
+                // Inline gaps on this line: the texture is the RAW (un-gapped)
+                // glyphs, so draw it in pieces — at each gap byte, insert empty
+                // space and shift the rest right (reserving room for a swatch).
+                const int segStart = ta->lineStarts[li];
+                const int segLen   = ta->lineLengths[li];
+                int   gi[32]; float gw[32]; int gn = 0;
+                for (int i = 0; i < ta->__gapCount && gn < 32; i++) {
+                    const int b = ta->__gapAt[i];
+                    if (b < segStart || b > segStart + segLen) continue;
+                    int j = gn++;
+                    while (j > 0 && gi[j-1] > b) { gi[j] = gi[j-1]; gw[j] = gw[j-1]; j--; }
+                    gi[j] = b; gw[j] = ta->__gapW[i];
+                }
+
+                if (gn == 0) {
+                    SDL_FRect dst = { baseX, baseY, lw, lh };
+                    SDL_RenderTexture(window->sdlRenderer, ta->lineTextures[li], NULL, &dst);
+                } else {
+                    float prevRaw = 0.0f, cum = 0.0f;
+                    for (int s = 0; s <= gn; s++) {
+                        float splitRaw;
+                        if (s < gn) {
+                            int wpx = 0, hpx = 0;
+                            TTF_GetStringSize(font, ta->text + segStart, (size_t)(gi[s] - segStart), &wpx, &hpx);
+                            splitRaw = (float)wpx;
+                        } else {
+                            splitRaw = lw;
+                        }
+                        const float segW = splitRaw - prevRaw;
+                        if (segW > 0.0f) {
+                            SDL_FRect src = { prevRaw * g_textSS, 0.0f, segW * g_textSS, th };
+                            SDL_FRect dst = { baseX + prevRaw + cum, baseY, segW, lh };
+                            SDL_RenderTexture(window->sdlRenderer, ta->lineTextures[li], &src, &dst);
+                        }
+                        if (s < gn) { cum += gw[s]; prevRaw = splitRaw; }
+                    }
+                }
                 SDL_SetTextureAlphaMod(ta->lineTextures[li], 255);
+            }
+        }
+
+        // Inline color swatches — draw each box in its reserved gap and record its
+        // on-screen rect for click hit-testing. Uses the SAME folded offsets as the
+        // text (so the box tracks scroll/zoom exactly, no host overlay / race).
+        ta->__swatchRectCount = 0;
+        if (ta->__swatchCount > 0 && ta->lineCharOffsets && ta->linesLen > 0) {
+            const float sbaseX  = bounds.x + ta->paddingLeft + gutterW;
+            const float smargin = ta->fontSize * 0.15f;
+            for (int i = 0; i < ta->__swatchCount; i++) {
+                const int B = ta->__gapAt[i];
+                int line = 0;
+                { int lo = 0, hi = ta->linesLen - 1;
+                  while (lo < hi) { int mid = (lo + hi + 1) / 2;
+                      if (ta->lineStarts[mid] <= B) lo = mid; else hi = mid - 1; }
+                  line = lo; }
+                if (line < 0 || line >= ta->linesLen || !ta->lineCharOffsets[line]) continue;
+                const int col = B - ta->lineStarts[line];
+                if (col < 0 || col >= ta->lineCharOffsetsLen[line]) continue;
+                const float gappedX = (float)ta->lineCharOffsets[line][col];
+                const float gapW    = ta->__gapW[i];
+                float sbox = gapW - 2.0f * smargin;
+                if (sbox < 4.0f) sbox = gapW * 0.6f;
+                const float lineTop = bounds.y + ta->paddingTop + line * lineH - ta->scrollY;
+                if (lineTop + lineH < bounds.y || lineTop > bounds.y + bounds.h) continue;
+                const float bx = sbaseX + gappedX - gapW + smargin;
+                const float by = lineTop + (lineH - sbox) * 0.5f;
+                SDL_FRect r = { bx, by, sbox, sbox };
+                UIColor backing = (UIColor){ 255, 255, 255, op };
+                UIColor fill    = ta->__swatchColor[i]; fill.a *= op;
+                UIColor border  = (UIColor){ 0, 0, 0, 0.45f * op };
+                DrawRoundedRectWithBorder(window->sdlRenderer, r, backing, 3.0f, 0, backing);
+                DrawRoundedRectWithBorder(window->sdlRenderer, r, fill,    3.0f, 1, border);
+                // Record the rect for click hit-testing.
+                if (ta->__swatchRectCount >= ta->__swatchRectCap) {
+                    int ncap = ta->__swatchRectCap ? ta->__swatchRectCap * 2 : 16;
+                    float* nx = (float*)realloc(ta->__swatchRX, (size_t)ncap*sizeof(float));
+                    float* ny = (float*)realloc(ta->__swatchRY, (size_t)ncap*sizeof(float));
+                    float* nw = (float*)realloc(ta->__swatchRW, (size_t)ncap*sizeof(float));
+                    float* nh = (float*)realloc(ta->__swatchRH, (size_t)ncap*sizeof(float));
+                    int*   nb = (int*)  realloc(ta->__swatchByte,(size_t)ncap*sizeof(int));
+                    if (nx) ta->__swatchRX = nx; if (ny) ta->__swatchRY = ny;
+                    if (nw) ta->__swatchRW = nw; if (nh) ta->__swatchRH = nh;
+                    if (nb) ta->__swatchByte = nb;
+                    if (!nx||!ny||!nw||!nh||!nb) break;
+                    ta->__swatchRectCap = ncap;
+                }
+                int k = ta->__swatchRectCount++;
+                ta->__swatchRX[k] = bx; ta->__swatchRY[k] = by;
+                ta->__swatchRW[k] = sbox; ta->__swatchRH[k] = sbox;
+                ta->__swatchByte[k] = B;
             }
         }
 
