@@ -635,9 +635,13 @@ static HRESULT D3D11_CreateDeviceResources(SDL_Renderer *renderer)
     }
 
     // Create the Direct3D 11 API device object and a corresponding context.
+    // [mocida] For a composition window, create the device the same way the
+    // Windows.UI.Composition compositor does — the DEFAULT adapter via
+    // D3D_DRIVER_TYPE_HARDWARE (NULL adapter) — so CreateCompositionSurfaceForSwapChain
+    // can share the swap chain (an explicit adapter object can fail to bridge).
     result = D3D11CreateDeviceFunc(
-        data->dxgiAdapter,
-        D3D_DRIVER_TYPE_UNKNOWN,
+        mocida_comp ? NULL : data->dxgiAdapter,
+        mocida_comp ? D3D_DRIVER_TYPE_HARDWARE : D3D_DRIVER_TYPE_UNKNOWN,
         NULL,
         creationFlags, // Set set debug and Direct2D compatibility flags.
         featureLevels, // List of feature levels this app can support.
