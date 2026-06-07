@@ -75,6 +75,10 @@ struct UITextArea {
     int      caretBlinkMs;     /**< Half-period of the caret blink. Default 530. <= 0 disables blinking. */
 
     UIColor  bgColor;          /**< Background fill. */
+    char*    __bgImagePath;    /**< Optional wallpaper drawn cover-fit behind the text (owned copy, NULL = none). */
+    void*    __bgImageTex;     /**< Cached SDL_Texture for __bgImagePath (lazily loaded at render). */
+    float    bgImageDim;       /**< 0..1 dark scrim over the wallpaper for readability (0 = none). */
+    float    bgImageBlur;      /**< UIGlass blur radius (px) applied over the wallpaper (0 = none). */
     UIColor  borderColor;      /**< Border color when not focused. */
     UIColor  borderColorFocused;/**< Border color while focused. */
     float    borderWidth;      /**< Border thickness (pixels). */
@@ -291,6 +295,9 @@ UITextArea* UITextArea_SetFontFamily (UITextArea* ta, char* family);
 UITextArea* UITextArea_SetMaxLength  (UITextArea* ta, int maxLen);
 UITextArea* UITextArea_SetLineSpacing(UITextArea* ta, float spacing);
 UITextArea* UITextArea_SetBgColor    (UITextArea* ta, UIColor color);
+UITextArea* UITextArea_SetBgImage    (UITextArea* ta, const char* path);
+UITextArea* UITextArea_SetBgImageDim (UITextArea* ta, float dim);
+UITextArea* UITextArea_SetBgImageBlur(UITextArea* ta, float blurPx);
 UITextArea* UITextArea_SetTextColor  (UITextArea* ta, UIColor color);
 UITextArea* UITextArea_SetPlaceholderColor(UITextArea* ta, UIColor color);
 UITextArea* UITextArea_SetCaretColor (UITextArea* ta, UIColor color);

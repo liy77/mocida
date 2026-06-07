@@ -2616,6 +2616,62 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                                   bg2, ta->radius,
                                   (int)ta->borderWidth, border2);
 
+        // Optional wallpaper drawn cover-fit behind the text (host sets it via
+        // UITextArea_SetBgImage; host also makes bgColor transparent so it shows).
+        // Drawn by the TextArea itself — not a MUI overlay — so it tracks the editor
+        // rect exactly and dodges mocida's nested free-layout clipping. The texture
+        // is loaded lazily (the renderer is only available here) and cached.
+        if (ta->__bgImagePath) {
+            if (!ta->__bgImageTex) {
+                SDL_Surface* __bgs = UIAsset_LoadSurface(ta->__bgImagePath);
+                if (__bgs) {
+                    ta->__bgImageTex = SDL_CreateTextureFromSurface(window->sdlRenderer, __bgs);
+                    if (ta->__bgImageTex)
+                        SDL_SetTextureScaleMode((SDL_Texture*)ta->__bgImageTex, SDL_SCALEMODE_LINEAR);
+                    SDL_DestroySurface(__bgs);
+                }
+            }
+            SDL_Texture* __btex = (SDL_Texture*)ta->__bgImageTex;
+            float __tw = 0.0f, __th = 0.0f;
+            if (__btex) SDL_GetTextureSize(__btex, &__tw, &__th);
+            if (__btex && __tw > 0.0f && __th > 0.0f) {
+                // cover-fit: pick the larger scale, center-crop the source.
+                float __sc = bounds.w / __tw;
+                float __sc2 = bounds.h / __th;
+                if (__sc2 > __sc) __sc = __sc2;
+                SDL_FRect __src = { (__tw - bounds.w / __sc) * 0.5f,
+                                    (__th - bounds.h / __sc) * 0.5f,
+                                    bounds.w / __sc, bounds.h / __sc };
+                // Clip to the editor bounds (intersect with any caller clip).
+                SDL_Rect __want = { (int)bounds.x, (int)bounds.y, (int)bounds.w, (int)bounds.h };
+                bool __had = SDL_RenderClipEnabled(window->sdlRenderer);
+                SDL_Rect __prev;
+                if (__had) {
+                    SDL_GetRenderClipRect(window->sdlRenderer, &__prev);
+                    SDL_Rect __is;
+                    if (SDL_GetRectIntersection(&__want, &__prev, &__is))
+                        SDL_SetRenderClipRect(window->sdlRenderer, &__is);
+                    else { SDL_Rect __e = { __prev.x, __prev.y, 0, 0 }; SDL_SetRenderClipRect(window->sdlRenderer, &__e); }
+                } else {
+                    SDL_SetRenderClipRect(window->sdlRenderer, &__want);
+                }
+                SDL_SetTextureAlphaModFloat(__btex, op);
+                SDL_RenderTexture(window->sdlRenderer, __btex, &__src, &bounds);
+                // UIGlass frost over the wallpaper (blur it in place, within the clip)
+                // so the code reads cleanly over a softened image.
+                if (ta->bgImageBlur > 0.0f)
+                    DrawGlassBackdropBlur(window->sdlRenderer, bounds, ta->bgImageBlur);
+                if (ta->bgImageDim > 0.0f) {
+                    SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_BLEND);
+                    SDL_SetRenderDrawColor(window->sdlRenderer, 30, 31, 34,
+                                           (Uint8)(ta->bgImageDim * op * 255.0f));
+                    SDL_RenderFillRect(window->sdlRenderer, &bounds);
+                }
+                if (__had) SDL_SetRenderClipRect(window->sdlRenderer, &__prev);
+                else       SDL_SetRenderClipRect(window->sdlRenderer, NULL);
+            }
+        }
+
         TTF_Font* font = (ta->fontSize > 0.0f)
             ? GetFont(ta->fontFamily, ta->fontSize) : NULL;
         if (!font) return;

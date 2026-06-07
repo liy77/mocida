@@ -386,6 +386,22 @@ UITextArea* UITextArea_SetLineSpacing(UITextArea* ta, float spacing) {
 }
 
 UITextArea* UITextArea_SetBgColor    (UITextArea* ta, UIColor color) { if (ta) ta->bgColor = color;   return ta; }
+
+// Wallpaper drawn cover-fit behind the text (e.g. OndaEngine's editor background).
+// Stores an owned copy of the path; the texture is (re)loaded lazily at render time
+// (where the SDL_Renderer is available). Passing NULL/"" clears it.
+UITextArea* UITextArea_SetBgImage(UITextArea* ta, const char* path) {
+    if (!ta) return ta;
+    const char* cur = ta->__bgImagePath ? ta->__bgImagePath : "";
+    const char* nw  = path ? path : "";
+    if (strcmp(cur, nw) == 0) return ta;       // unchanged — keep the cached texture
+    free(ta->__bgImagePath);
+    ta->__bgImagePath = nw[0] ? strdup(nw) : NULL;
+    if (ta->__bgImageTex) { SDL_DestroyTexture((SDL_Texture*)ta->__bgImageTex); ta->__bgImageTex = NULL; }
+    return ta;
+}
+UITextArea* UITextArea_SetBgImageDim (UITextArea* ta, float dim) { if (ta) ta->bgImageDim = dim < 0 ? 0 : (dim > 1 ? 1 : dim); return ta; }
+UITextArea* UITextArea_SetBgImageBlur(UITextArea* ta, float blurPx) { if (ta) ta->bgImageBlur = blurPx < 0 ? 0 : blurPx; return ta; }
 UITextArea* UITextArea_SetTextColor  (UITextArea* ta, UIColor color) {
     if (!ta) return ta;
     ta->textColor = color;
@@ -503,6 +519,8 @@ void UITextArea_Destroy(UITextArea* ta) {
     free(ta->__swatchColor);
     free(ta->__swatchRX); free(ta->__swatchRY); free(ta->__swatchRW); free(ta->__swatchRH);
     free(ta->__swatchByte);
+    free(ta->__bgImagePath);
+    if (ta->__bgImageTex) SDL_DestroyTexture((SDL_Texture*)ta->__bgImageTex);
     free(ta);
 }
 
