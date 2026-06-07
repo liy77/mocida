@@ -123,6 +123,12 @@ impl Image {
         self
     }
 
+    /// Toggle smooth (linear) vs nearest/pixelated scaling. Default `true` (smooth).
+    pub fn antialiasing(self, on: bool) -> Self {
+        unsafe { sys::UIImage_SetAntialiasing(self.ptr, on as i32) };
+        self
+    }
+
     /// Borrow the raw `UIImage*`.
     #[inline]
     pub fn as_ptr(&self) -> *mut sys::UIImage {

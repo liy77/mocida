@@ -3047,6 +3047,10 @@ fn build_image(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     if prop_bool(el, "cache") == Some(false) {
         img = img.cache(false);
     }
+    // `antialiasing:` — smooth (linear) scaling, default on; set false for pixel art.
+    if prop_bool(el, "antialiasing") == Some(false) {
+        img = img.antialiasing(false);
+    }
     let w = dim_prop(ctx, el, "width").unwrap_or(120.0);
     let h = dim_prop(ctx, el, "height").unwrap_or(120.0);
     let (x, y) = place(el, layout, w, h);

@@ -65,6 +65,7 @@ typedef struct {
     UIMarginsObject* nineSliceMargins; /**< Borrowed nine-slice margins; not owned. */
 
     SDL_Texture* __SDL_texture;/**< Lazily-created GPU texture; NULL until first render. */
+    int      antialiasing;     /**< 1 = smooth (linear) scaling [default], 0 = nearest/pixelated. */
     UIFillMode fillMode;       /**< How the texture fills the widget rect. */
     UIColor tintColor;         /**< Tint applied via SDL_SetTextureColorMod (alpha 0 = no tint). */
 
@@ -184,6 +185,10 @@ int UIImage_IsRemoteSource(const char* source);
  * @param cache 1 to cache (default), 0 to always refetch.
  */
 void UIImage_SetCache(UIImage* image, int cache);
+
+/** Toggle smooth (linear) vs nearest/pixelated scaling. Default 1 (smooth). Applies
+ *  to the existing texture immediately and to any future (re)load. */
+void UIImage_SetAntialiasing(UIImage* image, int on);
 
 /**
  * Advances the asynchronous load of a remote (http/https) image. Called by

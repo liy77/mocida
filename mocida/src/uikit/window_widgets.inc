@@ -1195,7 +1195,8 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
                 img->__SDL_texture = UIAsset_LoadTexture(window->sdlRenderer, img->source);
                 if (img->__SDL_texture) {
                     img->loadState = IMAGE_LOAD_SUCCESS;
-                    SDL_SetTextureScaleMode(img->__SDL_texture, SDL_SCALEMODE_LINEAR);
+                    SDL_SetTextureScaleMode(img->__SDL_texture,
+                        img->antialiasing ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
                 } else {
                     img->loadState = IMAGE_LOAD_FAILURE;
                 }
@@ -2642,23 +2643,20 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                 SDL_FRect __src = { (__tw - bounds.w / __sc) * 0.5f,
                                     (__th - bounds.h / __sc) * 0.5f,
                                     bounds.w / __sc, bounds.h / __sc };
-                // Clip to the editor bounds (intersect with any caller clip).
-                SDL_Rect __want = { (int)bounds.x, (int)bounds.y, (int)bounds.w, (int)bounds.h };
+                // CRITICAL: clear any active clip for the whole wallpaper draw. The
+                // image + dim are confined by their `bounds` dst rect, and
+                // DrawGlassBackdropBlur MUST run clip-free — an active clip is
+                // inherited by its intermediate render-target captures (which live at
+                // the texture origin, not `bounds`), so it captures only a sliver and
+                // the result looks pixelated/blocky instead of blurred. (This is why
+                // the HSV picker — no clip active — frosts smoothly but this did not.)
                 bool __had = SDL_RenderClipEnabled(window->sdlRenderer);
                 SDL_Rect __prev;
-                if (__had) {
-                    SDL_GetRenderClipRect(window->sdlRenderer, &__prev);
-                    SDL_Rect __is;
-                    if (SDL_GetRectIntersection(&__want, &__prev, &__is))
-                        SDL_SetRenderClipRect(window->sdlRenderer, &__is);
-                    else { SDL_Rect __e = { __prev.x, __prev.y, 0, 0 }; SDL_SetRenderClipRect(window->sdlRenderer, &__e); }
-                } else {
-                    SDL_SetRenderClipRect(window->sdlRenderer, &__want);
-                }
+                if (__had) SDL_GetRenderClipRect(window->sdlRenderer, &__prev);
+                SDL_SetRenderClipRect(window->sdlRenderer, NULL);
+
                 SDL_SetTextureAlphaModFloat(__btex, op);
                 SDL_RenderTexture(window->sdlRenderer, __btex, &__src, &bounds);
-                // UIGlass frost over the wallpaper (blur it in place, within the clip)
-                // so the code reads cleanly over a softened image.
                 if (ta->bgImageBlur > 0.0f)
                     DrawGlassBackdropBlur(window->sdlRenderer, bounds, ta->bgImageBlur);
                 if (ta->bgImageDim > 0.0f) {

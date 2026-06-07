@@ -39,6 +39,7 @@ UIImage* UIImage_Create(const char* source, int animated, int nineSlice,
     image->__widget_type = UI_WIDGET_IMAGE; // Set the widget type
     image->loadState = IMAGE_LOAD_IN_PROGRESS; // Default load state
     image->cache = 1; // Cache remote downloads in memory by default
+    image->antialiasing = 1; // Smooth (linear) scaling by default
 
     return image;
 }
@@ -109,6 +110,14 @@ int UIImage_IsRemoteSource(const char* source) {
 
 void UIImage_SetCache(UIImage* image, int cache) {
     if (image) image->cache = cache ? 1 : 0;
+}
+
+void UIImage_SetAntialiasing(UIImage* image, int on) {
+    if (!image) return;
+    image->antialiasing = on ? 1 : 0;
+    if (image->__SDL_texture)
+        SDL_SetTextureScaleMode(image->__SDL_texture,
+            image->antialiasing ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
 }
 
 /* --- process-wide URL -> bytes cache (FIFO eviction past a size cap) --- */
@@ -403,7 +412,8 @@ void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer) {
         }
         if (image->__SDL_texture) {
             image->loadState = IMAGE_LOAD_SUCCESS;
-            SDL_SetTextureScaleMode(image->__SDL_texture, SDL_SCALEMODE_LINEAR);
+            SDL_SetTextureScaleMode(image->__SDL_texture,
+                image->antialiasing ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
         } else {
             image->loadState = IMAGE_LOAD_FAILURE;
         }
