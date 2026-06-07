@@ -901,15 +901,37 @@ static HRESULT D3D11_CreateSwapChain(SDL_Renderer *renderer, int w, int h)
     } else {
         swapChainDesc.Scaling = DXGI_SCALING_STRETCH;
     }
-    if (SDL_GetWindowFlags(renderer->window) & SDL_WINDOW_TRANSPARENT) {
+    // [mocida] Transparent windows use a COMPOSITION swap chain (premultiplied
+    // alpha, flip model) instead of an HWND swap chain, so a DirectComposition /
+    // Windows.UI.Composition visual tree can host the rendered content WITH a
+    // blurred backdrop visual behind it (real acrylic). The host binds the swap
+    // chain (exposed via SDL_PROP_RENDERER_D3D11_SWAPCHAIN_POINTER) to a visual.
+    BOOL mocida_composition =
+        (SDL_GetWindowFlags(renderer->window) & SDL_WINDOW_TRANSPARENT) != 0;
+    if (mocida_composition) {
         swapChainDesc.Scaling = DXGI_SCALING_STRETCH;
-        swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+        swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+        swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_PREMULTIPLIED;
+        // The compositor samples the swap chain as a texture, so its buffers must
+        // also allow shader input (not just render-target output) — otherwise
+        // CreateCompositionSurfaceForSwapChain fails with DXGI_ERROR_UNSUPPORTED.
+        swapChainDesc.BufferUsage |= DXGI_USAGE_SHADER_INPUT;
     } else {
         swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL; // All Windows Store apps must use this SwapEffect.
     }
     swapChainDesc.Flags = 0;
 
-    if (coreWindow) {
+    if (mocida_composition) {
+        result = IDXGIFactory2_CreateSwapChainForComposition(data->dxgiFactory,
+                                                             (IUnknown *)data->d3dDevice,
+                                                             &swapChainDesc,
+                                                             NULL, // Allow on all displays.
+                                                             &data->swapChain);
+        if (FAILED(result)) {
+            WIN_SetErrorFromHRESULT(SDL_COMPOSE_ERROR("IDXGIFactory2::CreateSwapChainForComposition"), result);
+            goto done;
+        }
+    } else if (coreWindow) {
         result = IDXGIFactory2_CreateSwapChainForCoreWindow(data->dxgiFactory,
                                                             (IUnknown *)data->d3dDevice,
                                                             coreWindow,

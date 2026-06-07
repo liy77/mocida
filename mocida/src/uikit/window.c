@@ -896,6 +896,17 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
                             SDL_HINT_DEFAULT);
 #endif
 
+    // A transparent window composites its D3D11 swap chain into a
+    // Windows.UI.Composition visual tree (real acrylic backdrop). The compositor
+    // runs on its own thread and shares the swap chain's device, so that device
+    // must be multithread-safe — SDL defaults to a single-threaded D3D11 device,
+    // which makes CreateCompositionSurfaceForSwapChain fail with
+    // DXGI_ERROR_UNSUPPORTED. Request a thread-safe device for transparent windows.
+    if (g_wantTransparent) {
+        SDL_SetHintWithPriority(SDL_HINT_RENDER_DIRECT3D_THREADSAFE, "1",
+                                SDL_HINT_OVERRIDE);
+    }
+
     // In SDL3, CreateRenderer has different parameters
     SDL_Renderer* sdlRenderer = SDL_CreateRenderer(sdlWindow, NULL);
     if (!sdlRenderer) {
