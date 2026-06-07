@@ -140,31 +140,19 @@ int UIBackdrop_Apply(SDL_Window* window, UIBackdropMaterial material,
         return 0;
     }
 
-    // ACRYLIC on a TRANSPARENT (per-pixel alpha) window → the classic blur-behind
-    // (SetWindowCompositionAttribute / ACCENT_ENABLE_ACRYLICBLURBEHIND). With real
-    // alpha pixels present (SDL_WINDOW_TRANSPARENT), DWM composites a blurred +
-    // tinted copy of whatever is behind the window INTO those alpha pixels — the
-    // visible acrylic, with explicit tint/opacity control. This is the ONLY path
-    // that actually blurs here: the DWMSBT system backdrop does NOT composite onto
-    // an SDL alpha window (it leaves the holes showing the sharp desktop). The
-    // legacy "ACCENT is dead on Win11" lore only held on an OPAQUE window, where
-    // there was no alpha for DWM to blend the blur into. NO frame extension on this
-    // path — DwmExtendFrameIntoClientArea flattens the ACCENT blur.
+    // TEST: a transparent SDL window (clear {0,0,0,0}) is genuinely see-through on
+    // its own (SDL issue #12410) — DWM blur-behind enabled the per-pixel alpha at
+    // window creation. Don't apply a DWM system backdrop here (DWMSBT + frame
+    // extend turns the whole blt swap chain black). Just report native so the clear
+    // stays zeroed; the holes show the desktop. Blur handled separately.
     if ((material == UI_BACKDROP_ACRYLIC || material == UI_BACKDROP_ACRYLIC_LEGACY)
         && UIWindow_WantsTransparent()) {
-        // The SDL window can't host the blur in its own client (DWMSBT → sharp,
-        // ACCENT → throttled flat/sharp on Win11 — both verified). The visible
-        // acrylic comes from the backdrop COMPANION window behind us
-        // (UIBackdropCompanion_*, driven from the host); a plain DWMSBT window
-        // blurs cleanly. All we do here is report native so UIWindow_SetBackdrop
-        // zeroes the clear → the app's alpha-0 holes stay see-through and reveal
-        // the companion's acrylic. No DWM effect on the SDL window itself.
         return 1;
     }
 
-    // Win11 22H2+: the DWMWA_SYSTEMBACKDROP_TYPE switch for Mica / Mica Alt (and
-    // Acrylic on an OPAQUE window), with the frame extended into the whole client
-    // so the backdrop reaches the app's transparent (alpha-0) pixels. Acrylic ==
+    // Win11 22H2+: the DWMWA_SYSTEMBACKDROP_TYPE switch for Mica / Mica Alt /
+    // Acrylic on an OPAQUE window, with the frame extended into the whole client so
+    // the backdrop reaches the app's transparent (alpha-0) pixels. Acrylic ==
     // DWMSBT_TRANSIENTWINDOW. (DWMSBT uses the system tint recipe; the explicit
     // tint/opacity is honored only by the ACCENT paths.)
     if (is_win11()) {

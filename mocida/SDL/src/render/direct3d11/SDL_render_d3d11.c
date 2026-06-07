@@ -623,25 +623,15 @@ static HRESULT D3D11_CreateDeviceResources(SDL_Renderer *renderer)
         creationFlags |= D3D11_CREATE_DEVICE_DEBUG;
     }
 
-    // Create a single-threaded device unless the app requests otherwise. [mocida]
-    // A transparent window composites its swap chain via Windows.UI.Composition,
-    // which shares the swap chain's device across threads — that REQUIRES a
-    // multithreaded device, else CreateCompositionSurfaceForSwapChain fails with
-    // DXGI_ERROR_UNSUPPORTED. So never make a single-threaded device for one.
-    BOOL mocida_comp = renderer->window &&
-        (SDL_GetWindowFlags(renderer->window) & SDL_WINDOW_TRANSPARENT) != 0;
-    if (!mocida_comp && !SDL_GetHintBoolean(SDL_HINT_RENDER_DIRECT3D_THREADSAFE, false)) {
+    // Create a single-threaded device unless the app requests otherwise.
+    if (!SDL_GetHintBoolean(SDL_HINT_RENDER_DIRECT3D_THREADSAFE, false)) {
         creationFlags |= D3D11_CREATE_DEVICE_SINGLETHREADED;
     }
 
     // Create the Direct3D 11 API device object and a corresponding context.
-    // [mocida] For a composition window, create the device the same way the
-    // Windows.UI.Composition compositor does — the DEFAULT adapter via
-    // D3D_DRIVER_TYPE_HARDWARE (NULL adapter) — so CreateCompositionSurfaceForSwapChain
-    // can share the swap chain (an explicit adapter object can fail to bridge).
     result = D3D11CreateDeviceFunc(
-        mocida_comp ? NULL : data->dxgiAdapter,
-        mocida_comp ? D3D_DRIVER_TYPE_HARDWARE : D3D_DRIVER_TYPE_UNKNOWN,
+        data->dxgiAdapter,
+        D3D_DRIVER_TYPE_UNKNOWN,
         NULL,
         creationFlags, // Set set debug and Direct2D compatibility flags.
         featureLevels, // List of feature levels this app can support.
@@ -911,37 +901,15 @@ static HRESULT D3D11_CreateSwapChain(SDL_Renderer *renderer, int w, int h)
     } else {
         swapChainDesc.Scaling = DXGI_SCALING_STRETCH;
     }
-    // [mocida] Transparent windows use a COMPOSITION swap chain (premultiplied
-    // alpha, flip model) instead of an HWND swap chain, so a DirectComposition /
-    // Windows.UI.Composition visual tree can host the rendered content WITH a
-    // blurred backdrop visual behind it (real acrylic). The host binds the swap
-    // chain (exposed via SDL_PROP_RENDERER_D3D11_SWAPCHAIN_POINTER) to a visual.
-    BOOL mocida_composition =
-        (SDL_GetWindowFlags(renderer->window) & SDL_WINDOW_TRANSPARENT) != 0;
-    if (mocida_composition) {
+    if (SDL_GetWindowFlags(renderer->window) & SDL_WINDOW_TRANSPARENT) {
         swapChainDesc.Scaling = DXGI_SCALING_STRETCH;
-        swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
-        swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_PREMULTIPLIED;
-        // The compositor samples the swap chain as a texture, so its buffers must
-        // also allow shader input (not just render-target output) — otherwise
-        // CreateCompositionSurfaceForSwapChain fails with DXGI_ERROR_UNSUPPORTED.
-        swapChainDesc.BufferUsage |= DXGI_USAGE_SHADER_INPUT;
+        swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
     } else {
         swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL; // All Windows Store apps must use this SwapEffect.
     }
     swapChainDesc.Flags = 0;
 
-    if (mocida_composition) {
-        result = IDXGIFactory2_CreateSwapChainForComposition(data->dxgiFactory,
-                                                             (IUnknown *)data->d3dDevice,
-                                                             &swapChainDesc,
-                                                             NULL, // Allow on all displays.
-                                                             &data->swapChain);
-        if (FAILED(result)) {
-            WIN_SetErrorFromHRESULT(SDL_COMPOSE_ERROR("IDXGIFactory2::CreateSwapChainForComposition"), result);
-            goto done;
-        }
-    } else if (coreWindow) {
+    if (coreWindow) {
         result = IDXGIFactory2_CreateSwapChainForCoreWindow(data->dxgiFactory,
                                                             (IUnknown *)data->d3dDevice,
                                                             coreWindow,
@@ -2646,15 +2614,7 @@ static bool D3D11_RenderPresent(SDL_Renderer *renderer)
     /* The application may optionally specify "dirty" or "scroll"
      * rects to improve efficiency in certain scenarios.
      */
-    // [mocida] A composition swap chain (transparent window) has its buffers held
-    // by the compositor, so a non-blocking present (DXGI_PRESENT_DO_NOT_WAIT) finds
-    // no free buffer and SKIPS the frame — the swap chain never gets content and the
-    // window reads black. Always do a blocking present for composition windows.
-    UINT presentFlags = data->presentFlags;
-    if (SDL_GetWindowFlags(renderer->window) & SDL_WINDOW_TRANSPARENT) {
-        presentFlags &= ~DXGI_PRESENT_DO_NOT_WAIT;
-    }
-    result = IDXGISwapChain1_Present1(data->swapChain, data->syncInterval, presentFlags, &parameters);
+    result = IDXGISwapChain1_Present1(data->swapChain, data->syncInterval, data->presentFlags, &parameters);
 
     /* Discard the contents of the render target.
      * This is a valid operation only when the existing contents will be entirely

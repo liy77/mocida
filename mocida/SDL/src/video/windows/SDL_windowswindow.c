@@ -177,14 +177,6 @@ static DWORD GetWindowStyleEx(SDL_Window *window)
     if (SDL_WINDOW_IS_POPUP(window) || (window->flags & SDL_WINDOW_NOT_FOCUSABLE)) {
         style |= WS_EX_NOACTIVATE;
     }
-    // [mocida] A transparent window composites its swap chain through a
-    // DirectComposition / Windows.UI.Composition visual tree. Without
-    // WS_EX_NOREDIRECTIONBITMAP the window keeps an (empty) GDI redirection
-    // surface that composes OVER the visual tree → the window reads as black.
-    // No redirection bitmap means the composition visual IS the window content.
-    if (window->flags & SDL_WINDOW_TRANSPARENT) {
-        style |= WS_EX_NOREDIRECTIONBITMAP;
-    }
     return style;
 }
 
