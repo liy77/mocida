@@ -2297,7 +2297,20 @@ static void RenderWidget_TextField(UIWindow* window, UIWidget* el,
             (int)(bounds.w - (tf->paddingLeft + tf->paddingRight)),
             (int)(bounds.h)
         };
-        SDL_SetRenderClipRect(window->sdlRenderer, &clip);
+        // INTERSECT with the caller's clip (a parent Scroll's viewport) instead of
+        // replacing it — otherwise a field scrolled OUT of the viewport still draws
+        // its box/text at its own (off-viewport) bounds, escaping the scroll clip.
+        if (__tfHadClip) {
+            SDL_Rect __tfIsect;
+            if (SDL_GetRectIntersection(&clip, &__tfPrevClip, &__tfIsect)) {
+                SDL_SetRenderClipRect(window->sdlRenderer, &__tfIsect);
+            } else {
+                SDL_Rect __tfEmpty = { __tfPrevClip.x, __tfPrevClip.y, 0, 0 };
+                SDL_SetRenderClipRect(window->sdlRenderer, &__tfEmpty);
+            }
+        } else {
+            SDL_SetRenderClipRect(window->sdlRenderer, &clip);
+        }
 
         // Selection highlight - drawn behind the glyphs so the text
         // colour stays untouched.
