@@ -1,8 +1,8 @@
 // menu_bar_cocoa.mm — macOS implementation of the menu-bar Cocoa backend.
 //
-// Pairs with menu_bar.c, which owns the UIMenu / UIMenuItem struct layout
+// Pairs with menu_bar.c, which owns the UIMenuBar / UIMenuBarItem struct layout
 // and the cross-platform child-tracking logic. The .c also defines the
-// public C entry points (ui_menu_create, ui_menu_bar_set, ...); on Apple
+// public C entry points (ui_menu_bar_create, ui_menu_bar_set, ...); on Apple
 // those work as-is because the C side just calls the weak hooks below
 // to keep the NSMenu tree in lock-step with the C-side tree.
 //
@@ -12,7 +12,7 @@
 //      tree in sync with the C-side tree. On non-Apple builds the
 //      hooks are unresolved; the C side treats that as a no-op.
 //   2. The bridge from NSMenuItem activations back to the host's
-//      ui_menu_item_callback_t (via associated objects on each item).
+//      ui_menu_bar_item_callback_t (via associated objects on each item).
 //
 // We deliberately do NOT redefine the public C API here — that would
 // produce a duplicate symbol on Apple. The .c owns the public surface;
@@ -27,12 +27,12 @@
 
 // ── Callback state ───────────────────────────────────────────────────────
 // Set by ui_menu_bar_set_item_callback (the C side calls
-// ui_menu__hook_set_callback, which is implemented here). The action
+// ui_menu_bar__hook_set_callback, which is implemented here). The action
 // target (see below) looks these up when an item is activated.
-static ui_menu_item_callback_t g_callback     = NULL;
+static ui_menu_bar_item_callback_t g_callback     = NULL;
 static void*                   g_callback_user = NULL;
 
-// ── NSMenuItem → C UIMenuItem bridge ─────────────────────────────────────
+// ── NSMenuItem → C UIMenuBarItem bridge ─────────────────────────────────────
 // Cocoa delivers menu activations as `-target/-action:`. We use a class
 // target (UIMenuActionHandler) so the same handler class can service any
 // number of items; the actual C pointer is stashed on each item via
@@ -47,7 +47,7 @@ static const void* kUIMenuItemPtrKey = "UIMenuItemPtr";
 + (void)menuItemFired:(id)sender {
     if (![sender isKindOfClass:[NSMenuItem class]]) return;
     NSMenuItem* item = (NSMenuItem*)sender;
-    UIMenuItem* cItem = (UIMenuItem*)objc_getAssociatedObject(
+    UIMenuBarItem* cItem = (UIMenuBarItem*)objc_getAssociatedObject(
         item, kUIMenuItemPtrKey);
     if (!cItem || !g_callback) return;
     g_callback(cItem->id, g_callback_user);
@@ -56,7 +56,7 @@ static const void* kUIMenuItemPtrKey = "UIMenuItemPtr";
 
 // ── Weak hooks (called by menu_bar.c) ────────────────────────────────────
 
-void ui_menu__hook_attach_nsmenu(UIMenu* m) {
+void ui_menu_bar__hook_attach_nsmenu(UIMenuBar* m) {
     if (!m) return;
     NSString* title = m->title
         ? [NSString stringWithUTF8String:m->title]
@@ -74,7 +74,7 @@ void ui_menu__hook_attach_nsmenu(UIMenu* m) {
     m->nsMenu = (__bridge struct objc_object*)ns;
 }
 
-void ui_menu__hook_attach_nsitem(UIMenuItem* it, UIMenu* parent) {
+void ui_menu_bar__hook_attach_nsitem(UIMenuBarItem* it, UIMenuBar* parent) {
     if (!it || !parent || !parent->nsMenu) return;
     NSMenuItem* nsItem = nil;
     if (it->is_separator) {
@@ -135,7 +135,7 @@ void ui_menu__hook_attach_nsitem(UIMenuItem* it, UIMenu* parent) {
     [(NSMenu*)(__bridge struct objc_object*)parent->nsMenu addItem:nsItem];
 }
 
-void ui_menu__hook_attach_nssubmenu(UIMenu* parent, UIMenu* sub) {
+void ui_menu_bar__hook_attach_nssubmenu(UIMenuBar* parent, UIMenuBar* sub) {
     if (!parent || !sub) return;
     if (!parent->nsMenu || !sub->nsMenu) return;
     // An NSMenu is attached to its parent via an NSMenuItem holder.
@@ -152,7 +152,7 @@ void ui_menu__hook_attach_nssubmenu(UIMenu* parent, UIMenu* sub) {
     [(NSMenu*)(__bridge struct objc_object*)parent->nsMenu addItem:holder];
 }
 
-void ui_menu__hook_install_root(UIMenu* root) {
+void ui_menu_bar__hook_install_root(UIMenuBar* root) {
     NSMenu* mainMenu = nil;
     if (root && root->nsMenu) mainMenu = (NSMenu*)(__bridge struct objc_object*)root->nsMenu;
     // [NSApp setMainMenu:] is a no-op if NSApp hasn't been initialised
@@ -161,11 +161,11 @@ void ui_menu__hook_install_root(UIMenu* root) {
     [NSApp setMainMenu:mainMenu];
 }
 
-void ui_menu__hook_uninstall_root(void) {
+void ui_menu_bar__hook_uninstall_root(void) {
     [NSApp setMainMenu:nil];
 }
 
-void ui_menu__hook_set_callback(ui_menu_item_callback_t cb, void* user) {
+void ui_menu_bar__hook_set_callback(ui_menu_bar_item_callback_t cb, void* user) {
     g_callback      = cb;
     g_callback_user = user;
 }

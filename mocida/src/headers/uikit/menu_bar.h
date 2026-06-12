@@ -13,6 +13,12 @@
 // menu bar (e.g. to react to a language change) is supported — just
 // call `ui_menu_bar_set` again with a fresh tree; the previous tree is
 // destroyed by the implementation.
+//
+// NOTE on naming: the public types are `UIMenuBar` / `UIMenuBarItem`,
+// not `UIMenu` / `UIMenuItem` — the mocida popup-menu widget already
+// owns those names (`uikit/popup.h`). Keeping them distinct avoids
+// struct-tag collisions when the bindgen wrapper header pulls in
+// both headers.
 
 #ifndef UIKIT_MENU_BAR_H
 #define UIKIT_MENU_BAR_H
@@ -24,24 +30,25 @@ extern "C" {
 #endif
 
 // Opaque types — the C side never touches internals.
-typedef struct UIMenu UIMenu;
-typedef struct UIMenuItem UIMenuItem;
+typedef struct UIMenuBar UIMenuBar;
+typedef struct UIMenuBarItem UIMenuBarItem;
 
-// Callback fired when the user activates a menu item. `id` is the value
-// the host passed to `ui_menu_item_create`. `user` is the value the host
-// passed to `ui_menu_bar_set_item_callback`. Called on the main thread.
-typedef void (*ui_menu_item_callback_t)(uint32_t id, void* user);
+// Callback fired when the user activates a menu bar item. `id` is the
+// value the host passed to `ui_menu_bar_item_create`. `user` is the
+// value the host passed to `ui_menu_bar_set_item_callback`. Called on
+// the main thread.
+typedef void (*ui_menu_bar_item_callback_t)(uint32_t id, void* user);
 
 // ── Menu ─────────────────────────────────────────────────────────────────
 
 // Create a (sub)menu with the given title. Pass NULL or "" for the root
 // menu (the application's main menu). Returns NULL on allocation failure.
-UIMenu* ui_menu_create(const char* title);
+UIMenuBar* ui_menu_bar_create(const char* title);
 
 // Release the menu. Safe to call on any menu the host still owns; safe
 // to call on the root menu (it's removed from the app first if it was
 // installed). Idempotent on NULL.
-void ui_menu_destroy(UIMenu* m);
+void ui_menu_bar_destroy(UIMenuBar* m);
 
 // ── Items ────────────────────────────────────────────────────────────────
 
@@ -50,29 +57,29 @@ void ui_menu_destroy(UIMenu* m);
 // NULL for no shortcut. `id` is opaque to the C side; the host picks a
 // u32 (e.g. an enum) and routes the id back to an action in its
 // callback.
-UIMenuItem* ui_menu_item_create(const char* label,
-                                const char* shortcut,
-                                uint32_t id);
+UIMenuBarItem* ui_menu_bar_item_create(const char* label,
+                                       const char* shortcut,
+                                       uint32_t id);
 
 // Create a separator (NSMenuItem separator on Cocoa; a no-op item on
 // other platforms).
-UIMenuItem* ui_menu_separator(void);
+UIMenuBarItem* ui_menu_bar_separator(void);
 
 // Release an item the host still owns (typically: items not yet attached
 // to a menu, or after the menu that owns them was destroyed). Idempotent
 // on NULL.
-void ui_menu_item_destroy(UIMenuItem* it);
+void ui_menu_bar_item_destroy(UIMenuBarItem* it);
 
 // Attach a leaf item to a parent menu. Takes ownership of the item;
 // the host must NOT destroy it after attaching.
-void ui_menu_append_item(UIMenu* parent, UIMenuItem* item);
+void ui_menu_bar_append_item(UIMenuBar* parent, UIMenuBarItem* item);
 
 // Attach a submenu to a parent menu. Takes ownership of the submenu;
 // the host must NOT destroy it after attaching.
-void ui_menu_append_submenu(UIMenu* parent, UIMenu* sub);
+void ui_menu_bar_append_submenu(UIMenuBar* parent, UIMenuBar* sub);
 
 // Append a separator to the parent. Convenience wrapper.
-void ui_menu_append_separator(UIMenu* parent);
+void ui_menu_bar_append_separator(UIMenuBar* parent);
 
 // ── Install / callback ───────────────────────────────────────────────────
 
@@ -83,12 +90,12 @@ void ui_menu_append_separator(UIMenu* parent);
 //
 // On non-macOS platforms this is a no-op (the menus are tracked but
 // never displayed). On macOS this sets `[NSApp mainMenu]`.
-void ui_menu_bar_set(UIMenu* root);
+void ui_menu_bar_set(UIMenuBar* root);
 
 // Register the callback fired when any item attached to the current menu
 // bar is activated. Either of `cb` or `user` may be NULL to unregister.
 // The callback fires on the main thread.
-void ui_menu_bar_set_item_callback(ui_menu_item_callback_t cb, void* user);
+void ui_menu_bar_set_item_callback(ui_menu_bar_item_callback_t cb, void* user);
 
 #ifdef __cplusplus
 }
