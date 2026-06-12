@@ -45,7 +45,25 @@ use mocida::{
 };
 use mui_syntax::ast::{Element, Handler, HandlerAction, MuiValue, Node, Prop, PropValue, View};
 use mui_syntax::loader::Registry;
-use mui_syntax::style::{self, Anchor, HAnchor, Rgba, ShadowSpec, VAnchor};
+use mui_syntax::style::{self, Anchor, HAnchor, Rgba, ReactiveEnv, ShadowSpec, VAnchor};
+
+/// Build a `ReactiveEnv` from the live signal slot. Only platform-related
+/// signals (`is_macos`, `is_windows`, `is_linux`) are mirrored into the env;
+/// the full signal table would be wasteful and would change the invalidation
+/// graph (every text rendering would then depend on every signal).
+///
+/// Returns an empty env if the slot has none of the platform signals set —
+/// the reactive evaluators treat a missing entry the same as a present-but-
+/// unparseable one, so this is safe to call unconditionally.
+fn build_reactive_env(reactive: &Reactive) -> ReactiveEnv {
+    let mut env = ReactiveEnv::default();
+    for name in ["is_macos", "is_windows", "is_linux"] {
+        if let Some(v) = reactive.get_str(name) {
+            env.signals.insert(name.to_string(), v);
+        }
+    }
+    env
+}
 
 mod highlight;
 mod layout;
