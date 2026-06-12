@@ -55,7 +55,12 @@ use mui_syntax::style::{self, Anchor, HAnchor, Rgba, ReactiveEnv, ShadowSpec, VA
 /// Returns an empty env if the slot has none of the platform signals set —
 /// the reactive evaluators treat a missing entry the same as a present-but-
 /// unparseable one, so this is safe to call unconditionally.
-fn build_reactive_env(reactive: &Reactive) -> ReactiveEnv {
+///
+/// Exposed (not `pub(crate)`) because the integration tests in
+/// `tests/reactive_padding.rs` drive this directly to validate the
+/// runtime→mui-syntax contract end-to-end without going through the C-side
+/// render pipeline.
+pub fn build_reactive_env(reactive: &Reactive) -> ReactiveEnv {
     let mut env = ReactiveEnv::default();
     for name in ["is_macos", "is_windows", "is_linux"] {
         if let Some(v) = reactive.get_str(name) {
@@ -125,7 +130,11 @@ pub struct Reactive {
 }
 
 impl Reactive {
-    fn new() -> Self {
+    /// Create an empty signal slot. Tests / external drivers use this to
+    /// instantiate a slot before pushing values via [`Reactive::set_str`] /
+    /// [`Reactive::set_int`]. The internal build pipeline uses
+    /// [`Reactive::default`] via [`Ctx::new`].
+    pub fn new() -> Self {
         Reactive {
             signals: HashMap::new(),
             strings: HashMap::new(),
@@ -1147,9 +1156,17 @@ fn child_self_align(node: &Node) -> Option<i32> {
 /// `marginTop:` / `marginX:` … — honoured by the parent Stack's layout (it
 /// offsets the item and advances its cursor past the margin). `(0,0,0,0)` for
 /// a node without margins.
+///
+/// `child_margin` runs *before* the reactive signal store is built
+/// (during the pre-layout id-dims pass / early in `build_*`), so there is no
+/// `Ctx` in scope. We pass `None` for the reactive env — child margins are
+/// always a pure function of the literal `.mui` source. A future migration
+/// to support reactive `margin:` would need to thread `reactive` through
+/// every child-positioning site.
 fn child_margin(node: &Node) -> (f32, f32, f32, f32) {
     match node {
-        Node::Element(el) => style::box_spacing(el, "margin").unwrap_or((0.0, 0.0, 0.0, 0.0)),
+        Node::Element(el) => style::box_spacing_reactive(el, "margin", None)
+            .unwrap_or((0.0, 0.0, 0.0, 0.0)),
         _ => (0.0, 0.0, 0.0, 0.0),
     }
 }
@@ -1446,7 +1463,9 @@ fn build_rectangle(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
     if let Some(sh) = style::shadow(el) {
         rect = rect.shadow(to_shadow(sh));
     }
-    let (pl, pt, pr, pb) = style::box_spacing(el, "padding").unwrap_or((0.0, 0.0, 0.0, 0.0));
+    let padding_env = build_reactive_env(&ctx.reactive);
+    let (pl, pt, pr, pb) = style::box_spacing_reactive(el, "padding", Some(&padding_env))
+        .unwrap_or((0.0, 0.0, 0.0, 0.0));
     if pl != 0.0 || pt != 0.0 || pr != 0.0 || pb != 0.0 {
         rect = rect.padding(pl, pt, pr, pb);
     }
@@ -1511,6 +1530,9 @@ fn build_rectangle(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
     // Absolute placement: `x:`/`y:` override the flow position. Resolved via
     // dim_prop so they can be *expressions/bound vars* (e.g. `x: cell` in a
     // game-object loop), not just literals like the plain `place()` honours.
+    // TODO(macos-topbar): migrate to `dim_prop_reactive` when `Window.width`
+    // becomes a reactive signal — for now this path is static-only and the
+    // metric-ref `width: Window.width` style isn't supported.
     let (mut x, mut y) = place(el, layout, w, h);
     if let Some(px) = dim_prop(ctx, el, "x") {
         x = px;
@@ -1623,7 +1645,9 @@ fn build_stack(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     };
     let gap = style::f32_prop(el, "gap").unwrap_or(8.0);
     // Per-side padding: `padding: N` | `[t,r,b,l]` | `paddingTop:`/`paddingX:` …
-    let (pl, pt, pr, pb) = style::box_spacing(el, "padding").unwrap_or((0.0, 0.0, 0.0, 0.0));
+    let padding_env = build_reactive_env(&ctx.reactive);
+    let (pl, pt, pr, pb) = style::box_spacing_reactive(el, "padding", Some(&padding_env))
+        .unwrap_or((0.0, 0.0, 0.0, 0.0));
 
     let mut stack = Stack::new(orientation)?.spacing(gap);
     if pl != 0.0 || pt != 0.0 || pr != 0.0 || pb != 0.0 {
@@ -1916,7 +1940,9 @@ fn build_glass(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
         Some("horizontal")
     );
     let gap = style::f32_prop(el, "gap").unwrap_or(8.0);
-    let (pl, pt, pr, pb) = style::box_spacing(el, "padding").unwrap_or((0.0, 0.0, 0.0, 0.0));
+    let padding_env = build_reactive_env(&ctx.reactive);
+    let (pl, pt, pr, pb) = style::box_spacing_reactive(el, "padding", Some(&padding_env))
+        .unwrap_or((0.0, 0.0, 0.0, 0.0));
     glass = glass.horizontal(horizontal).spacing(gap);
     if pl != 0.0 || pt != 0.0 || pr != 0.0 || pb != 0.0 {
         glass = glass.padding(pl, pt, pr, pb);
@@ -2097,10 +2123,11 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
     if let Some(c) = style::enum_member(el, "cursor") {
         text = text.cursor(cursor_from(&c));
     }
-    if let Some((l, t, r, b)) = style::box_spacing(el, "padding") {
+    let padding_env = build_reactive_env(&ctx.reactive);
+    if let Some((l, t, r, b)) = style::box_spacing_reactive(el, "padding", Some(&padding_env)) {
         text = text.padding(l, t, r, b);
     }
-    if let Some((l, t, r, b)) = style::box_spacing(el, "margin") {
+    if let Some((l, t, r, b)) = style::box_spacing_reactive(el, "margin", Some(&padding_env)) {
         text = text.margins(l, t, r, b);
     }
     let text_ptr = text.as_ptr();
@@ -2320,7 +2347,8 @@ fn build_textfield(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
         tf = tf.border_width(bw);
     }
 
-    if let Some((l, t, _r, _b)) = style::box_spacing(el, "padding") {
+    let padding_env = build_reactive_env(&ctx.reactive);
+    if let Some((l, t, _r, _b)) = style::box_spacing_reactive(el, "padding", Some(&padding_env)) {
         tf = tf.padding(l, t);
     }
 
@@ -2485,7 +2513,8 @@ fn build_textarea(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
         let c = border_c.unwrap_or(Color::rgb(203, 213, 225));
         ta = ta.border(c, c, border_w.unwrap_or(1.0));
     }
-    if let Some((l, t, _r, _b)) = style::box_spacing(el, "padding") {
+    let padding_env = build_reactive_env(&ctx.reactive);
+    if let Some((l, t, _r, _b)) = style::box_spacing_reactive(el, "padding", Some(&padding_env)) {
         ta = ta.padding(l, t);
     }
     if let Some(ls) = style::f32_prop(el, "lineSpacing") {
