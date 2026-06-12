@@ -334,6 +334,10 @@ if(APPLE)
         # titlebar) for macOS — keeps rounding/shadow/traffic-lights.
         list(APPEND MOCIDA_SOURCES_OBJCXX
             "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/titlebar_cocoa.mm")
+        # NSMenu / NSMenuItem backend for the application menu bar.
+        # Pairs with menu_bar.c (cross-platform struct owner + public API).
+        list(APPEND MOCIDA_SOURCES_OBJCXX
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/menu_bar_cocoa.mm")
     endif()
 endif()
 
@@ -369,6 +373,13 @@ target_compile_definitions(mocida PRIVATE MOCIDA_BUILDING_LIBRARY)
 
 target_include_directories(mocida PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/headers
+)
+# Internal-only headers (e.g. menu_bar_internal.h) live next to the .c/.mm
+# and are NOT exposed to consumers — only the .c/.mm inside the library
+# see them. PRIVATE keeps the path off the consumer's include path so
+# public include(uikit/menu_bar.h) stays the only blessed entry point.
+target_include_directories(mocida PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/uikit
 )
 
 # macOS WKWebView backend: compile in the Objective-C++ source, link the
