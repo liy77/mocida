@@ -42,3 +42,10 @@ mod bindings {
 }
 
 pub use bindings::*;
+
+/// Safe RAII wrappers for the menu bar API (see
+/// `uikit/menu_bar.h`). The raw `unsafe` bindings are at the crate
+/// root via the `pub use bindings::*` above; the wrappers add `Drop`
+/// and builder ergonomics.
+pub mod menu_bar;
+

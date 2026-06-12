@@ -161,7 +161,7 @@ fn main() {
         })
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         // Public mocida API only; don't pull every SDL/Windows symbol.
-        .allowlist_function("UI.*|widgc.*|MOCIDA_.*|SDL_GetPerformanceCounter|SDL_GetPerformanceFrequency|SDL_GetTicks")
+        .allowlist_function("UI.*|ui_.*|widgc.*|MOCIDA_.*|SDL_GetPerformanceCounter|SDL_GetPerformanceFrequency|SDL_GetTicks")
         .allowlist_type("UI.*|FontStyle|FontEntry|HWND|HWND__")
         .allowlist_var("UI_.*|MOCIDA_.*");
 
@@ -326,6 +326,11 @@ fn stage_runtime_dlls(lib_dir: &PathBuf) {
 ///
 /// Returns `None` only when none of those resolve to an existing
 /// directory.
+///
+/// The `installer_subdir` parameter is only consumed by the Windows branch
+/// below; on other targets it is reserved for future use, so silence the
+/// cross-platform build's "unused variable" warning.
+#[allow(unused_variables)]
 fn resolve_dir(env_name: &str, installer_subdir: &str) -> Option<PathBuf> {
     if let Some(v) = env::var_os(env_name) {
         let p = PathBuf::from(v);

@@ -23,6 +23,7 @@
 #include <uikit/arena.h>
 #include <uikit/asset.h>
 #include <uikit/walker.h>
+#include <uikit/menu_bar.h>
 #ifdef _WIN32
 #include <uikit/webview_dcomp.h>
 #endif
