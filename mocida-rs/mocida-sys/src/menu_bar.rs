@@ -25,7 +25,7 @@ pub struct Menu(*mut UIMenuBar);
 impl Menu {
     /// Wrap a raw pointer returned by the C side. Returns `None` if
     /// the pointer is null (the C allocators return null on OOM).
-    fn from_raw(ptr: *mut UIMenuBar) -> Option<Self> {
+    pub fn from_raw(ptr: *mut UIMenuBar) -> Option<Self> {
         if ptr.is_null() { None } else { Some(Self(ptr)) }
     }
 
