@@ -57,25 +57,18 @@ extern "C" void UIWindow_ApplyNativeDecorations(SDL_Window* window) {
         // shadow, rounded corners, resize and traffic-lights.
         win.styleMask |= NSWindowStyleMaskFullSizeContentView;
 
+        // (No `setContentBorderThickness:forEdge:` here: AppKit rejects
+        // that call with NSMaxYEdge on a non-textured window, and
+        // switching the window to textured would defeat the point of
+        // the custom titlebar's transparent surface. The 28px top
+        // offset is instead expressed as `paddingTop: 28` on the
+        // app's toolbar via box_spacing_reactive — see toolbar.mui.)
         // Keep the standard traffic-light buttons visible (default), so the
         // user gets native close/minimize/zoom. OndaEngine suppresses its own
         // window-control buttons on macOS via UIWindow_IsMacOS().
         [[win standardWindowButton:NSWindowCloseButton]       setHidden:NO];
         [[win standardWindowButton:NSWindowMiniaturizeButton] setHidden:NO];
         [[win standardWindowButton:NSWindowZoomButton]        setHidden:NO];
-
-        // Reserve the title-bar strip at the top of the content view so the
-        // app's painted bar (and any content under it) starts BELOW the
-        // traffic-lights. Without this offset, the content view extends all
-        // the way to y=0 (under the traffic-lights), and the user sees
-        // their logo/buttons occluded by the close/min/zoom buttons. With
-        // a 28px border, the traffic-lights are visually separated from the
-        // app's toolbar and their vertical center is at ~14px (the natural
-        // title-bar center, where the user expects them).
-        //
-        // NSMaxYEdge in Cocoa's flipped-coordinate system = the TOP edge.
-        // 28 is the standard title bar height on macOS.
-        [win setContentBorderThickness:28 forEdge:NSMaxYEdge];
     };
 
     if ([NSThread isMainThread]) {
