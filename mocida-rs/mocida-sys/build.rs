@@ -81,8 +81,33 @@ fn main() {
         );
     }
 
-    let link_kind = if link_static { "static" } else { "dylib" };
-    println!("cargo:rustc-link-lib={}={}", link_kind, lib_name);
+    // Emit the link directive. We use `link-arg=-l<name>` (bare -l, no kind
+    // prefix) instead of the more idiomatic `rustc-link-lib=dylib=<name>`.
+    // The macOS linker doesn't understand the `dylib=` flavor that Cargo
+    // passes through to `-l`, so we'd see `library 'dylib=mocida' not
+    // found`. The bare `-l<name>` form works on every platform because
+    // clang searches the `-L` (rustc-link-search) dirs for `lib<name>.dylib`
+    // / `.so` / `.a` in that order, preferring the dynamic lib when both
+    // exist.
+    if let Some(lib_dir) = &lib_dir {
+        let _ = lib_dir; // link-search above already tells clang where to look
+        let _ = link_static; // currently unused; the bare -l form wins
+        // The macOS ld (clang) does NOT understand `-l dylib=mocida`
+        // (the kind prefix becomes part of the name), so we can't use
+        // `rustc-link-lib=dylib=mocida` here. The bare -lmocida form
+        // works because clang's default search order on the
+        // `link-search` dir is `lib<name>.dylib` first, then `.a`.
+        // On Linux the same -l<name> form resolves to lib<name>.so
+        // then lib<name>.a. On Windows (handled separately) the
+        // build script copies the .dll next to the binary, and
+        // .lib is in the link-search dir.
+        println!("cargo:rustc-link-lib={}", lib_name);
+    } else {
+        // No lib dir configured — fall back to the bare -l form too
+        // (the lib search path comes from the system's default linker
+        // config, which usually covers /usr/local/lib etc).
+        println!("cargo:rustc-link-lib={}", lib_name);
+    }
 
     // A few SDL symbols are part of the generated bindings (timing helpers in
     // `profile.rs`: SDL_GetPerformanceCounter / *Frequency / GetTicks). When
@@ -112,7 +137,7 @@ fn main() {
         // to find one.
         let has_sdl3_import = sdl3_direct.exists() || sdl3_nested.exists();
         if !link_static && has_sdl3_import {
-            println!("cargo:rustc-link-lib=dylib=SDL3");
+            println!("cargo:rustc-link-lib=SDL3");
         }
     }
 
