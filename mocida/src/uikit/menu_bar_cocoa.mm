@@ -22,6 +22,7 @@
 #if defined(__APPLE__) && TARGET_OS_OSX
 
 #import <Cocoa/Cocoa.h>
+#import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #include "menu_bar_internal.h"
 
@@ -47,14 +48,22 @@ static const void* kUIMenuItemPtrKey = "UIMenuItemPtr";
 + (void)menuItemFired:(id)sender {
     if (![sender isKindOfClass:[NSMenuItem class]]) return;
     NSMenuItem* item = (NSMenuItem*)sender;
-    UIMenuBarItem* cItem = (UIMenuBarItem*)objc_getAssociatedObject(
-        item, kUIMenuItemPtrKey);
-    if (!cItem || !g_callback) return;
-    g_callback(cItem->id, g_callback_user);
+    // Recover the host's opaque id from the menu item's tag (set
+    // via `setTag:` in attach_nsitem; see the comment there for why
+    // we don't use objc_setAssociatedObject).
+    uint32_t id = (uint32_t)[item tag];
+    if (!g_callback) return;
+    g_callback(id, g_callback_user);
 }
 @end
 
 // ── Weak hooks (called by menu_bar.c) ────────────────────────────────────
+// `extern "C"` is required: menu_bar.c declares the matching prototypes
+// as `__attribute__((weak))` and references them via the C ABI. Without
+// the extern wrapper, the C++ compiler name-mangles the symbols
+// (`_Z24ui_menu_bar__hook_...`) and the linker can't find the C-side
+// references (`_ui_menu_bar__hook_...`).
+extern "C" {
 
 void ui_menu_bar__hook_attach_nsmenu(UIMenuBar* m) {
     if (!m) return;
@@ -76,6 +85,7 @@ void ui_menu_bar__hook_attach_nsmenu(UIMenuBar* m) {
 
 void ui_menu_bar__hook_attach_nsitem(UIMenuBarItem* it, UIMenuBar* parent) {
     if (!it || !parent || !parent->nsMenu) return;
+    @try {
     NSMenuItem* nsItem = nil;
     if (it->is_separator) {
         nsItem = [NSMenuItem separatorItem];
@@ -87,12 +97,16 @@ void ui_menu_bar__hook_attach_nsitem(UIMenuBarItem* it, UIMenuBar* parent) {
                                             action:@selector(menuItemFired:)
                                      keyEquivalent:@""];
         [nsItem setTarget:[UIMenuActionHandler class]];
-        // Stash the C pointer for the action handler. RETAIN keeps it
-        // alive for the lifetime of the NSMenuItem (the NSMenu owns its
-        // items until the menu is freed, so the pointer is valid for as
-        // long as the host keeps the C tree attached).
-        objc_setAssociatedObject(nsItem, (void*)kUIMenuItemPtrKey, (id)it,
-                                 OBJC_ASSOCIATION_RETAIN);
+        // Stash the host's opaque id on the NSMenuItem via `setTag:`.
+        // (We previously used `objc_setAssociatedObject(nsItem, key, (id)it, ASSIGN)`
+        // to attach the C `UIMenuBarItem*` pointer, but that crashes
+        // Cocoa at runtime — the Cocoa runtime treats associated-object
+        // values as Objective-C objects and dereferences them through
+        // `objc_object*`, which segfaults on a plain C struct. `setTag:`
+        // is a vanilla `NSInteger` slot, no object semantics, and gives
+        // us the same one-way handoff: the action handler recovers the
+        // id and dispatches to the host's callback.)
+        [nsItem setTag:(NSInteger)it->id];
 
         // Shortcut parsing: SDL-style "CmdOrCtrl+N" / "Alt+Shift+Z" / etc.
         // The trailing chunk is the key; everything before the final '+'
@@ -133,6 +147,10 @@ void ui_menu_bar__hook_attach_nsitem(UIMenuBarItem* it, UIMenuBar* parent) {
     }
     it->nsItem = (__bridge struct objc_object*)nsItem;
     [(NSMenu*)(__bridge struct objc_object*)parent->nsMenu addItem:nsItem];
+    } @catch (NSException* e) {
+        NSLog(@"[mocida.menubar] attach_nsitem NSException: %@ — reason: %@",
+              [e name], [e reason]);
+    }
 }
 
 void ui_menu_bar__hook_attach_nssubmenu(UIMenuBar* parent, UIMenuBar* sub) {
@@ -155,6 +173,9 @@ void ui_menu_bar__hook_attach_nssubmenu(UIMenuBar* parent, UIMenuBar* sub) {
 void ui_menu_bar__hook_install_root(UIMenuBar* root) {
     NSMenu* mainMenu = nil;
     if (root && root->nsMenu) mainMenu = (NSMenu*)(__bridge struct objc_object*)root->nsMenu;
+    NSLog(@"[mocida.menubar] ui_menu_bar__hook_install_root: root=%p nsMenu=%p mainMenu=%p items=%lu",
+          (void*)root, root ? (void*)root->nsMenu : NULL, (void*)mainMenu,
+          (unsigned long)[mainMenu numberOfItems]);
     // [NSApp setMainMenu:] is a no-op if NSApp hasn't been initialised
     // yet (early-startup path); callers that wire the menu bar before
     // NSApp is up should re-install once the run loop is alive.
@@ -166,8 +187,11 @@ void ui_menu_bar__hook_uninstall_root(void) {
 }
 
 void ui_menu_bar__hook_set_callback(ui_menu_bar_item_callback_t cb, void* user) {
+    NSLog(@"[mocida.menubar] hook_set_callback: cb=%p user=%p", (void*)cb, user);
     g_callback      = cb;
     g_callback_user = user;
 }
+
+} // extern "C"
 
 #endif // __APPLE__ && TARGET_OS_OSX
