@@ -66,6 +66,7 @@ pub mod mouse_area;
 pub mod overlay;
 pub mod glass;
 pub mod popup;
+pub mod menu_bar;
 pub mod profile;
 pub mod reactive;
 pub mod rect;

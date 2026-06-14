@@ -139,9 +139,9 @@ impl Menu {
     /// Convert the builder tree into the FFI representation. Used
     /// internally and by tests; not usually called directly.
     pub fn into_raw(self) -> RawMenu {
-        let title = std::ffi::CString::new(self.title.as_str())
+        let title_c = std::ffi::CString::new(self.title.as_str())
             .expect("menu title has no NUL");
-        let mut raw = RawMenu::from_raw_cstr(title.as_bytes_with_nul())
+        let mut raw = RawMenu::from_cstr(title_c.as_ptr())
             .expect("ui_menu_bar_create returned NULL (OOM)");
         for entry in self.entries {
             match entry {
@@ -173,7 +173,7 @@ mod raw_helpers {
     impl RawMenuFromCStr for RawMenu {
         fn from_cstr(title_with_nul: *const c_char) -> Option<RawMenu> {
             let ptr = unsafe { ui_menu_bar_create(title_with_nul) };
-            if ptr.is_null() { None } else { Some(unsafe { RawMenu::from_raw(ptr) }) }
+            if ptr.is_null() { None } else { unsafe { RawMenu::from_raw(ptr) } }
         }
     }
 }
