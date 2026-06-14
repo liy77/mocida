@@ -64,6 +64,19 @@ extern "C" void UIWindow_ApplyNativeDecorations(SDL_Window* window) {
         [[win standardWindowButton:NSWindowMiniaturizeButton] setHidden:NO];
         [[win standardWindowButton:NSWindowZoomButton]        setHidden:NO];
 
+        // Reserve the title-bar strip at the top of the content view so the
+        // app's painted bar (and any content under it) starts BELOW the
+        // traffic-lights. Without this offset, the content view extends all
+        // the way to y=0 (under the traffic-lights), and the user sees
+        // their logo/buttons occluded by the close/min/zoom buttons. With
+        // a 28px border, the traffic-lights are visually separated from the
+        // app's toolbar and their vertical center is at ~14px (the natural
+        // title-bar center, where the user expects them).
+        //
+        // NSMaxYEdge in Cocoa's flipped-coordinate system = the TOP edge.
+        // 28 is the standard title bar height on macOS.
+        [win setContentBorderThickness:28 forEdge:NSMaxYEdge];
+
         // Default menu bar. Cocoa apps without a main menu render with an
         // empty grey strip and certain system shortcuts (Cmd+Q to quit,
         // Cmd+H to hide) stop working. If the host hasn't installed a
