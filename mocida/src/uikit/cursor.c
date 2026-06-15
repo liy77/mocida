@@ -6,6 +6,14 @@
 static SDL_Cursor* g_cache[UI_CURSOR_COUNT];
 static UICursor    g_active = (UICursor)-1;
 
+// Platform hook: defined in cursor_cocoa.mm on macOS (calls
+// [NSCursor set] to refresh the visible cursor immediately, since
+// the default SDL_SetCursor path is event-driven and updates only
+// on the next mouseMoved:). On non-Apple builds the weak symbol
+// resolves to NULL and the call is skipped.
+__attribute__((weak)) void ui_cursor__hook_apply_done(UICursor kind);
+__attribute__((weak)) void ui_cursor__hook_apply_done(UICursor kind) { (void)kind; }
+
 static SDL_SystemCursor MapToSDL(UICursor kind) {
     switch (kind) {
         case UI_CURSOR_POINTER:     return SDL_SYSTEM_CURSOR_POINTER;
@@ -32,6 +40,7 @@ void UICursor_Apply(UICursor kind) {
         if (!g_cache[kind]) return; // leave g_active unchanged on failure
     }
     SDL_SetCursor(g_cache[kind]);
+    if (ui_cursor__hook_apply_done) ui_cursor__hook_apply_done(kind);
     g_active = kind;
 }
 

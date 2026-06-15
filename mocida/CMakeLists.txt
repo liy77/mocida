@@ -338,6 +338,15 @@ if(APPLE)
         # Pairs with menu_bar.c (cross-platform struct owner + public API).
         list(APPEND MOCIDA_SOURCES_OBJCXX
             "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/menu_bar_cocoa.mm")
+        # NSCursor refresh on hot-region change. The shared cursor.c
+        # uses SDL_SetCursor, which on macOS is event-driven (the
+        # visible cursor only updates on the next mouseMoved:), so
+        # the first application of a new cursor (e.g. mouse entering
+        # a Button with `cursor: pointer`) appears stuck. This file
+        # pushes the matching NSCursor directly via [NSCursor set],
+        # which AppKit refreshes synchronously. See cursor_cocoa.mm.
+        list(APPEND MOCIDA_SOURCES_OBJCXX
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/cursor_cocoa.mm")
     endif()
 endif()
 
