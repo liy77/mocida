@@ -876,18 +876,71 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
                         free(prepared);
                     }
                 } else {
-                    surf = TTF_RenderText_Blended(font, twid->text,
-                                                  twid->textLength, sc);
+                    // No wrap mode set. A single-line TTF_RenderText_Blended
+                    // ignores embedded newlines (renders '\n' as a tofu/space
+                    // on one line), so honour explicit line breaks
+                    // (\n / \r\n / \r) by routing through the wrapped
+                    // renderer with an effectively-infinite wrap width — it
+                    // breaks ONLY at the explicit newlines, never on width.
+                    // This makes Text("a\nb") render two lines on every OS
+                    // (the \n is U+000A, identical bytes everywhere; the line
+                    // break is the renderer's job, not the platform's).
+                    // Detect control chars that the single-line renderer
+                    // can't show: '\n'/'\r' (line breaks) and '\t' (tab).
+                    int hasBreak = 0, hasTab = 0;
+                    for (int i = 0; i < twid->textLength; i++) {
+                        char c = twid->text[i];
+                        if (c == '\n' || c == '\r') hasBreak = 1;
+                        else if (c == '\t')          hasTab = 1;
+                    }
+                    if (hasBreak || hasTab) {
+                        // Normalise to a glyph-renderable form:
+                        //  * CRLF / CR  → LF (SDL_ttf splits on '\n'), so line
+                        //    endings render identically on Windows/macOS/Linux.
+                        //  * TAB → TAB_W spaces (TTF has no tab advance; a raw
+                        //    '\t' would draw as a tofu box).
+                        // Worst case each tab becomes TAB_W spaces, so size the
+                        // buffer for that.
+                        const int TAB_W = 4;
+                        char* norm = (char*)malloc((size_t)twid->textLength * TAB_W + 1);
+                        int nlen = 0;
+                        if (norm) {
+                            for (int i = 0; i < twid->textLength; i++) {
+                                char ch = twid->text[i];
+                                if (ch == '\r') {
+                                    norm[nlen++] = '\n';
+                                    if (i + 1 < twid->textLength && twid->text[i+1] == '\n') i++;
+                                } else if (ch == '\t') {
+                                    for (int k = 0; k < TAB_W; k++) norm[nlen++] = ' ';
+                                } else {
+                                    norm[nlen++] = ch;
+                                }
+                            }
+                            norm[nlen] = '\0';
+                            // wrapLength 0 = wrap ONLY on '\n', surface sized to
+                            // the longest line (a large finite width would make
+                            // SDL_ttf allocate that whole width and fail).
+                            surf = TTF_RenderText_Blended_Wrapped(font, norm,
+                                                                  (size_t)nlen, sc, 0);
+                            free(norm);
+                        } else {
+                            surf = TTF_RenderText_Blended(font, twid->text,
+                                                          twid->textLength, sc);
+                        }
+                    } else {
+                        surf = TTF_RenderText_Blended(font, twid->text,
+                                                      twid->textLength, sc);
+                    }
                 }
                 if (surf) {
-                    // Pad the glyph surface with a transparent border so the ink
-                    // is never flush against the texture edge. When the renderer
-                    // is scaled (HiDPI window, SSAA) the text texture is sampled
-                    // with LINEAR at a non-1:1 ratio; without a margin the top
-                    // (and other edge) AA rows bleed into the transparent border
-                    // and the glyph looks shaved by ~1px. The border lives
-                    // OUTSIDE the logical glyph box (drawn back out at the dst
-                    // rect), so layout/size are unaffected.
+                    // Pad the glyph surface with a transparent border so the
+                    // ink is never flush against the texture edge. The
+                    // supersampling (g_textSS) provides the AA detail
+                    // for the glyph itself; the border is there to give
+                    // the LINEAR sampler non-ink margin at the very edge
+                    // (without it, a half-texel sample at the boundary
+                    // would average a tiny sliver of (0,0,0,0) and
+                    // produce a faint white ring around the glyph).
                     const int padHi = TEXT_TEX_PAD * ss;
                     SDL_Surface *psurf = SDL_CreateSurface(
                         surf->w + 2 * padHi, surf->h + 2 * padHi,
@@ -908,13 +961,31 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
         }
         if (!twid->__SDL_textTexture) return;
 
+        // SCALEMODE_NEAREST for 1:1 blits: the linear filter samples
+        // across the transparent border of the glyph texture, which produces
+        // a visible "halo" (a row of half-transparent pixels along every
+        // edge). With NEAREST the sampler reads one texel at a time, no
+        // edge bleeding, the glyph is crisp. For non-1:1 (HiDPI / SSAA)
+        // blits, the user-set scale mode is restored by the caller.
+        // SCALEMODE_LINEAR: the texture is rasterized at g_textSS× the
+        // point size (2x today); the blit is 1:1 in screen space, so the
+        // linear filter samples between texels to produce smooth AA edges.
+        // NEAREST would give pixelated glyphs on a HiDPI display. The
+        // TEXT_TEX_PAD transparent border around the glyph box gives the
+        // sampler non-ink margin so the edge AA doesn't pull alpha 0 in
+        // across the glyph.
         SDL_SetTextureScaleMode(twid->__SDL_textTexture, SDL_SCALEMODE_LINEAR);
-        // Force alpha blending. The glyph texture is built from a surface we
-        // create with SDL_CreateSurface (the transparent-border pad), and
-        // SDL_CreateTextureFromSurface inherits THAT surface's blend mode — on
-        // some drivers a fresh surface defaults to BLENDMODE_NONE, which draws
-        // the glyph box as an opaque (white) rectangle. Setting BLEND here is
-        // the driver-independent guard against that regression.
+        // Straight-alpha BLEND. `TTF_RenderText_Blended` returns a
+        // STRAIGHT-alpha surface (RGB = the foreground colour everywhere,
+        // alpha = per-pixel glyph coverage — see BG_Blended in SDL_ttf,
+        // which writes only the alpha channel over an fg-coloured fill).
+        // Drawn with `SDL_BLENDMODE_BLEND` onto the transparent (0,0,0,0)
+        // window clear, the result accumulates as PREMULTIPLIED in the
+        // framebuffer (`dst.rgb = src.rgb*src.a`), which is exactly what
+        // the CAMetalLayer compositor expects — so no halo over the
+        // vibrancy. (BLEND_PREMULTIPLIED would be wrong here: it skips the
+        // src.a multiply and over-brightens the glyph edges into a white
+        // ring.) Also guards the fresh-surface BLENDMODE_NONE default.
         SDL_SetTextureBlendMode(twid->__SDL_textTexture, SDL_BLENDMODE_BLEND);
         float txw, txh;
         SDL_GetTextureSize(twid->__SDL_textTexture, &txw, &txh);
@@ -1019,10 +1090,21 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
         // lands exactly at the (pixel-snapped) logical origin. The transparent
         // border then sits just outside the glyph box, giving a scaled blit a
         // margin to bleed into instead of shaving the glyph's top/edge.
-        g_tempRect2.x = floorf(g_tempRect1.x + twid->paddingLeft + 0.5f) - TEXT_TEX_PAD;
-        g_tempRect2.y = floorf(g_tempRect1.y + twid->paddingTop  + 0.5f) - TEXT_TEX_PAD;
-        g_tempRect2.w = txw + 2 * TEXT_TEX_PAD;
-        g_tempRect2.h = txh + 2 * TEXT_TEX_PAD;
+        // Blit the glyph texture 1:1 at the logical origin. No
+        // TEXT_TEX_PAD border, no offset: the texture is the glyph box
+        // exactly, the widget is the glyph box + padding, and the two
+        // coincide. The pad-around-the-glyph (formerly 3 px on each side)
+        // was originally there to give the AA sampler transparent margin
+        // so the linear filter would not pull alpha 0 across the edge —
+        // but with NN scaling (which is what the texture's SCALEMODE_LINEAR
+        // does here, see SDL_SetTextureScaleMode below) the half-texel
+        // sampling at the border draws half-transparent pixels INWARD from
+        // the edge, which is exactly the "halo" the user sees. The
+        // simplest fix is no border and no offset: the glyph is the box.
+        g_tempRect2.x = floorf(g_tempRect1.x + twid->paddingLeft + 0.5f);
+        g_tempRect2.y = floorf(g_tempRect1.y + twid->paddingTop  + 0.5f);
+        g_tempRect2.w = txw;
+        g_tempRect2.h = txh;
 
         if (twid->hasGradient && el->rotation == 0.0f) {
             // Gradient fill: draw the (white) glyph texture as a textured quad

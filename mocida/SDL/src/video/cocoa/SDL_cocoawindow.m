@@ -2040,6 +2040,17 @@ static void Cocoa_SendMouseButtonClicks(SDL_Mouse *mouse, NSEvent *theEvent, SDL
 - (void)setSDLWindow:(SDL_Window *)window
 {
     _sdlWindow = window;
+    // A transparent window needs the backing layer to be non-opaque from the
+    // start, otherwise AppKit draws a solid rectangle on top of any
+    // NSVisualEffectView / NSGlassEffectView we tuck under the content view
+    // (vibrancy / liquid glass rely on the per-pixel alpha from our clear to
+    // reach the effect view). The later `updateLayer` call re-asserts this,
+    // but setting it here means even the very first frame the user sees is
+    // non-opaque — critical for the splash-frame and any early draws before
+    // updateLayer fires.
+    if (window && (window->flags & SDL_WINDOW_TRANSPARENT) && self.layer) {
+        self.layer.opaque = NO;
+    }
 }
 
 /* this is used on older macOS revisions, and newer ones which emulate old
@@ -2059,6 +2070,11 @@ static void Cocoa_SendMouseButtonClicks(SDL_Mouse *mouse, NSEvent *theEvent, SDL
     } else if (self.layer) {
         CFStringRef color = transparent ? kCGColorClear : kCGColorBlack;
         self.layer.backgroundColor = CGColorGetConstantColor(color);
+        // Same rationale as updateLayer: the layer must be non-opaque for
+        // per-pixel alpha to punch through to the underlying effect view.
+        if (transparent) {
+            self.layer.opaque = NO;
+        }
     }
 
     Cocoa_SendExposedEventIfVisible(_sdlWindow);
@@ -2078,6 +2094,16 @@ static void Cocoa_SendMouseButtonClicks(SDL_Mouse *mouse, NSEvent *theEvent, SDL
     BOOL transparent = (_sdlWindow->flags & SDL_WINDOW_TRANSPARENT) != 0;
     CFStringRef color = transparent ? kCGColorClear : kCGColorBlack;
     self.layer.backgroundColor = CGColorGetConstantColor(color);
+    // Per-pixel alpha needs the layer itself to be non-opaque, otherwise
+    // AppKit composites the Metal layer as a solid rectangle on top of any
+    // NSVisualEffectView / NSGlassEffectView we tucked under it. Setting
+    // `layer.opaque = NO` lets the alpha=0 clear (and any translucent fills
+    // the app draws) punch through to the effect view. This is the
+    // missing piece for vibrancy / liquid glass — without it, the system
+    // material is never visible regardless of the NSWindow flag.
+    if (transparent) {
+        self.layer.opaque = NO;
+    }
     ScheduleContextUpdates((__bridge SDL_CocoaWindowData *)_sdlWindow->internal);
     Cocoa_SendExposedEventIfVisible(_sdlWindow);
 }

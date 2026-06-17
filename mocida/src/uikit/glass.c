@@ -10,13 +10,16 @@ UIBackdropMaterial UIBackdrop_FromString(const char* effect) {
     if (!effect || !effect[0]) return UI_BACKDROP_AUTO;
 
     // Case-insensitive compare against a known set. Hyphens and underscores
-    // are treated the same so "mica-alt" and "mica_alt" both work.
-    char buf[32];
+    // are treated the same so "mica-alt" and "mica_alt" both work. Colons,
+    // slashes and dots also collapse to dashes so `method:liquid`,
+    // `method/liquid`, `method.liquid` and `method-liquid` all map to the
+    // same key.
+    char buf[64];
     size_t n = 0;
     for (const char* p = effect; *p && n < sizeof(buf) - 1; p++) {
         char c = *p;
         if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
-        if (c == '_') c = '-';
+        if (c == '_' || c == ':' || c == '/' || c == '.') c = '-';
         buf[n++] = c;
     }
     buf[n] = '\0';
@@ -30,6 +33,13 @@ UIBackdropMaterial UIBackdrop_FromString(const char* effect) {
     if (!strcmp(buf, "acrylic-legacy"))   return UI_BACKDROP_ACRYLIC_LEGACY;
     if (!strcmp(buf, "liquid") ||
         !strcmp(buf, "liquid-glass"))     return UI_BACKDROP_LIQUID_GLASS;
+    // method:liquid (or method:liquid-glass) — explicit alias for the
+    // macOS 26+ / iOS 26+ Liquid Glass material. Resolves to the same family
+    // as effect:liquid, kept distinct so .mui authors can write
+    //   Glass { method: "liquid", ... }
+    // and still use effect: for the broader material picker.
+    if (!strcmp(buf, "method-liquid") ||
+        !strcmp(buf, "method-liquid-glass")) return UI_BACKDROP_LIQUID_GLASS;
     if (!strcmp(buf, "vibrancy-sidebar")) return UI_BACKDROP_VIBRANCY_SIDEBAR;
     if (!strcmp(buf, "vibrancy-header"))  return UI_BACKDROP_VIBRANCY_HEADER;
     if (!strcmp(buf, "vibrancy-menu"))    return UI_BACKDROP_VIBRANCY_MENU;

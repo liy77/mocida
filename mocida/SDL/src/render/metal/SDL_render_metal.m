@@ -354,6 +354,14 @@ static void MakePipelineCache(SDL3METAL_RenderData *data, METAL_PipelineCache *c
      * will be added to the cache on-demand. */
     MakePipelineState(data, cache, @" (blend=none)", SDL_BLENDMODE_NONE);
     MakePipelineState(data, cache, @" (blend=blend)", SDL_BLENDMODE_BLEND);
+    /* Premultiplied-alpha blend pipeline. `TTF_RenderText_Blended` bakes
+     * pre-multiplied alpha (RGB channels are pre-modulated by alpha), so
+     * the default straight-alpha BLEND pipeline double-modulates the color
+     * and produces a visible dark/grey halo on glyph edges when the
+     * destination is translucent (e.g. NSVisualEffectView vibrancy
+     * behind a transparent window). Pre-bake the pre-mult pipeline here
+     * so the first text blit doesn't pay the JIT cost. */
+    MakePipelineState(data, cache, @" (blend=premult)", SDL_BLENDMODE_BLEND_PREMULTIPLIED);
     MakePipelineState(data, cache, @" (blend=add)", SDL_BLENDMODE_ADD);
     MakePipelineState(data, cache, @" (blend=mod)", SDL_BLENDMODE_MOD);
     MakePipelineState(data, cache, @" (blend=mul)", SDL_BLENDMODE_MUL);
@@ -2021,6 +2029,18 @@ static bool METAL_CreateRenderer(SDL_Renderer *renderer, SDL_Window *window, SDL
 
         // Necessary for RenderReadPixels.
         layer.framebufferOnly = NO;
+
+        // A transparent window (SDL_WINDOW_TRANSPARENT) needs the Metal layer
+        // to be non-opaque so the per-pixel alpha from our clear reaches the
+        // underlying NSVisualEffectView / NSGlassEffectView. CAMetalLayer
+        // defaults to YES, which would composite us as a solid rectangle on
+        // top of the effect view, killing vibrancy / liquid glass. We use
+        // the public SDL_GetWindowFlags here because the SDL_Window struct
+        // is opaque from the renderer's point of view.
+        const SDL_WindowFlags wf = SDL_GetWindowFlags(window);
+        if (wf & SDL_WINDOW_TRANSPARENT) {
+            layer.opaque = NO;
+        }
 
         data.mtldevice = layer.device;
         data.mtllayer = layer;

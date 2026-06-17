@@ -49,9 +49,16 @@ pub enum BackdropMaterial {
 }
 
 impl BackdropMaterial {
-    /// Parse an `effect:` string ("mica", "acrylic", "liquid",
-    /// "vibrancy-sidebar", "kde-region", …) using the C resolver, so the
-    /// mapping stays single-sourced. Unknown / empty → [`Auto`](Self::Auto).
+    /// Parse an `effect:` or `method:` string ("mica", "acrylic", "liquid",
+    /// "vibrancy-sidebar", "kde-region", "method:liquid", …) using the C
+    /// resolver, so the mapping stays single-sourced. Unknown / empty →
+    /// [`Auto`](Self::Auto).
+    ///
+    /// `method:` is sugar for the macOS 26+ / iOS 26+ Liquid Glass material —
+    /// the same enum as `effect: liquid` / `effect: liquid-glass`, kept as
+    /// a separate alias so .mui authors can write
+    /// `Glass { method: "liquid", … }` and still use `effect:` for the
+    /// broader material picker.
     pub fn from_effect(effect: &str) -> Self {
         let c = match CString::new(effect) {
             Ok(c) => c,
@@ -62,7 +69,7 @@ impl BackdropMaterial {
     }
 
     /// 1:1 from the raw enum value (out-of-range → [`Auto`](Self::Auto)).
-    pub fn from_raw(v: i32) -> Self {
+    pub fn from_raw(v: u32) -> Self {
         match v {
             0 => Self::None,
             1 => Self::Auto,
@@ -84,7 +91,7 @@ impl BackdropMaterial {
 
     #[inline]
     pub(crate) fn raw(self) -> sys::UIBackdropMaterial {
-        sys::UIBackdropMaterial(self as i32)
+        sys::UIBackdropMaterial(self as u32)
     }
 
     /// True for window-wide materials (Mica / Mica Alt / KDE blur-window).
@@ -155,7 +162,7 @@ impl Glass {
 
     /// Material thickness preset.
     pub fn thickness(self, thickness: GlassThickness) -> Self {
-        unsafe { sys::UIGlass_SetThickness(self.ptr, sys::UIGlassThickness(thickness as i32)) };
+        unsafe { sys::UIGlass_SetThickness(self.ptr, sys::UIGlassThickness(thickness as u32)) };
         self
     }
 
@@ -179,7 +186,7 @@ impl Glass {
 
     /// AppKit vibrancy state (ignored by non-vibrancy materials).
     pub fn vibrancy_state(self, state: VibrancyState) -> Self {
-        unsafe { sys::UIGlass_SetVibrancyState(self.ptr, sys::UIVibrancyState(state as i32)) };
+        unsafe { sys::UIGlass_SetVibrancyState(self.ptr, sys::UIVibrancyState(state as u32)) };
         self
     }
 

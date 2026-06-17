@@ -1872,14 +1872,31 @@ fn build_stack(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     Ok(apply_anchor(widget, style::anchor(el)))
 }
 
-/// `Glass(effect:, radius:, tint:, tintOpacity:, blur:, …)` → `mocida::Glass`.
-/// A region-backdrop container: lays children exactly like a `Stack` but paints
-/// a glass background. Native OS region effects aren't wired per-widget (the
-/// window-wide backdrop is — see `app { backdrop }`); the widget renders the
-/// in-app tinted approximation, which is also the universal fallback.
+/// `Glass(effect:, method:, radius:, tint:, tintOpacity:, blur:, …)`
+/// → `mocida::Glass`.
+///
+/// A region-backdrop container: lays children exactly like a `Stack` but
+/// paints a glass background. Native OS region effects aren't wired
+/// per-widget (the window-wide backdrop is — see `app { backdrop }`);
+/// the widget renders the in-app tinted approximation, which is also
+/// the universal fallback.
+///
+/// Two equivalent ways to pick the material:
+///   - `effect: "liquid"` (or `effect: "vibrancy-sidebar"` / `"mica"`
+///     / `"acrylic"` / `"kde-region"`, …) — the broad picker.
+///   - `method: "liquid"` — sugar for the macOS 26+ / iOS 26+ Liquid
+///     Glass material. Resolves to the same enum, kept as a separate
+///     prop so authors can write it as a stylistic choice ("I want
+///     liquid glass specifically") rather than a material.
 fn build_glass(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
     // --- material + glass styling ---
-    let effect = style::enum_member(el, "effect").unwrap_or_else(|| "auto".to_string());
+    // Prefer `method:` when set (explicit liquid-glass opt-in); fall back
+    // to `effect:` for the broad material picker. Both share the C-side
+    // resolver so the values round-trip identically.
+    let effect_token = style::enum_member(el, "method")
+        .or_else(|| style::enum_member(el, "effect"))
+        .unwrap_or_else(|| "auto".to_string());
+    let effect = effect_token;
     let material = BackdropMaterial::from_effect(&effect);
     if material.is_window_wide() {
         eprintln!(
@@ -2078,17 +2095,30 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
         .map(|e| render_text_expr(e, ctx))
         .unwrap_or_default();
 
-    // Size from the *current* text; mocida re-measures on update. An explicit
-    // `width:` bounds the line; with `wrap:` set, a label wider than that box
-    // wraps, so estimate the wrapped height (line count × line height).
-    let (natural_w, line_h) = text_extent(&label, size);
+    // Size from the *current* text; mocida re-measures on update. The label
+    // may contain explicit line breaks (`\n`, already unescaped by the
+    // parser) — size against the WIDEST line for width and the line COUNT
+    // for height, so a multi-line Text reserves the right box (otherwise it
+    // would claim one line's height and overflow into the next item).
+    // An explicit `width:` bounds the line; with `wrap:` set, a line wider
+    // than that box wraps, adding to the height estimate.
+    let explicit_lines = label.lines().count().max(1);
+    let widest_line = label
+        .lines()
+        .map(|ln| text_extent(ln, size).0)
+        .fold(0.0_f32, f32::max);
+    let (_full_w, line_h) = text_extent(&label, size);
+    let natural_w = if widest_line > 0.0 { widest_line } else { text_extent(&label, size).0 };
     let wrap_mode = style::enum_member(el, "wrap").and_then(|s| wrap_from(&s));
     let w = dim_prop(ctx, el, "width").unwrap_or(natural_w);
     let h = dim_prop(ctx, el, "height").unwrap_or_else(|| {
         if wrap_mode.is_some() && w > 0.0 && natural_w > w {
-            line_h * (natural_w / w).ceil().max(1.0)
+            // Wrapping: each explicit line may wrap into several visual lines.
+            let wrapped = (natural_w / w).ceil().max(1.0);
+            line_h * (explicit_lines as f32) * wrapped
         } else {
-            line_h
+            // No wrap: just the explicit line count.
+            line_h * (explicit_lines as f32)
         }
     });
     let mut text = Text::new(&label, size)?.color(color);
@@ -3932,10 +3962,30 @@ fn sized_text(label: &str, size: f32, color: Color, layout: &mut Layout) -> Resu
 }
 
 /// Rough text bounds in logical px (mocida re-measures the real glyph run).
+/// Approximate the natural pixel size of a single-line text block.
+///
+/// This is the layout-time estimate used by `Text`/`Button` to size the
+/// widget before the C side has actually rasterized the glyphs. Both
+/// dimensions need a generous upward bias over the `size` because the
+/// real rasterized surface from `TTF_RenderText_Blended` includes
+/// `ascent + descent` (the font's full metrics box), not just the
+/// glyph ink height — and mocida's `RenderWidget_Text` adds a 3-px
+/// transparent border on every side (TEXT_TEX_PAD) so scaled blits don't
+/// shave the AA edges. Underestimating either is what makes the
+/// glyphs poke out the top of their widget box (the blit draws at
+/// `el->y` and any height short-fall becomes a top/bottom overflow).
+///
+/// The `* 1.5` covers the ascent+descent gap that varies per font
+/// family (Helvetica/Inter/Noto are typically 1.4–1.5x; some CJK
+/// families push 1.6+). The `+ 10` covers the 6 px of
+/// 2 * TEXT_TEX_PAD plus a small safety margin for the few
+/// fonts whose top-of-ascent sits a pixel or two above the
+/// `TTF_FontHeight` box. `Button` / `TextField` labels pass the
+/// same `size`, so they pick up the fix for free.
 fn text_extent(label: &str, size: f32) -> (f32, f32) {
     let glyphs = label.chars().count().max(1) as f32;
     let w = (glyphs * size * 0.6).ceil().max(size);
-    let h = (size * 1.25).ceil() + 4.0;
+    let h = (size * 1.5).ceil() + 10.0;
     (w, h)
 }
 

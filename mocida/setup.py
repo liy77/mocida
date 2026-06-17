@@ -7,10 +7,11 @@ Steps:
      Windows, missing tools are installed via winget; on Linux/macOS they
      must be installed by the user's package manager (we only verify).
   2. Bootstrap a local vcpkg under mocida/ and install libcurl.
-  3. Clone SDL / SDL_image / SDL_ttf at the pinned commits.
-  4. Init the nested submodules of SDL_image / SDL_ttf.
-  5. Clone Microsoft mimalloc (allocator).
-  6. Run the first build (build.py) unless --no-build.
+  3. Verify vendored SDL source tree is present.
+  4. Clone SDL_image / SDL_ttf at the pinned commits.
+  5. Init the nested submodules of SDL_image / SDL_ttf.
+  6. Clone Microsoft mimalloc (allocator).
+  7. Run the first build (build.py) unless --no-build.
 
 Usage:
   python setup.py                 full bootstrap + first build
@@ -51,9 +52,11 @@ class SetupError(Exception):
     pass
 
 
-# --- pinned SDL commits -------------------------------------------------
+# --- pinned SDL_image / SDL_ttf commits ----------------------------------
+# SDL itself is vendored in-tree (see mocida/SDL/CMakeLists.txt) since
+# commit 0b75fa6 ("Vendor SDL: convert from submodule to in-tree source").
+# It is not cloned by setup.py — only SDL_image and SDL_ttf need cloning.
 SDL_PINS = [
-    ("SDL",       "https://github.com/libsdl-org/SDL.git",       "877399b2b2cf21e67554ed9046410f268ce1d1b2"),
     ("SDL_image", "https://github.com/libsdl-org/SDL_image.git", "11154afb7855293159588b245b446a4ef09e574f"),
     ("SDL_ttf",   "https://github.com/libsdl-org/SDL_ttf.git",   "a1ce3670aec736ecbf0936c43f2f0cc53aa61e5b"),
 ]
@@ -200,15 +203,33 @@ def cmd_vcpkg():
         vcpkg_dir / "scripts" / "buildsystems" / "vcpkg.cmake")
 
 
+def cmd_sdl_vendored():
+    step("3/5  Verifying vendored SDL source tree")
+    sdl_root = ROOT / "SDL"
+    marker = sdl_root / "CMakeLists.txt"
+    if marker.exists():
+        ok(f"SDL vendored in-tree at {sdl_root.relative_to(ROOT.parent)}")
+        return
+    # Missing — the mocida repo normally carries SDL in-tree. Two possible
+    # causes: (a) shallow clone without SDL tree, or (b) SDL was reverted to
+    # a submodule. Print a clear hint and let the caller decide.
+    fail("SDL source tree is missing.")
+    info("Expected: mocida/SDL/CMakeLists.txt to exist in the working tree.")
+    info("If you cloned with --depth=1, fetch full history or run:")
+    info("  git submodule update --init --recursive   # if SDL is a submodule")
+    info("  git pull --unshallow                      # otherwise")
+    raise SetupError("vendored SDL source not found")
+
+
 def cmd_sdl(force):
-    step("3/5  Cloning SDL / SDL_image / SDL_ttf + mimalloc")
+    step("4/5  Cloning SDL_image / SDL_ttf + mimalloc")
     for name, url, sha in SDL_PINS:
         clone(name, url, sha, force)
     clone("mimalloc", "https://github.com/microsoft/mimalloc.git", "", force=False)
 
 
 def cmd_submodules():
-    step("4/5  Nested submodules in SDL_image / SDL_ttf")
+    step("5/5  Nested submodules in SDL_image / SDL_ttf")
     for d in ("SDL_image", "SDL_ttf"):
         target = ROOT / d
         if (target / ".gitmodules").exists():
@@ -220,7 +241,7 @@ def cmd_submodules():
 
 
 def cmd_build(no_build):
-    step("5/5  Initial build (Debug)")
+    step("6/5  Initial build (Debug)")
     if no_build:
         info("--no-build specified, skipping.")
         return
@@ -242,6 +263,7 @@ def main():
     try:
         cmd_tools(args.skip_install)
         cmd_vcpkg()
+        cmd_sdl_vendored()
         cmd_sdl(args.force)
         cmd_submodules()
         cmd_build(args.no_build)

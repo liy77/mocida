@@ -82,9 +82,20 @@ void UIWindow_RequestTransparent(int on) { g_wantTransparent = on ? 1 : 0; }
 int  UIWindow_WantsTransparent(void)     { return g_wantTransparent; }
 
 // Full-frame AA pipeline. Matches UIAAMode in app.h:
-//   0 NONE, 1 COVERAGE (default - no postfx), 2 SSAA_2X, 3 SSAA_4X,
+//   0 NONE, 1 COVERAGE (no postfx), 2 SSAA_2X (default), 3 SSAA_4X,
 //   4 FXAA, 5 TAA.
-static int   g_aaMode   = 1;
+//
+// DEFAULT = SSAA_2X (2x2 = 4 samples per pixel — the supersampled
+// equivalent of hardware "MSAA 4x"). Hardware MSAA (SDL_GL_MULTISAMPLE*)
+// only applies on the OpenGL backend; on Metal/D3D it's a no-op, so the
+// frame-supersampling path is the portable way to ship anti-aliasing on
+// by default. The whole frame is rendered at 2x and box-downsampled, so
+// edges (shapes, glyph coverage, rounded rects) come out smooth on every
+// backend. The app can dial it down with `app { aa: "none" }` (or
+// "coverage" for the cheap no-postfx path) when it wants the fillrate
+// back. Cost: ~4x fragment work — fine for typical UI, opt-out for
+// fillrate-bound scenes.
+static int   g_aaMode   = 2;
 static float g_taaBlend = 0.5f;
 
 // Text supersampling factor. Glyphs are ALWAYS rasterized at g_textSS× the
@@ -439,13 +450,27 @@ int UIWindow_Render(UIWindow* window) {
         SDL_SetRenderScale(window->sdlRenderer, 1.0f, 1.0f);
     }
     
-    // Configure blending and clear buffer
+    // Configure blending and clear buffer.
     SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(window->sdlRenderer,
-        (Uint8)window->backgroundColor.r,
-        (Uint8)window->backgroundColor.g,
-        (Uint8)window->backgroundColor.b,
-        (Uint8)SDL_clamp((int)(window->backgroundColor.a * 255), 0, 255));
+    const Uint8 clearA = (Uint8)SDL_clamp((int)(window->backgroundColor.a * 255), 0, 255);
+    // Premultiplied-correct transparent clear. When the window is
+    // transparent (a native backdrop zeroed backgroundColor.a so the
+    // OS vibrancy / liquid glass shows through), the clear MUST be
+    // (0,0,0,0): the framebuffer holds premultiplied alpha (text is
+    // drawn with BLEND_PREMULTIPLIED, the compositor expects premult),
+    // and a (rgb, 0) clear is an INVALID premultiplied pixel — its
+    // non-zero RGB leaks through the SSAA bilinear downscale and the
+    // CAMetalLayer composite as a coloured fringe/ghost around every
+    // glyph edge. Zeroing RGB when alpha is 0 removes the fringe.
+    if (clearA == 0) {
+        SDL_SetRenderDrawColor(window->sdlRenderer, 0, 0, 0, 0);
+    } else {
+        SDL_SetRenderDrawColor(window->sdlRenderer,
+            (Uint8)window->backgroundColor.r,
+            (Uint8)window->backgroundColor.g,
+            (Uint8)window->backgroundColor.b,
+            clearA);
+    }
     SDL_RenderClear(window->sdlRenderer);
 
     // Render all UI elements
@@ -489,12 +514,21 @@ int UIWindow_Render(UIWindow* window) {
         // post-process between the render and the blit, plenty of time
         // for the freshly enlarged backbuffer to be presented partly
         // empty. A single full-window clear (~0.05 ms on the GPU) costs
-        // nothing and guarantees a clean canvas.
-        SDL_SetRenderDrawColor(window->sdlRenderer,
-            (Uint8)window->backgroundColor.r,
-            (Uint8)window->backgroundColor.g,
-            (Uint8)window->backgroundColor.b,
-            255);
+        // nothing and guarantees a clean canvas. Premultiplied-correct
+        // transparent clear when the window is see-through (native backdrop
+        // active): (0,0,0,0), so any area the SSAA/FXAA/TAA blit doesn't
+        // cover stays transparent and the OS effect (macOS vibrancy / liquid
+        // glass, Windows mica / acrylic via DWM) shows through instead of an
+        // opaque background rectangle.
+        if (clearA == 0) {
+            SDL_SetRenderDrawColor(window->sdlRenderer, 0, 0, 0, 0);
+        } else {
+            SDL_SetRenderDrawColor(window->sdlRenderer,
+                (Uint8)window->backgroundColor.r,
+                (Uint8)window->backgroundColor.g,
+                (Uint8)window->backgroundColor.b,
+                255);
+        }
         SDL_RenderClear(window->sdlRenderer);
 
         SDL_SetTextureScaleMode(g_smoothTexture, SDL_SCALEMODE_LINEAR);

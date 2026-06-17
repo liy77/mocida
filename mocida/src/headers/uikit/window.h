@@ -195,7 +195,7 @@ int  UIWindow_WantsTransparent(void);
  *     SDL's borderless hit-test. No-op on Win10 (no corner-preference API).
  *   - macOS: the NSWindow is configured for a full-size content view with a
  *     transparent, hidden titlebar (NSWindowStyleMaskFullSizeContentView +
- *     titlebarAppearsTransparent + titleVisibility=Hidden), which keeps native
+ *     titlebarAppearsTransparent + cleared title string), which keeps native
  *     rounding, shadow, resize and the traffic-light buttons. Implemented in
  *     titlebar_cocoa.mm. (The window must NOT be created borderless on macOS;
  *     UIWindow_Create honours that — see the g_customTitlebar branch.)
@@ -204,7 +204,13 @@ int  UIWindow_WantsTransparent(void);
  * Safe to call repeatedly; called automatically by UIWindow_Create right after
  * the window exists when a custom titlebar was requested.
  */
+#ifdef __cplusplus
+extern "C" {
+#endif
 void UIWindow_ApplyNativeDecorations(SDL_Window* window);
+#ifdef __cplusplus
+}
+#endif
 
 /**
  * 1 when running on macOS, 0 elsewhere. The MUI/host uses this to keep its own

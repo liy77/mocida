@@ -38,9 +38,63 @@ view Hello(name: string = "world") {
 }
 "#;
 
+#[derive(Default, Debug, Clone)]
+struct CliOptions {
+    /// When set, minimize the window right after show so it doesn't steal
+    /// focus from the desktop session the user is currently using. The
+    /// process keeps running (the SDL event loop is alive) and the per-frame
+    /// tick / hot-reload watcher continue to work — only the window is
+    /// hidden. The user can restore it from the Dock or via `osascript`.
+    minimize: bool,
+    /// Move the window to the N-th display (0 = primary, 1 = first external,
+    /// …). Combined with `minimize`, this lets the user run a validation
+    /// build on a secondary monitor they aren't looking at and never see.
+    display: Option<u32>,
+    /// The `.mui` file to render. Mandatory (positional).
+    path: Option<String>,
+}
+
+fn parse_args() -> CliOptions {
+    let mut opts = CliOptions::default();
+    let mut it = std::env::args().skip(1);
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--minimized" | "-m" => opts.minimize = true,
+            "--display" | "-d" => {
+                if let Some(v) = it.next() {
+                    if let Ok(n) = v.parse::<u32>() {
+                        opts.display = Some(n);
+                    }
+                }
+            }
+            "--help" | "-h" => {
+                eprintln!(
+                    "usage: mui-dev [--minimized] [--display N] <file.mui>
+                     
+                       --minimized, -m    start minimized (don't steal focus)
+                       --display N, -d N   place window on display N (0 = primary)
+                     
+                     hot-reload: edit + save <file.mui> and the window updates in place."
+                );
+                std::process::exit(0);
+            }
+            other if !other.starts_with('-') => opts.path = Some(other.to_string()),
+            _ => {
+                eprintln!("mui-dev: unknown flag '{a}' (try --help)");
+                std::process::exit(2);
+            }
+        }
+    }
+    opts
+}
+
 fn main() -> ExitCode {
-    let path = std::env::args().nth(1);
-    match run(path) {
+    let opts = parse_args();
+    if opts.path.is_none() {
+        eprintln!("mui-dev: missing <file.mui> (try --help)");
+        return ExitCode::from(2);
+    }
+    match run(opts) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("mui-dev: {e}");
@@ -106,7 +160,8 @@ fn build_seeded(
     })
 }
 
-fn run(path: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
+    let path = opts.path;
     let (label, source) = match &path {
         Some(p) => (p.clone(), std::fs::read_to_string(p)?),
         None => ("<built-in sample>".to_string(), DEFAULT_SAMPLE.to_string()),
@@ -138,6 +193,43 @@ fn run(path: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("mui-dev: failed to load {}", bundle.display());
                 }
             }
+        }
+    }
+
+    // If the .mui declares a native OS backdrop, decide whether the SDL
+    // window must be created with SDL_WINDOW_TRANSPARENT. The answer is
+    // platform- AND material-specific:
+    //
+    //  * macOS / iOS: EVERY native material (vibrancy, liquid glass) needs a
+    //    transparent window — the NSVisualEffectView / NSGlassEffectView is
+    //    tucked *under* the Metal layer, and the per-pixel alpha-0 clear is
+    //    what lets it show through.
+    //
+    //  * Windows: Acrylic uses a DirectComposition (transparent) swapchain,
+    //    so it needs the flag. Mica / Mica Alt are drawn by DWM behind the
+    //    *whole* window via DWMWA_SYSTEMBACKDROP_TYPE + an extended frame on
+    //    an OPAQUE window — forcing SDL_WINDOW_TRANSPARENT there hands DWM a
+    //    composition swapchain it turns black. So Mica stays opaque.
+    //
+    //  * Linux (KDE): the blur is a window-manager hint; transparency lets
+    //    it show through alpha-0 regions.
+    //
+    // The flag is consumed at SDL_CreateWindow time, so set it BEFORE
+    // App::new. `apply_backdrop` below does the actual material wiring once
+    // the window exists.
+    if cfg.backdrop.is_some() {
+        use mocida::BackdropMaterial as M;
+        let material = M::from_effect(cfg.backdrop.as_deref().unwrap_or("auto"));
+        let wants_transparent = if material == M::None {
+            false
+        } else if cfg!(target_os = "windows") {
+            // Mica / Mica Alt = opaque + DWMSBT; everything else = transparent.
+            !matches!(material, M::Mica | M::MicaAlt)
+        } else {
+            true
+        };
+        if wants_transparent {
+            mocida::app::request_transparent(true);
         }
     }
 
@@ -308,6 +400,22 @@ fn run(path: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // Default: start the window MINIMIZED so a CI / shared-screen /
+    // second-display validation run never steals focus from the host.
+    // The process keeps running (per-frame tick + hot-reload), only the
+    // window is hidden in the Dock — restore from the Dock when you want
+    // to look at it. To get the historical "open and steal focus"
+    // behaviour, set `MUI_DEV_VISIBLE=1` in the environment.
+    //
+    // Rationale: the most common use of `mui-dev` is iterating on a
+    // `.mui` while writing it (hot-reload). The user is on the same
+    // desktop, the file is open in their editor, and they don't want a
+    // window jumping in front of their text editor every save. With
+    // this default, the validation run is silent unless explicitly
+    // asked for.
+    if std::env::var_os("MUI_DEV_VISIBLE").is_none() {
+        mocida::app::window_minimize();
+    }
     app.show().run();
     // Keep the reactive state alive across the whole loop.
     drop(reactive_slot);
