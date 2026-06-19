@@ -557,6 +557,9 @@ def main(argv=None):
     if args.web and args.example:
         err("--example is not supported with --web")
         return 1
+    if args.web and args.asan:
+        err("--asan is not supported with --web")
+        return 1
 
     if args.web:
         if not shutil.which("emcmake") or not shutil.which("emmake"):
@@ -652,7 +655,7 @@ def main(argv=None):
         err("neither 'ninja' nor 'make' found in PATH. Run setup.py.")
         return 1
 
-    configure_bin = "emcmake" if args.web else "cmake"
+    configure_cmd = ["emcmake", "cmake"] if args.web else ["cmake"]
     configure_args = []
     if needs_configure:
         if args.web:
@@ -682,11 +685,12 @@ def main(argv=None):
             if wv2_dir:
                 configure_args.append(f"-DMOCIDA_WEBVIEW2_NUGET_DIR={wv2_dir}")
 
-        # optional compiler cache
-        launcher = shutil.which("sccache") or shutil.which("ccache")
-        if launcher:
-            configure_args += [f"-DCMAKE_C_COMPILER_LAUNCHER={Path(launcher).stem}",
-                               f"-DCMAKE_CXX_COMPILER_LAUNCHER={Path(launcher).stem}"]
+        # optional compiler cache (skip for Emscripten; emcmake may not play well with it)
+        if not args.web:
+            launcher = shutil.which("sccache") or shutil.which("ccache")
+            if launcher:
+                configure_args += [f"-DCMAKE_C_COMPILER_LAUNCHER={Path(launcher).stem}",
+                                   f"-DCMAKE_CXX_COMPILER_LAUNCHER={Path(launcher).stem}"]
 
     if args.verbose:
         if args.web:
@@ -710,7 +714,7 @@ def main(argv=None):
     # --- configure ------------------------------------------------------
     if needs_configure:
         cmake_cfg = [
-            configure_bin, "cmake", "-G", generator,
+            *configure_cmd, "-G", generator,
             "-S", str(src_dir), "-B", str(build_dir),
             *configure_args,
             f"-DCMAKE_BUILD_TYPE={config}",

@@ -295,7 +295,13 @@ def task_rust(opts):
 def task_clean(opts):
     head(f"clean - wipe C build [{PLATFORM}/{opts.config}] + cargo clean")
     t0 = time.perf_counter()
-    for cbuild in (c_build_dir(opts.config, web=opts.web), c_build_dir(opts.config, shared=True, web=opts.web)):
+    dirs_to_clean = []
+    if opts.web:
+        dirs_to_clean.append(c_build_dir(opts.config, web=True))
+    else:
+        dirs_to_clean.append(c_build_dir(opts.config))
+        dirs_to_clean.append(c_build_dir(opts.config, shared=True))
+    for cbuild in dirs_to_clean:
         if cbuild.exists():
             run_line(f"rm -rf {cbuild}")
             shutil.rmtree(cbuild, ignore_errors=True)
