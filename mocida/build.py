@@ -574,6 +574,9 @@ def main(argv=None):
             warn("--no-demo is ignored in web mode; demo is enabled")
         if args.tests:
             warn("--tests is ignored in web mode; tests are disabled")
+        args.shared = False
+        args.demo = True
+        args.tests = False
 
     if args.ios:
         return build_ios(args)
