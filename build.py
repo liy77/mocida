@@ -226,7 +226,8 @@ def task_c(opts):
     # distribution). They live in separate build dirs so neither
     # clobbers the other.
     _run_c_pass(opts, shared=False)
-    _run_c_pass(opts, shared=True)
+    if not opts.web:
+        _run_c_pass(opts, shared=True)
 
 
 # ========================================================================
@@ -363,6 +364,8 @@ def persist_env(pairs):
 
 
 def task_env(opts):
+    if opts.web:
+        raise TaskError("env task is not supported with --web")
     head(f"env - publish MOCIDA_* to persistent system env [{PLATFORM}]")
     t0 = time.perf_counter()
     # Persist the SHARED build dir: that's what the Rust workspace (and
