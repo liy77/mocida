@@ -118,8 +118,10 @@ class TaskError(Exception):
 
 
 # --- helpers ------------------------------------------------------------
-def c_build_dir(cfg, shared=False):
+def c_build_dir(cfg, shared=False, web=False):
     suffix = "-shared" if shared else ""
+    if web:
+        return CDIR / "build" / "wasm" / cfg
     return CDIR / "build" / PLATFORM / (cfg + suffix)
 
 
@@ -183,7 +185,7 @@ def _run_c_pass(opts, shared):
     failure or if the expected artefact is missing."""
     mode = "shared" if shared else "static"
     lf = libfile(shared)
-    lib = c_build_dir(opts.config, shared) / lf
+    lib = c_build_dir(opts.config, shared, web=opts.web) / lf
     prev = mtime(lib)
 
     flags = [cflag(opts.config), "--shared" if shared else "--static"]
@@ -242,7 +244,7 @@ def task_rust(opts):
     # import lib, so there's no transitive-static-lib juggling and no
     # debug-CRT (/MDd vs Rust's /MD) conflict. The DLLs are staged next
     # to the built .exe by mocida-sys/build.rs.
-    libdir = c_build_dir(opts.config, shared=True)
+    libdir = c_build_dir(opts.config, shared=True, web=opts.web)
     lib = libdir / libfile(shared=True)
     incdir = CDIR / "src" / "headers"
     sdlinc = CDIR / "SDL" / "include"
@@ -293,7 +295,7 @@ def task_rust(opts):
 def task_clean(opts):
     head(f"clean - wipe C build [{PLATFORM}/{opts.config}] + cargo clean")
     t0 = time.perf_counter()
-    for cbuild in (c_build_dir(opts.config), c_build_dir(opts.config, shared=True)):
+    for cbuild in (c_build_dir(opts.config, web=opts.web), c_build_dir(opts.config, shared=True, web=opts.web)):
         if cbuild.exists():
             run_line(f"rm -rf {cbuild}")
             shutil.rmtree(cbuild, ignore_errors=True)
@@ -365,12 +367,12 @@ def persist_env(pairs):
 
 def task_env(opts):
     if opts.web:
-        raise TaskError("env task is not supported with --web")
+        raise TaskError("env task is not supported with --web (no desktop shared library artefact is produced)")
     head(f"env - publish MOCIDA_* to persistent system env [{PLATFORM}]")
     t0 = time.perf_counter()
     # Persist the SHARED build dir: that's what the Rust workspace (and
     # any other DLL consumer) links against, matching task_rust.
-    libdir = c_build_dir(opts.config, shared=True)
+    libdir = c_build_dir(opts.config, shared=True, web=opts.web)
     incdir = CDIR / "src" / "headers"
     if not incdir.exists():
         raise TaskError(f"C headers not found at {incdir}")
