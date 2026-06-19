@@ -1,4 +1,4 @@
-﻿#include <uikit/window.h>
+#include <uikit/window.h>
 #include <uikit/button.h>
 #include <uikit/mouse_area.h>
 #include <uikit/container.h>
@@ -20,8 +20,8 @@
 #include <uikit/perf.h>
 #include <uikit/bundle.h>
 #include <uikit/screen.h>
-#ifndef MOCIDA_IOS
-#include <curl/curl.h>   /* vestigial; not linked on iOS */
+#if !defined(MOCIDA_IOS) && !defined(MOCIDA_WEB)
+#include <curl/curl.h>   /* vestigial; not linked on iOS or Emscripten */
 #endif
 
 /**
