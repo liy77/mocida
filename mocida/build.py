@@ -548,6 +548,16 @@ def main(argv=None):
     _VERBOSE = args.verbose
     os.chdir(ROOT)
 
+    if args.web and args.ios:
+        err("--web and --ios are mutually exclusive")
+        return 1
+    if args.web and args.installer:
+        err("--installer is not supported with --web")
+        return 1
+    if args.web and args.example:
+        err("--example is not supported with --web")
+        return 1
+
     if args.web:
         if not shutil.which("emcmake") or not shutil.which("emmake"):
             err("Emscripten not found. Install/activate emsdk and ensure "
@@ -558,6 +568,12 @@ def main(argv=None):
             # confuse the configure step.
             for k in ["INCLUDE", "LIB", "LIBPATH"]:
                 os.environ.pop(k, None)
+        if args.shared:
+            warn("--shared is ignored in web mode; building static library")
+        if not args.demo:
+            warn("--no-demo is ignored in web mode; demo is enabled")
+        if args.tests:
+            warn("--tests is ignored in web mode; tests are disabled")
 
     if args.ios:
         return build_ios(args)
