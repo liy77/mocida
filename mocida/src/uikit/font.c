@@ -223,6 +223,25 @@ void UISearchFonts() {
     }
     UIFonts = temp;
     UIFonts[fontCount] = NULL;
+#elif defined(MOCIDA_WEB)
+    // Emscripten builds preload fonts into the virtual FS at <base>/fonts,
+    // same layout as iOS. Walk that directory.
+    {
+        const char* base = SDL_GetBasePath();
+        if (base) {
+            char fontsDir[1024];
+            snprintf(fontsDir, sizeof(fontsDir), "%sfonts", base);
+            WalkFontsDir(fontsDir, &fontCount);
+            if (fontCount == 0) WalkFontsDir(base, &fontCount);
+        }
+    }
+    FontEntry** temp = realloc(UIFonts, sizeof(FontEntry*) * (fontCount + 1));
+    if (!temp) {
+        TTF_Quit();
+        return;
+    }
+    UIFonts = temp;
+    UIFonts[fontCount] = NULL;
 #elif defined(__APPLE__)
     // macOS spreads fonts across several roots, and the family the host app
     // asks for (e.g. "Arial") is usually NOT in /Library/Fonts — it lives in
@@ -274,7 +293,7 @@ void UISearchFonts() {
 // in the app bundle by UISearchFonts (a bundled fallback, or the user's own
 // custom font if they shipped one) — call UISearchFonts() first.
 const char* UIGetDefaultFontPath(void) {
-#ifdef MOCIDA_IOS
+#if defined(MOCIDA_IOS) || defined(MOCIDA_WEB)
     if (UIFonts && UIFonts[0]) return UIFonts[0]->file_path;
     return NULL;
 #else
