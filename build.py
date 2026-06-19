@@ -239,42 +239,88 @@ def task_rust(opts):
     head(f"rust - build Rust workspace (mocida-rs/) [{PLATFORM}/{opts.config}]")
     t0 = time.perf_counter()
 
-    # The Rust workspace links the SHARED mocida: the DLL self-contains
-    # SDL/ttf/image/mimalloc and exposes only mocida's C API via the
-    # import lib, so there's no transitive-static-lib juggling and no
-    # debug-CRT (/MDd vs Rust's /MD) conflict. The DLLs are staged next
-    # to the built .exe by mocida-sys/build.rs.
-    libdir = c_build_dir(opts.config, shared=True, web=opts.web)
-    lib = libdir / libfile(shared=True)
-    incdir = CDIR / "src" / "headers"
-    sdlinc = CDIR / "SDL" / "include"
-
-    if not lib.exists():
-        raise TaskError(f"C shared lib not found at {lib} - run "
-                        f"'python build.py c --config {opts.config}' first.")
-    if not incdir.exists():
-        raise TaskError(f"C headers not found at {incdir}")
-
+    # The Rust workspace links the SHARED mocida on desktop: the DLL
+    # self-contains SDL/ttf/image/mimalloc and exposes only mocida's C API
+    # via the import lib, so there's no transitive-static-lib juggling and no
+    # debug-CRT (/MDd vs Rust's /MD) conflict. The DLLs are staged next to the
+    # built .exe by mocida-sys/build.rs.
     # FFI wiring consumed by mocida-rs/mocida-sys/build.rs. MOCIDA_LIB_NAME
     # stays the base name 'mocida' on every platform - build.rs adds the
     # lib prefix / .lib|.a suffix per linker convention.
     env = os.environ.copy()
+
+    # For wasm32-unknown-emscripten we link the static archive produced by the
+    # web C build; SDL and the Emscripten sysroot are linked through the target.
+    if opts.web:
+        libdir = CDIR / "build" / "wasm" / opts.config
+        lib = libdir / libfile(shared=False)
+        env["MOCIDA_STATIC"] = "1"
+    else:
+        libdir = c_build_dir(opts.config, shared=True)
+        lib = libdir / libfile(shared=True)
+        env["MOCIDA_STATIC"] = "0"
+    incdir = CDIR / "src" / "headers"
+    sdlinc = CDIR / "SDL" / "include"
+
+    if not lib.exists():
+        raise TaskError(f"C lib not found at {lib} - run "
+                        f"'python build.py c --config {opts.config}' first.")
+    if not incdir.exists():
+        raise TaskError(f"C headers not found at {incdir}")
+
     env["MOCIDA_INCLUDE_DIR"] = str(incdir.resolve())
     env["MOCIDA_LIB_DIR"] = str(libdir.resolve())
     env["MOCIDA_LIB_NAME"] = "mocida"
-    env["MOCIDA_STATIC"] = "0"
+    if opts.web and PLATFORM == "darwin":
+        # bindgen runs on the host and needs the host sysroot/target to find
+        # system headers (e.g. <stdio.h>) when cargo targets wasm.
+        try:
+            sdk = subprocess.run(
+                ["xcrun", "--show-sdk-path"],
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            env["BINDGEN_EXTRA_CLANG_ARGS"] = (
+                f"-isysroot {sdk} -target aarch64-apple-darwin"
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
     if sdlinc.exists():
         env["SDL3_INCLUDE_DIR"] = str(sdlinc.resolve())
 
     note(f"MOCIDA_INCLUDE_DIR = {env['MOCIDA_INCLUDE_DIR']}")
     note(f"MOCIDA_LIB_DIR     = {env['MOCIDA_LIB_DIR']}")
-    note(f"MOCIDA_STATIC      = 0  (shared DLL: {lib.name})")
+    note(f"MOCIDA_STATIC      = {env['MOCIDA_STATIC']}")
 
     if opts.force:
         run_line("cargo clean")
         subprocess.run(["cargo", "clean"], cwd=str(RSDIR), env=env)
 
+    if opts.web:
+        # Emscripten link flags and SDL satellite libs that match the C web
+        # build (consumed by emcc when cargo links the final wasm artefact).
+        # libmocida.a itself is emitted by mocida-sys/build.rs; these are the
+        # SDL/SDL_image/SDL_ttf static archives the C web build links.
+        wasm_lib = CDIR / "build" / "wasm" / opts.config
+        em_link_args = [
+            "-sFETCH=1",
+            "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']",
+            "-sALLOW_MEMORY_GROWTH=1",
+            "-sINITIAL_MEMORY=64MB",
+            "-sMAXIMUM_MEMORY=256MB",
+            str(wasm_lib / "SDL" / "libSDL3.a"),
+            str(wasm_lib / "SDL_image" / "libSDL3_image.a"),
+            str(wasm_lib / "SDL_image" / "external" / "libtiff" / "libtiff" / "libtiff.a"),
+            str(wasm_lib / "SDL_image" / "external" / "libwebp" / "libwebpdemux.a"),
+            str(wasm_lib / "SDL_image" / "external" / "libwebp" / "libwebp.a"),
+            str(wasm_lib / "SDL_image" / "external" / "libwebp" / "libsharpyuv.a"),
+            str(wasm_lib / "SDL_ttf" / "libSDL3_ttf.a"),
+        ]
+        rustflags = env.get("RUSTFLAGS", "")
+        env["RUSTFLAGS"] = f"{rustflags} {' '.join(f'-C link-arg={a}' for a in em_link_args)}"
+
     cargo = ["cargo", "build"]
+    if opts.web:
+        cargo.extend(["--target", "wasm32-unknown-emscripten"])
     if opts.config != "debug":
         cargo.append("--release")
     if not opts.verbose:
@@ -452,24 +498,21 @@ def main():
                          "command echoes); default shows only progress + errors")
     ap.add_argument("--web", action="store_true",
                     help="build for the web (Emscripten/WebAssembly); "
-                         "disables desktop-only deps like mimalloc/curl "
-                         "and skips the Rust workspace build")
+                         "disables desktop-only deps like mimalloc/curl")
     opts = ap.parse_args()
 
     global VERBOSE
     VERBOSE = opts.verbose
 
     plan = resolve_plan(opts.task)
-    if opts.web:
-        plan = [p for p in plan if p != "rust"]
+    if opts.web and opts.task == "all":
+        plan = ["c", "rust"]
     print(_c(f"Mocida monorepo  *  task={opts.task}  config={opts.config}  "
              f"platform={PLATFORM}  plan=[{' -> '.join(plan)}]", "35"))
 
     total0 = time.perf_counter()
     failed = False
     try:
-        if opts.web and opts.task == "rust":
-            raise TaskError("rust build is not yet supported with --web (phase 2).")
         for step in plan:
             RUNNERS[step](opts)
     except TaskError as e:
