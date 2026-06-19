@@ -34,6 +34,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten" OR EMSCRIPTEN)
     set(MOCIDA_WEB ON)
     message(STATUS "Mocida: WebAssembly/Emscripten build")
 endif()
+if(MOCIDA_WEB)
+    set(MOCIDA_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+endif()
 
 # Absolute path to THIS (the mocida library) directory. Used instead of
 # CMAKE_CURRENT_SOURCE_DIR for files the helpers reference (Info.plist
@@ -386,9 +389,6 @@ if(MOCIDA_WEB)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/app_web.c")
     target_compile_definitions(mocida PUBLIC MOCIDA_WEB=1)
     target_link_options(mocida PUBLIC
-        "-sUSE_SDL=3"
-        "-sUSE_SDL_IMAGE=3"
-        "-sUSE_SDL_TTF=3"
         "-sFETCH=1"
         "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
         "-sALLOW_MEMORY_GROWTH=1"
@@ -690,7 +690,7 @@ endif()
 # package only ships headers; without the runtime plugin,
 # gst_element_factory_make returns NULL and UIVideo_Create bails.
 # ----------------------------------------------------------------------
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND NOT MOCIDA_WEB)
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)
         pkg_check_modules(GSTREAMER QUIET
@@ -733,7 +733,7 @@ endif()
 # To install on Arch:
 #   sudo pacman -S webkit2gtk-4.1
 # ----------------------------------------------------------------------
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND NOT MOCIDA_WEB)
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)
         pkg_check_modules(WEBKITGTK QUIET webkit2gtk-4.1)
@@ -975,7 +975,7 @@ endif()
 # from vcpkg / vendored SDL subdirs and are shared libraries by design).
 # ----------------------------------------------------------------------
 option(MOCIDA_BUILD_INSTALLER "Build the GUI installer (installer/installer.c)" OFF)
-if(MOCIDA_BUILD_INSTALLER)
+if(MOCIDA_BUILD_INSTALLER AND NOT MOCIDA_WEB)
     # Parallel static lib reusing the same sources as the main `mocida`
     # target. Compiles the TU set twice when MOCIDA_BUILD_SHARED is also
     # ON, which is fine — the installer is built rarely.
