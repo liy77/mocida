@@ -18,7 +18,7 @@ extern int UIImage_RemoteHttpDownload_iOS(const char* url,
 #elif defined(MOCIDA_WEB)
 extern void* UIImage_RemoteHttpStart_Web(const char* url);
 extern int   UIImage_RemoteHttpPoll_Web(void* cookie, void** outData, size_t* outSize);
-extern void  WebFetch_Free(void* cookie);
+extern void  UIImage_RemoteHttpFree_Web(void* cookie);
 #else
 #  include <curl/curl.h>
 #endif
@@ -430,7 +430,7 @@ void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer) {
         image->loadState = IMAGE_LOAD_FAILURE;
     }
 
-    WebFetch_Free(job->cookie);
+    UIImage_RemoteHttpFree_Web(job->cookie);
     free(job);
     image->__download = NULL;
     return;
@@ -495,7 +495,7 @@ void UIImage_Destroy(UIImage* image) {
         typedef struct { void* cookie; } WebJob;
         WebJob* job = (WebJob*)image->__download;
         image->__download = NULL;
-        WebFetch_Free(job->cookie);
+        UIImage_RemoteHttpFree_Web(job->cookie);
         free(job);
 #else
         RemoteJob* job = (RemoteJob*)image->__download;
