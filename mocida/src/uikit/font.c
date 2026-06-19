@@ -197,46 +197,28 @@ void UISearchFonts() {
     UIFonts = temp;
     UIFonts[fontCount] = NULL; // NULL-terminate the array
 
-#elif defined(MOCIDA_IOS)
-    // iOS apps are sandboxed and cannot read /System/Library/Fonts, so the
-    // only fonts available are the ones bundled INSIDE the .app. The build
-    // copies them (custom fonts from the repo's fonts/ dir + a default
-    // fallback) into <app>/fonts, and SDL_GetBasePath() returns the bundle
-    // resource root at runtime. Walk that fonts/ dir; everything found —
-    // including the user's custom faces — is registered for UIGetFont().
-    {
-        const char* base = SDL_GetBasePath();   // bundle root, owned by SDL
-        if (base) {
-            char fontsDir[1024];
-            snprintf(fontsDir, sizeof(fontsDir), "%sfonts", base);
-            WalkFontsDir(fontsDir, &fontCount);
-            // Fallback: some fonts may sit at the bundle root directly.
-            if (fontCount == 0) WalkFontsDir(base, &fontCount);
-        }
-    }
-
-    FontEntry** temp = realloc(UIFonts, sizeof(FontEntry *) * (fontCount + 1));
-    if (temp == NULL) {
-        printf("Memory allocation failed for NULL termination\n");
-        TTF_Quit();
-        return;
-    }
-    UIFonts = temp;
-    UIFonts[fontCount] = NULL;
-#elif defined(MOCIDA_WEB)
-    // Emscripten builds preload fonts into the virtual FS at <base>/fonts,
-    // same layout as iOS. Walk that directory.
+#elif defined(MOCIDA_IOS) || defined(MOCIDA_WEB)
+    // iOS apps are sandboxed and cannot read system fonts; Emscripten web
+    // builds also preload bundled fonts into the virtual FS. In both cases
+    // the only fonts available are the ones bundled inside the app/package
+    // at <base>/fonts. Walk that directory; if nothing is found, fall back
+    // to the base path.
     {
         const char* base = SDL_GetBasePath();
         if (base) {
             char fontsDir[1024];
+            // SDL_GetBasePath() always returns a path with a trailing
+            // separator on both iOS and Emscripten, so concatenating
+            // "fonts" directly is safe.
             snprintf(fontsDir, sizeof(fontsDir), "%sfonts", base);
             WalkFontsDir(fontsDir, &fontCount);
             if (fontCount == 0) WalkFontsDir(base, &fontCount);
         }
     }
+
     FontEntry** temp = realloc(UIFonts, sizeof(FontEntry*) * (fontCount + 1));
     if (!temp) {
+        UI_ERROR(UI_CAT_FONT, "out of memory finalizing bundled font list");
         TTF_Quit();
         return;
     }
@@ -288,8 +270,8 @@ void UISearchFonts() {
 }
 
 // Default font path used by widgets that don't set an explicit family.
-// On desktop this is a fixed system path (DEFAULT_FONT_PATH). On iOS there
-// are no readable system fonts, so the default is the first font discovered
+// On desktop this is a fixed system path (DEFAULT_FONT_PATH). On iOS and web
+// there are no readable system fonts, so the default is the first font discovered
 // in the app bundle by UISearchFonts (a bundled fallback, or the user's own
 // custom font if they shipped one) — call UISearchFonts() first.
 const char* UIGetDefaultFontPath(void) {
