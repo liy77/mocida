@@ -302,6 +302,7 @@ def task_rust(opts):
         # SDL/SDL_image/SDL_ttf static archives the C web build links.
         wasm_lib = CDIR / "build" / "wasm" / opts.config
         em_link_args = [
+            "-fwasm-exceptions",
             "-sFETCH=1",
             "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']",
             "-sALLOW_MEMORY_GROWTH=1",
