@@ -388,7 +388,7 @@ else()
 endif()
 
 if(MOCIDA_WEB)
-    set(CMAKE_EXECUTABLE_SUFFIX ".html" CACHE STRING "" FORCE)
+    set(CMAKE_EXECUTABLE_SUFFIX ".html")
     target_sources(mocida PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/image_net_web.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/app_web.c")

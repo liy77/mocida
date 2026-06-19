@@ -785,7 +785,6 @@ def main(argv=None):
     print(f"  Artefacts: {build_dir.relative_to(ROOT)}/")
     if args.web:
         html = build_dir / "demo.html"
-        print(f"  Web artefacts: {build_dir.relative_to(ROOT)}/")
         print(f"  HTML: {html.relative_to(ROOT)}")
         print(f"  Serve: python -m http.server 8000 --directory {build_dir.relative_to(ROOT)}")
     if args.installer:
