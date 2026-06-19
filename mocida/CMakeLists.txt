@@ -315,9 +315,7 @@ file(GLOB_RECURSE MOCIDA_SOURCES_CXX "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/*.cp
 
 # Web-only sources (Emscripten headers) must not be compiled on desktop.
 # They are added back explicitly below when MOCIDA_WEB is ON.
-if(NOT MOCIDA_WEB)
-    list(FILTER MOCIDA_SOURCES EXCLUDE REGEX "_web\\.c$")
-endif()
+list(FILTER MOCIDA_SOURCES EXCLUDE REGEX "_web\\.c$")
 
 # macOS: the WKWebView backend (webview_cocoa.mm) is Objective-C++. The
 # globs above only catch .c/.cpp, so it's added explicitly. OBJCXX must

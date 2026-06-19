@@ -31,6 +31,10 @@
 #include <uikit/crash.h>
 #include <uikit/font.h>
 
+#ifdef MOCIDA_WEB
+extern void UIApp_ClearWebApp(UIApp* app);
+#endif
+
 // Converts window coordinates (coming from SDL_Event) into the
 // renderer's logical space. Important because UIApp_HandleEvent sets
 // SDL_LOGICAL_PRESENTATION_LETTERBOX on resize. Without this conversion
@@ -434,6 +438,9 @@ static bool LiveResizeWatch(void* userdata, SDL_Event* event) {
         h = event->window.data2;
     }
     ApplyResize(app, w, h);
+    app->__lastResizeW = w;
+    app->__lastResizeH = h;
+    app->__lastSafeArea = UIScreen_GetSafeArea();
     UIWindow_Render(app->window);
     return false;
 }

@@ -26,6 +26,7 @@ static void mocida_web_loop(void) {
     s_webLastTickPC = nowPC;
 
     UIApp_RunOneFrame(s_webApp, dtMs);
+    if (!s_webApp) return;
     if (!s_webApp->window->visible && !s_webApp->runInBackground) {
         emscripten_cancel_main_loop();
         s_webApp = NULL;
