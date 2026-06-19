@@ -450,8 +450,6 @@ def main():
 
     plan = resolve_plan(opts.task)
     if opts.web:
-        if opts.task == "rust":
-            raise TaskError("rust build is not yet supported with --web (phase 2).")
         plan = [p for p in plan if p != "rust"]
     print(_c(f"Mocida monorepo  *  task={opts.task}  config={opts.config}  "
              f"platform={PLATFORM}  plan=[{' -> '.join(plan)}]", "35"))
@@ -459,6 +457,8 @@ def main():
     total0 = time.perf_counter()
     failed = False
     try:
+        if opts.web and opts.task == "rust":
+            raise TaskError("rust build is not yet supported with --web (phase 2).")
         for step in plan:
             RUNNERS[step](opts)
     except TaskError as e:
