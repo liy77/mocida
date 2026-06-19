@@ -15,6 +15,10 @@
 #elif defined(MOCIDA_IOS)
 extern int UIImage_RemoteHttpDownload_iOS(const char* url,
                                           void** outData, size_t* outSize);
+#elif defined(MOCIDA_WEB)
+extern void* UIImage_RemoteHttpStart_Web(const char* url);
+extern int   UIImage_RemoteHttpPoll_Web(void* cookie, void** outData, size_t* outSize);
+extern void  WebFetch_Free(void* cookie);
 #else
 #  include <curl/curl.h>
 #endif
@@ -141,7 +145,7 @@ static SDL_Mutex*       g_remoteJobMutex   = NULL;
 static void RemoteEnsureInit(void) {
     if (!g_remoteCacheMutex) g_remoteCacheMutex = SDL_CreateMutex();
     if (!g_remoteJobMutex)   g_remoteJobMutex   = SDL_CreateMutex();
-#if !defined(MOCIDA_IOS) && !defined(MOCIDA_NO_REMOTE_IMAGES)
+#if !defined(MOCIDA_IOS) && !defined(MOCIDA_WEB) && !defined(MOCIDA_NO_REMOTE_IMAGES)
     // curl_global_init is not thread-safe; do it once here on the main
     // thread before any worker thread calls curl_easy_init.
     static int curlInited = 0;
@@ -254,6 +258,17 @@ static int RemoteHttp_Download(const char* url, void** outData, size_t* outSize)
 /* iOS: NSURLSession (libcurl is not available there). */
 static int RemoteHttp_Download(const char* url, void** outData, size_t* outSize) {
     return UIImage_RemoteHttpDownload_iOS(url, outData, outSize);
+}
+
+#elif defined(MOCIDA_WEB)
+
+/* Web: async downloads are driven from UIImage_PumpRemote via
+ * emscripten_fetch in image_net_web.c. This sync entry point is not used. */
+static int RemoteHttp_Download(const char* url, void** outData, size_t* outSize) {
+    (void)url;
+    if (outData) *outData = NULL;
+    if (outSize) *outSize = 0;
+    return 0;
 }
 
 #else
@@ -376,6 +391,49 @@ void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer) {
     if (!image || !renderer) return;
     RemoteEnsureInit();
 
+#if defined(MOCIDA_NO_REMOTE_IMAGES)
+    image->loadState = IMAGE_LOAD_FAILURE;
+    return;
+#elif defined(MOCIDA_WEB)
+    typedef struct { void* cookie; } WebJob;
+    WebJob* job = (WebJob*)image->__download;
+    if (!job) {
+        job = (WebJob*)calloc(1, sizeof(WebJob));
+        if (!job) { image->loadState = IMAGE_LOAD_FAILURE; return; }
+        job->cookie = UIImage_RemoteHttpStart_Web(image->source);
+        if (!job->cookie) {
+            free(job);
+            image->loadState = IMAGE_LOAD_FAILURE;
+            return;
+        }
+        image->__download = job;
+        return;
+    }
+
+    void* data = NULL;
+    size_t size = 0;
+    if (!UIImage_RemoteHttpPoll_Web(job->cookie, &data, &size)) return;
+
+    if (data && size) {
+        SDL_Surface* surf = UIAsset_LoadSurfaceFromMemory(data, size);
+        if (surf) {
+            image->__SDL_texture = SDL_CreateTextureFromSurface(renderer, surf);
+            SDL_DestroySurface(surf);
+        }
+    }
+    if (image->__SDL_texture) {
+        image->loadState = IMAGE_LOAD_SUCCESS;
+        SDL_SetTextureScaleMode(image->__SDL_texture,
+            image->antialiasing ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+    } else {
+        image->loadState = IMAGE_LOAD_FAILURE;
+    }
+
+    WebFetch_Free(job->cookie);
+    free(job);
+    image->__download = NULL;
+    return;
+#else
     RemoteJob* job = (RemoteJob*)image->__download;
     if (!job) {
         /* First visit: spin up the background download. */
@@ -423,6 +481,7 @@ void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer) {
 
     image->__download = NULL;
     if (RemoteJob_Release(job)) RemoteJob_Free(job);
+#endif
 }
 
 void UIImage_Destroy(UIImage* image) {
