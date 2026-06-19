@@ -195,6 +195,8 @@ def _run_c_pass(opts, shared):
         flags.append("--no-demo")
     if opts.verbose:
         flags.append("--verbose")
+    if opts.web:
+        flags.append("--web")
 
     t0 = time.perf_counter()
     run_line(f"python mocida/build.py {' '.join(flags)}")
@@ -231,6 +233,8 @@ def task_c(opts):
 #  TASK: rust  (cargo build, wired to the C outputs via MOCIDA_* env vars)
 # ========================================================================
 def task_rust(opts):
+    if opts.web:
+        raise TaskError("rust build is not yet supported with --web (phase 2).")
     head(f"rust - build Rust workspace (mocida-rs/) [{PLATFORM}/{opts.config}]")
     t0 = time.perf_counter()
 
@@ -437,12 +441,17 @@ def main():
     ap.add_argument("--verbose", "-v", action="store_true",
                     help="show full build output (compiler warnings, cargo log, "
                          "command echoes); default shows only progress + errors")
+    ap.add_argument("--web", action="store_true",
+                    help="build for the web (Emscripten/WebAssembly); "
+                         "disables desktop-only deps like mimalloc/curl")
     opts = ap.parse_args()
 
     global VERBOSE
     VERBOSE = opts.verbose
 
     plan = resolve_plan(opts.task)
+    if opts.web and opts.task == "all":
+        plan = ["c"]
     print(_c(f"Mocida monorepo  *  task={opts.task}  config={opts.config}  "
              f"platform={PLATFORM}  plan=[{' -> '.join(plan)}]", "35"))
 
