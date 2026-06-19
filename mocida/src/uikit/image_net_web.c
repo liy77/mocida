@@ -22,11 +22,9 @@ static void finish_fetch(emscripten_fetch_t* fetch) {
         return;
     }
 
-    /* If abandoned, just clean up the struct. */
+    /* If abandoned, just signal completion so the owner can clean up. */
     if (SDL_GetAtomicInt(&wf->abandoned)) {
-        emscripten_fetch_close(fetch);
-        free(wf->data);
-        free(wf);
+        SDL_SetAtomicInt(&wf->done, 1);
         return;
     }
 
