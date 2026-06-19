@@ -307,6 +307,7 @@ def task_rust(opts):
             "-sALLOW_MEMORY_GROWTH=1",
             "-sINITIAL_MEMORY=64MB",
             "-sMAXIMUM_MEMORY=256MB",
+            "-sSUPPORT_LONGJMP=wasm",
             str(wasm_lib / "SDL" / "libSDL3.a"),
             str(wasm_lib / "SDL_image" / "libSDL3_image.a"),
             str(wasm_lib / "SDL_image" / "external" / "libtiff" / "libtiff" / "libtiff.a"),

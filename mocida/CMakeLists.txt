@@ -36,6 +36,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten" OR EMSCRIPTEN)
 endif()
 if(MOCIDA_WEB)
     set(MOCIDA_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    # Rust/web link uses native Wasm exceptions, so the C satellite libs
+    # (FreeType/harfbuzz inside SDL_ttf) must be compiled with matching
+    # setjmp/longjmp support.  Applies to SDL / SDL_image / SDL_ttf below.
+    add_compile_options(-fwasm-exceptions)
 endif()
 
 # Absolute path to THIS (the mocida library) directory. Used instead of
@@ -399,7 +403,9 @@ if(MOCIDA_WEB)
         "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
         "-sALLOW_MEMORY_GROWTH=1"
         "-sINITIAL_MEMORY=64MB"
-        "-sMAXIMUM_MEMORY=256MB")
+        "-sMAXIMUM_MEMORY=256MB"
+        "-fwasm-exceptions"
+        "-sSUPPORT_LONGJMP=wasm")
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets)
         target_link_options(mocida PUBLIC
             "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/assets@/assets")
