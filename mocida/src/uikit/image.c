@@ -420,6 +420,7 @@ void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer) {
             image->__SDL_texture = SDL_CreateTextureFromSurface(renderer, surf);
             SDL_DestroySurface(surf);
         }
+        if (!surf) free(data);
     }
     if (image->__SDL_texture) {
         image->loadState = IMAGE_LOAD_SUCCESS;
@@ -490,9 +491,17 @@ void UIImage_Destroy(UIImage* image) {
         /* Abandon an in-flight download: the worker thread frees the job
            when it finishes (it may keep running, but writes only into its
            own job, never into this freed image). */
+#if defined(MOCIDA_WEB)
+        typedef struct { void* cookie; } WebJob;
+        WebJob* job = (WebJob*)image->__download;
+        image->__download = NULL;
+        WebFetch_Free(job->cookie);
+        free(job);
+#else
         RemoteJob* job = (RemoteJob*)image->__download;
         image->__download = NULL;
         if (RemoteJob_Release(job)) RemoteJob_Free(job);
+#endif
     }
     if (image->__SDL_texture) {
         SDL_DestroyTexture(image->__SDL_texture);
