@@ -784,8 +784,10 @@ def main(argv=None):
     good(f"Build completed in {dt:.1f}s.")
     print(f"  Artefacts: {build_dir.relative_to(ROOT)}/")
     if args.web:
+        html = build_dir / "demo.html"
         print(f"  Web artefacts: {build_dir.relative_to(ROOT)}/")
-        print(f"  Open: python -m http.server 8000 --directory {build_dir.relative_to(ROOT)}")
+        print(f"  HTML: {html.relative_to(ROOT)}")
+        print(f"  Serve: python -m http.server 8000 --directory {build_dir.relative_to(ROOT)}")
     if args.installer:
         print(f"  Installer: {(build_dir / 'mocida_installer.exe').relative_to(ROOT)}")
         print("  Static single-exe; downloads the SDK zip from the GitHub "

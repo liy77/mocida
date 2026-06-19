@@ -388,6 +388,7 @@ else()
 endif()
 
 if(MOCIDA_WEB)
+    set(CMAKE_EXECUTABLE_SUFFIX ".html" CACHE STRING "" FORCE)
     target_sources(mocida PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/image_net_web.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/app_web.c")
@@ -398,6 +399,14 @@ if(MOCIDA_WEB)
         "-sALLOW_MEMORY_GROWTH=1"
         "-sINITIAL_MEMORY=64MB"
         "-sMAXIMUM_MEMORY=256MB")
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets)
+        target_link_options(mocida PUBLIC
+            "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/assets@/assets")
+    endif()
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/fonts)
+        target_link_options(mocida PUBLIC
+            "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/fonts@/fonts")
+    endif()
 endif()
 
 # Mark the library's own translation units so the public header (app.h)
