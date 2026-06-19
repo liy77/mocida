@@ -420,7 +420,7 @@ void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer) {
             image->__SDL_texture = SDL_CreateTextureFromSurface(renderer, surf);
             SDL_DestroySurface(surf);
         }
-        if (!surf) free(data);
+        free(data);   /* always free the downloaded bytes after decode attempt */
     }
     if (image->__SDL_texture) {
         image->loadState = IMAGE_LOAD_SUCCESS;
