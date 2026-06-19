@@ -29,6 +29,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set(MOCIDA_IOS ON)
 endif()
 
+set(MOCIDA_WEB OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten" OR EMSCRIPTEN)
+    set(MOCIDA_WEB ON)
+    message(STATUS "Mocida: WebAssembly/Emscripten build")
+endif()
+
 # Absolute path to THIS (the mocida library) directory. Used instead of
 # CMAKE_CURRENT_SOURCE_DIR for files the helpers reference (Info.plist
 # template, app-icon set) so the helpers keep working when this tree is
@@ -233,7 +239,7 @@ add_subdirectory(SDL_ttf)
 
 # curl is currently only a vestigial include in window.c (no symbols used)
 # and there is no vcpkg arm64-ios curl in this setup, so skip it on iOS.
-if(NOT MOCIDA_IOS)
+if(NOT MOCIDA_IOS AND NOT MOCIDA_WEB)
     find_package(CURL REQUIRED)
 endif()
 
@@ -241,7 +247,7 @@ endif()
 # native browser surface used by UIWebView. The runtime DLL ships next
 # to the exe via target_link_libraries below; the Edge runtime itself
 # is already installed on every Windows 10+ machine.
-if(WIN32)
+if(WIN32 AND NOT MOCIDA_WEB)
     find_package(unofficial-webview2 CONFIG REQUIRED)
 endif()
 
@@ -257,7 +263,7 @@ endif()
 option(MOCIDA_USE_MIMALLOC "Use Microsoft mimalloc for malloc/free" ON)
 set(MOCIDA_MIMALLOC_AVAILABLE OFF)
 
-if(MOCIDA_USE_MIMALLOC AND NOT MOCIDA_IOS AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/mimalloc/CMakeLists.txt)
+if(MOCIDA_USE_MIMALLOC AND NOT MOCIDA_IOS AND NOT MOCIDA_WEB AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/mimalloc/CMakeLists.txt)
     # macOS: MI_OVERRIDE installs mimalloc's process-wide malloc-zone interpose,
     # which also captures the Rust side's (mui-dev / copper_syntax) internal
     # allocations. A Vec alloc'd in one zone and freed in the other aborts with
@@ -374,6 +380,22 @@ else()
     message(STATUS "Mocida: building as static library")
 endif()
 
+if(MOCIDA_WEB)
+    target_sources(mocida PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/image_net_web.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/app_web.c")
+    target_compile_definitions(mocida PUBLIC MOCIDA_WEB=1)
+    target_link_options(mocida PUBLIC
+        "-sUSE_SDL=3"
+        "-sUSE_SDL_IMAGE=3"
+        "-sUSE_SDL_TTF=3"
+        "-sFETCH=1"
+        "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
+        "-sALLOW_MEMORY_GROWTH=1"
+        "-sINITIAL_MEMORY=64MB"
+        "-sMAXIMUM_MEMORY=256MB")
+endif()
+
 # Mark the library's own translation units so the public header (app.h)
 # does NOT auto-include <SDL3/SDL_main.h> (and its `#define main SDL_main`)
 # when compiling mocida itself. Consumer apps don't get this PRIVATE define,
@@ -436,6 +458,9 @@ endif()
 # (e.g. a file that needs WIN32_LEAN_AND_MEAN defined before windows.h).
 # ----------------------------------------------------------------------
 option(MOCIDA_USE_PCH "Precompile SDL3/SDL.h + C stdlib for faster builds" ON)
+if(MOCIDA_WEB)
+    set(MOCIDA_USE_PCH OFF CACHE BOOL "" FORCE)
+endif()
 if(MOCIDA_USE_PCH)
     target_precompile_headers(mocida PRIVATE
         <SDL3/SDL.h>
@@ -484,7 +509,7 @@ target_link_libraries(mocida PUBLIC
     ${_M_SDL3_IMG}
     ${_M_SDL3_TTF}
 )
-if(NOT MOCIDA_IOS)
+if(NOT MOCIDA_IOS AND NOT MOCIDA_WEB)
     target_link_libraries(mocida PUBLIC CURL::libcurl)
 endif()
 if(MOCIDA_IOS)
@@ -516,7 +541,7 @@ if(WIN32 AND NOT MOCIDA_BUILD_SHARED AND DEFINED MOCIDA_WEBVIEW2_NUGET_DIR)
     endif()
 endif()
 
-if(WIN32)
+if(WIN32 AND NOT MOCIDA_WEB)
     target_link_libraries(mocida PUBLIC
         mfplat
         mfreadwrite
