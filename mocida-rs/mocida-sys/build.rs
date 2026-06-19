@@ -24,6 +24,9 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
+    let target = env::var("TARGET").unwrap_or_default();
+    let is_web = target == "wasm32-unknown-emscripten";
+
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=MOCIDA_INCLUDE_DIR");
@@ -71,7 +74,7 @@ fn main() {
         // Cargo only refreshes the build script when an input
         // changes — we register each DLL with `rerun-if-changed`
         // below so a new mocida release triggers a re-copy.
-        if cfg!(target_os = "windows") {
+        if cfg!(target_os = "windows") && !is_web {
             stage_runtime_dlls(lib_dir);
         }
     } else {
@@ -117,34 +120,39 @@ fn main() {
     // drops it at `<lib_dir>/SDL/SDL3.lib`; the installer layout keeps SDL3.dll
     // beside mocida.dll with the import lib next to it. Search both and link
     // SDL3 by name (harmless if the linker finds the symbols elsewhere).
-    if let Some(lib_dir) = &lib_dir {
-        let sdl_subdir = lib_dir.join("SDL");
-        // Register both candidate SDL3 import-lib paths as rerun triggers so
-        // that when a `--shared` mocida rebuild *drops a new* SDL3.lib next to
-        // (or under SDL/) the install, this build script re-runs and emits the
-        // link below. Without this, a build that first ran when SDL3.lib was
-        // absent caches "no SDL3" forever (none of the other triggers change),
-        // and the consuming binary fails to link SDL_GetPerformanceCounter.
-        let sdl3_direct = lib_dir.join("SDL3.lib");
-        let sdl3_nested = sdl_subdir.join("SDL3.lib");
-        println!("cargo:rerun-if-changed={}", sdl3_direct.display());
-        println!("cargo:rerun-if-changed={}", sdl3_nested.display());
-        if sdl3_nested.exists() {
-            println!("cargo:rustc-link-search=native={}", sdl_subdir.display());
-        }
-        // Only add the SDL3 link when an import lib is actually reachable, so a
-        // pure-static mocida (SDL baked in, no separate SDL3.lib) isn't forced
-        // to find one.
-        let has_sdl3_import = sdl3_direct.exists() || sdl3_nested.exists();
-        if !link_static && has_sdl3_import {
-            println!("cargo:rustc-link-lib=SDL3");
+    //
+    // For wasm32-unknown-emscripten, SDL is linked through Emscripten flags
+    // rather than a platform import lib, so skip this search entirely.
+    if !is_web {
+        if let Some(lib_dir) = &lib_dir {
+            let sdl_subdir = lib_dir.join("SDL");
+            // Register both candidate SDL3 import-lib paths as rerun triggers so
+            // that when a `--shared` mocida rebuild *drops a new* SDL3.lib next to
+            // (or under SDL/) the install, this build script re-runs and emits the
+            // link below. Without this, a build that first ran when SDL3.lib was
+            // absent caches "no SDL3" forever (none of the other triggers change),
+            // and the consuming binary fails to link SDL_GetPerformanceCounter.
+            let sdl3_direct = lib_dir.join("SDL3.lib");
+            let sdl3_nested = sdl_subdir.join("SDL3.lib");
+            println!("cargo:rerun-if-changed={}", sdl3_direct.display());
+            println!("cargo:rerun-if-changed={}", sdl3_nested.display());
+            if sdl3_nested.exists() {
+                println!("cargo:rustc-link-search=native={}", sdl_subdir.display());
+            }
+            // Only add the SDL3 link when an import lib is actually reachable, so a
+            // pure-static mocida (SDL baked in, no separate SDL3.lib) isn't forced
+            // to find one.
+            let has_sdl3_import = sdl3_direct.exists() || sdl3_nested.exists();
+            if !link_static && has_sdl3_import {
+                println!("cargo:rustc-link-lib=SDL3");
+            }
         }
     }
 
     // Mocida pulls in WebView2, Media Foundation, DirectComposition, ...
     // Surface the most common Win32 system libs so consumers don't have
     // to repeat them. Harmless when unused (the linker drops them).
-    if cfg!(target_os = "windows") {
+    if cfg!(target_os = "windows") && !is_web {
         for lib in [
             "user32",
             "gdi32",
@@ -271,6 +279,11 @@ fn write_if_changed(path: &std::path::Path, contents: &str) {
 /// upgrades the upstream Mocida install — no more "the C side
 /// shipped a fix but my .exe still uses the old DLL" surprises.
 fn stage_runtime_dlls(lib_dir: &PathBuf) {
+    let is_web = env::var("TARGET").unwrap_or_default() == "wasm32-unknown-emscripten";
+    if is_web {
+        return;
+    }
+
     use std::fs;
 
     let entries = match fs::read_dir(lib_dir) {
