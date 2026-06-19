@@ -340,6 +340,8 @@ def parse_args(argv):
     p.add_argument("--example", metavar="NAME",
                    help="build a standalone app from examples/<NAME>/ (its own "
                         "CMakeLists + app.bundle) instead of the demo/library")
+    p.add_argument("--web", action="store_true",
+                   help="build for WebAssembly via Emscripten")
     return p.parse_args(argv)
 
 
@@ -546,6 +548,17 @@ def main(argv=None):
     _VERBOSE = args.verbose
     os.chdir(ROOT)
 
+    if args.web:
+        if not shutil.which("emcmake") or not shutil.which("emmake"):
+            err("Emscripten not found. Install/activate emsdk and ensure "
+                "emcmake + emmake are on PATH.")
+            return 1
+        if _SYS == "Windows":
+            # Emscripten uses its own clang; MSVC env is irrelevant and can
+            # confuse the configure step.
+            for k in ["INCLUDE", "LIB", "LIBPATH"]:
+                os.environ.pop(k, None)
+
     if args.ios:
         return build_ios(args)
 
@@ -566,23 +579,27 @@ def main(argv=None):
 
     # Standalone example: configure from examples/<name>/ (its own project +
     # app.bundle), into its own build dir, building just that example target.
-    if args.example:
-        src_dir = ROOT / "examples" / args.example
-        if not (src_dir / "CMakeLists.txt").exists():
-            err(f"no example '{args.example}' under examples/ "
-                f"(missing {src_dir.relative_to(ROOT)}/CMakeLists.txt)")
-            return 1
-        build_dir = ROOT / "build" / PLATFORM / f"example-{args.example}-{config_lc}"
-    else:
+    if args.web:
+        build_dir = ROOT / "build" / "wasm" / config_lc
         src_dir = ROOT
-        # Shared and static builds land in separate dirs so they can
-        # coexist (the Rust workspace links the shared DLL, while C
-        # consumers / distribution may want the static archive). The
-        # `-shared` suffix keeps `MOCIDA_BUILD_SHARED=ON` artefacts
-        # (mocida.dll + import lib + dep DLLs) from clobbering the
-        # static `mocida.lib` in the plain config dir.
-        suffix = "-shared" if args.shared else ""
-        build_dir = ROOT / "build" / PLATFORM / (config_lc + suffix)
+    else:
+        if args.example:
+            src_dir = ROOT / "examples" / args.example
+            if not (src_dir / "CMakeLists.txt").exists():
+                err(f"no example '{args.example}' under examples/ "
+                    f"(missing {src_dir.relative_to(ROOT)}/CMakeLists.txt)")
+                return 1
+            build_dir = ROOT / "build" / PLATFORM / f"example-{args.example}-{config_lc}"
+        else:
+            src_dir = ROOT
+            # Shared and static builds land in separate dirs so they can
+            # coexist (the Rust workspace links the shared DLL, while C
+            # consumers / distribution may want the static archive). The
+            # `-shared` suffix keeps `MOCIDA_BUILD_SHARED=ON` artefacts
+            # (mocida.dll + import lib + dep DLLs) from clobbering the
+            # static `mocida.lib` in the plain config dir.
+            suffix = "-shared" if args.shared else ""
+            build_dir = ROOT / "build" / PLATFORM / (config_lc + suffix)
 
     label = f"example {args.example}" if args.example else "Build"
     print(_c(f"Mocida {label}" + (" (installer)" if args.installer else ""), "35;1"))
@@ -616,31 +633,35 @@ def main(argv=None):
         err("neither 'ninja' nor 'make' found in PATH. Run setup.py.")
         return 1
 
+    configure_bin = "emcmake" if args.web else "cmake"
     configure_args = []
     if needs_configure:
-        if _SYS == "Windows":
-            ensure_msvc_env()
-
-        # compiler: prefer clang to match across platforms
-        cc = shutil.which("clang") or shutil.which("cc")
-        cxx = shutil.which("clang++") or shutil.which("c++")
-        if not cc or not cxx:
-            err("clang (or cc/c++) not found. Install LLVM or run setup.py.")
-            return 1
-        os.environ["CC"] = cc
-        os.environ["CXX"] = cxx
-
-        # vcpkg toolchain (libcurl) — lives under mocida/
-        vcpkg_tc = ROOT / "vcpkg" / "scripts" / "buildsystems" / "vcpkg.cmake"
-        if vcpkg_tc.exists():
-            configure_args.append(f"-DCMAKE_TOOLCHAIN_FILE={vcpkg_tc}")
+        if args.web:
+            pass  # Emscripten supplies its own toolchain; skip clang/vcpkg/WebView2
         else:
-            warn(f"vcpkg toolchain not found at {vcpkg_tc} - find_package(CURL) may fail.")
+            if _SYS == "Windows":
+                ensure_msvc_env()
 
-        # WebView2 static loader (Windows)
-        wv2_dir = fetch_webview2(ROOT)
-        if wv2_dir:
-            configure_args.append(f"-DMOCIDA_WEBVIEW2_NUGET_DIR={wv2_dir}")
+            # compiler: prefer clang to match across platforms
+            cc = shutil.which("clang") or shutil.which("cc")
+            cxx = shutil.which("clang++") or shutil.which("c++")
+            if not cc or not cxx:
+                err("clang (or cc/c++) not found. Install LLVM or run setup.py.")
+                return 1
+            os.environ["CC"] = cc
+            os.environ["CXX"] = cxx
+
+            # vcpkg toolchain (libcurl) — lives under mocida/
+            vcpkg_tc = ROOT / "vcpkg" / "scripts" / "buildsystems" / "vcpkg.cmake"
+            if vcpkg_tc.exists():
+                configure_args.append(f"-DCMAKE_TOOLCHAIN_FILE={vcpkg_tc}")
+            else:
+                warn(f"vcpkg toolchain not found at {vcpkg_tc} - find_package(CURL) may fail.")
+
+            # WebView2 static loader (Windows)
+            wv2_dir = fetch_webview2(ROOT)
+            if wv2_dir:
+                configure_args.append(f"-DMOCIDA_WEBVIEW2_NUGET_DIR={wv2_dir}")
 
         # optional compiler cache
         launcher = shutil.which("sccache") or shutil.which("ccache")
@@ -664,21 +685,31 @@ def main(argv=None):
     # --- configure ------------------------------------------------------
     if needs_configure:
         cmake_cfg = [
-            "cmake", "-G", generator,
+            configure_bin, "cmake", "-G", generator,
             "-S", str(src_dir), "-B", str(build_dir),
             *configure_args,
             f"-DCMAKE_BUILD_TYPE={config}",
-            f"-DCMAKE_C_COMPILER={os.environ['CC']}",
-            f"-DCMAKE_CXX_COMPILER={os.environ['CXX']}",
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             f"-DMOCIDA_BUILD_SHARED={'ON' if args.shared else 'OFF'}",
             f"-DMOCIDA_BUILD_TESTS={'ON' if args.tests else 'OFF'}",
             f"-DMOCIDA_BUILD_DEMO={'ON' if args.demo else 'OFF'}",
             f"-DMOCIDA_SANITIZE={sanitize}",
-            "-Wno-dev", "--log-level=NOTICE",
         ]
+        if not args.web:
+            cmake_cfg.extend([
+                f"-DCMAKE_C_COMPILER={os.environ['CC']}",
+                f"-DCMAKE_CXX_COMPILER={os.environ['CXX']}",
+            ])
+        if args.web:
+            cmake_cfg.extend([
+                "-DMOCIDA_WEB=ON",
+                "-DMOCIDA_BUILD_SHARED=OFF",
+                "-DMOCIDA_BUILD_DEMO=ON",
+                "-DMOCIDA_BUILD_TESTS=OFF",
+            ])
         if args.installer:
             cmake_cfg.insert(-2, "-DMOCIDA_BUILD_INSTALLER=ON")
+        cmake_cfg.extend(["-Wno-dev", "--log-level=NOTICE"])
         step("Configuring CMake")
         with Spinner("running CMake configure"):
             r = subprocess.run(cmake_cfg, cwd=str(ROOT),
@@ -710,9 +741,10 @@ def main(argv=None):
         jobs = max(2, (os.cpu_count() or 4) - 4)
 
     step(f"Building: {', '.join(targets)}  (jobs: {jobs})")
-    build_cmd = ["cmake", "--build", str(build_dir),
-                 "--parallel", str(jobs), "--config", config,
-                 "--target", *targets]
+    build_prefix = ["emmake"] if args.web else []
+    build_cmd = build_prefix + ["cmake", "--build", str(build_dir),
+                                "--parallel", str(jobs), "--config", config,
+                                "--target", *targets]
     t0 = time.perf_counter()
     code = run_build_with_progress(build_cmd, ROOT, verbose=args.verbose)
     dt = time.perf_counter() - t0
@@ -722,6 +754,9 @@ def main(argv=None):
 
     good(f"Build completed in {dt:.1f}s.")
     print(f"  Artefacts: {build_dir.relative_to(ROOT)}/")
+    if args.web:
+        print(f"  Web artefacts: {build_dir.relative_to(ROOT)}/")
+        print(f"  Open: python -m http.server 8000 --directory {build_dir.relative_to(ROOT)}")
     if args.installer:
         print(f"  Installer: {(build_dir / 'mocida_installer.exe').relative_to(ROOT)}")
         print("  Static single-exe; downloads the SDK zip from the GitHub "
