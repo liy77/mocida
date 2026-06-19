@@ -4645,12 +4645,14 @@ impl ActionExt for HandlerAction {
     fn name(&self) -> &str {
         match self {
             HandlerAction::AddAssign { name, .. } | HandlerAction::SetInt { name, .. } => name,
+            _ => unreachable!("ActionExt::name is only valid for integer actions"),
         }
     }
     fn apply(&self, current: i32) -> i32 {
         match self {
             HandlerAction::AddAssign { delta, .. } => current + (*delta as i32),
             HandlerAction::SetInt { value, .. } => *value as i32,
+            _ => unreachable!("ActionExt::apply is only valid for integer actions"),
         }
     }
 }

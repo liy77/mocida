@@ -313,6 +313,12 @@ option(MOCIDA_BUILD_DEMO   "Build the main demo executable (src/main.c)"        
 file(GLOB_RECURSE MOCIDA_SOURCES   "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/*.c")
 file(GLOB_RECURSE MOCIDA_SOURCES_CXX "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/*.cpp")
 
+# Web-only sources (Emscripten headers) must not be compiled on desktop.
+# They are added back explicitly below when MOCIDA_WEB is ON.
+if(NOT MOCIDA_WEB)
+    list(FILTER MOCIDA_SOURCES EXCLUDE REGEX "_web\\.c$")
+endif()
+
 # macOS: the WKWebView backend (webview_cocoa.mm) is Objective-C++. The
 # globs above only catch .c/.cpp, so it's added explicitly. OBJCXX must
 # be enabled as a project language before the .mm can be compiled.

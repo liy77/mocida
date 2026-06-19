@@ -919,6 +919,9 @@ UIApp* UIApp_Create(const char* title, int width, int height) {
     app->onTickUserdata = NULL;
     app->orientations = UI_ORIENTATION_ALL;    // iOS: every orientation allowed by default.
     app->statusBarHidden = 0;                  // iOS: status bar visible by default.
+    app->__lastResizeW = -1;
+    app->__lastResizeH = -1;
+    app->__lastSafeArea = (UIScreenInsets){ -1, -1, -1, -1 };
 
     // Mirror the value into the window's global state before the
     // window is created so the OpenGL MSAA hint picks up the right N.
@@ -1615,6 +1618,9 @@ void UIApp_Destroy(UIApp* app) {
 
     UICursor_Shutdown();
     SDL_Quit();
+#ifdef MOCIDA_WEB
+    UIApp_ClearWebApp(app);
+#endif
     UI_TRACK_FREE(UI_CAT_CORE);
     free(app);
 
@@ -1731,6 +1737,8 @@ static void PreciseDelay(Uint64 ns, Uint64 freq, Uint64 targetCounter) {
 }
 
 void UIApp_RunOneFrame(UIApp* app, Uint32 dtMs) {
+    if (!app || !app->window) return;
+
     UIProfile_FrameBegin();
 
     SDL_Event e;
@@ -1748,16 +1756,14 @@ void UIApp_RunOneFrame(UIApp* app, Uint32 dtMs) {
     }
 
     if (app->window->visible && app->window->sdlWindow) {
-        static int lastW = -1, lastH = -1;
-        static UIScreenInsets lastSafe = { -1, -1, -1, -1 };
         int liveW = 0, liveH = 0;
         SDL_GetWindowSize(app->window->sdlWindow, &liveW, &liveH);
         const UIScreenInsets s = UIScreen_GetSafeArea();
         if (liveW > 0 && liveH > 0 &&
-            (liveW != lastW || liveH != lastH ||
-             s.top != lastSafe.top || s.left != lastSafe.left ||
-             s.bottom != lastSafe.bottom || s.right != lastSafe.right)) {
-            lastW = liveW; lastH = liveH; lastSafe = s;
+            (liveW != app->__lastResizeW || liveH != app->__lastResizeH ||
+             s.top != app->__lastSafeArea.top || s.left != app->__lastSafeArea.left ||
+             s.bottom != app->__lastSafeArea.bottom || s.right != app->__lastSafeArea.right)) {
+            app->__lastResizeW = liveW; app->__lastResizeH = liveH; app->__lastSafeArea = s;
             ApplyResize(app, liveW, liveH);
         }
     }

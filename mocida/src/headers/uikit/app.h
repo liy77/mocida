@@ -184,6 +184,10 @@ typedef struct {
     void* tray;                /**< SDL_Tray* for the desktop tray icon, or NULL. */
     unsigned orientations;     /**< iOS: allowed UIOrientation bitmask. Default UI_ORIENTATION_ALL. */
     int   statusBarHidden;     /**< iOS: 0 = status bar visible (default), 1 = hidden. */
+
+    int __lastResizeW;         /**< Web resize debounce: previous window width. */
+    int __lastResizeH;         /**< Web resize debounce: previous window height. */
+    UIScreenInsets __lastSafeArea; /**< Web resize debounce: previous safe area insets. */
 } UIApp;
 
 /**
@@ -610,6 +614,7 @@ void UIApp_Run(UIApp* app);
 #ifdef MOCIDA_WEB
 void UIApp_RunOneFrame(UIApp* app, Uint32 dtMs);
 void UIApp_RunWeb(UIApp* app);
+void UIApp_ClearWebApp(UIApp* app);
 #endif
 
 #endif
