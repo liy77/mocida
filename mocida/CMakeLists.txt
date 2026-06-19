@@ -86,7 +86,7 @@ endif()
 # -fmerge-all-constants: aggressively pool identical literals/constants
 #   across TUs. Helps the UIWidget_TypeIs pointer-compare fast path —
 #   the default -fmerge-constants only merges within a TU.
-if(NOT MSVC AND (CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"))
+if(NOT MSVC AND NOT MOCIDA_WEB AND (CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"))
     # Flags portable across Linux/macOS/Windows-clang.
     string(APPEND CMAKE_C_FLAGS_RELEASE   " -flto -march=native -funroll-loops -fmerge-all-constants")
     string(APPEND CMAKE_CXX_FLAGS_RELEASE " -flto -march=native -funroll-loops -fmerge-all-constants")
