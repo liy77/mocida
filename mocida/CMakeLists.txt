@@ -858,7 +858,7 @@ function(mocida_add_executable target_name source_file)
     # reference_table the first time pango asks for a glyph.
     # `--exclude-libs,ALL` is the GNU-ld / lld-elf flag that does this;
     # MSVC's linker has different semantics and doesn't need it.
-    if(UNIX AND NOT APPLE)
+    if(UNIX AND NOT APPLE AND NOT MOCIDA_WEB)
         target_link_options(${target_name} PRIVATE
             "LINKER:--exclude-libs,ALL")
     endif()
