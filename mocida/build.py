@@ -686,7 +686,10 @@ def main(argv=None):
                                f"-DCMAKE_CXX_COMPILER_LAUNCHER={Path(launcher).stem}"]
 
     if args.verbose:
-        print(f"Platform           : {PLATFORM}")
+        if args.web:
+            print(f"Platform           : wasm (Emscripten)")
+        else:
+            print(f"Platform           : {PLATFORM}")
         print(f"Build dir          : {build_dir.relative_to(ROOT)}")
         print(f"Generator          : {generator}")
         print(f"CMAKE_BUILD_TYPE   : {config}")
@@ -696,7 +699,10 @@ def main(argv=None):
         print(f"MOCIDA_SANITIZE    : {sanitize or '(off)'}")
         print(f"Configure          : {'YES (first build for this config)' if needs_configure else 'SKIPPED (cache exists)'}")
     else:
-        print(_c(f"  {PLATFORM}/{config_lc}  ({generator})", "90"))
+        if args.web:
+            print(_c(f"  wasm/{config_lc}  (Emscripten)", "90"))
+        else:
+            print(_c(f"  {PLATFORM}/{config_lc}  ({generator})", "90"))
 
     # --- configure ------------------------------------------------------
     if needs_configure:
