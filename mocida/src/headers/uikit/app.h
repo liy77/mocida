@@ -607,4 +607,9 @@ void UIApp_SetStatusBarHidden(UIApp* app, int hidden);
  */
 void UIApp_Run(UIApp* app);
 
+#ifdef MOCIDA_WEB
+void UIApp_RunOneFrame(UIApp* app, Uint32 dtMs);
+void UIApp_RunWeb(UIApp* app);
+#endif
+
 #endif

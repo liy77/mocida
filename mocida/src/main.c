@@ -497,7 +497,11 @@ int main(int argc, char** argv) {
     UIDebugOverlay_SetFlags(UI_OVERLAY_STATS);
 
     UIApp_ShowWindow(app);
+#ifdef MOCIDA_WEB
+    UIApp_RunWeb(app);
+#else
     UIApp_Run(app);
+#endif
 
     // Clean teardown - the old demo skipped this, leaving the entire
     // app tree leaked at exit. UIApp_Destroy walks children with the

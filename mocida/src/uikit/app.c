@@ -1730,10 +1730,54 @@ static void PreciseDelay(Uint64 ns, Uint64 freq, Uint64 targetCounter) {
     (void)nsPerSec;
 }
 
+void UIApp_RunOneFrame(UIApp* app, Uint32 dtMs) {
+    UIProfile_FrameBegin();
+
+    SDL_Event e;
+    if (app->onTick) app->onTick(app->onTickUserdata);
+
+    {
+        UI_SCOPEC("events", UI_PROF_EVENT);
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_EVENT_QUIT) {
+                app->window->visible = 0;
+                app->runInBackground = 0;
+            }
+            HandleEvent(app, &e);
+        }
+    }
+
+    if (app->window->visible && app->window->sdlWindow) {
+        static int lastW = -1, lastH = -1;
+        static UIScreenInsets lastSafe = { -1, -1, -1, -1 };
+        int liveW = 0, liveH = 0;
+        SDL_GetWindowSize(app->window->sdlWindow, &liveW, &liveH);
+        const UIScreenInsets s = UIScreen_GetSafeArea();
+        if (liveW > 0 && liveH > 0 &&
+            (liveW != lastW || liveH != lastH ||
+             s.top != lastSafe.top || s.left != lastSafe.left ||
+             s.bottom != lastSafe.bottom || s.right != lastSafe.right)) {
+            lastW = liveW; lastH = liveH; lastSafe = s;
+            ApplyResize(app, liveW, liveH);
+        }
+    }
+
+    if (dtMs > 0) {
+        UI_SCOPEC("anim", UI_PROF_LAYOUT);
+        UIAnim_Tick(dtMs);
+    }
+
+    if (app->window->visible) {
+        UI_SCOPEC("render", UI_PROF_RENDER);
+        UIWindow_Render(app->window);
+    }
+
+    UIProfile_FrameEnd();
+}
+
 void UIApp_Run(UIApp* app) {
     if (!app || !app->window) return;
 
-    SDL_Event e;
     const Uint64 freq      = SDL_GetPerformanceFrequency();
     const Uint64 nsPerSec  = 1000000000ULL;
 
@@ -1750,65 +1794,11 @@ void UIApp_Run(UIApp* app) {
     // (e.g. minimized to the tray). In background we still pump events so
     // the tray menu / "show window" works, but skip rendering.
     while (app->window->visible || app->runInBackground) {
-        UIProfile_FrameBegin();
-
-        // Per-frame user tick (opt-in). A single null-check when unused, so it
-        // costs nothing for apps that don't set it; hot-reload uses it to swap
-        // the root tree between frames on the UI thread.
-        if (app->onTick) app->onTick(app->onTickUserdata);
-
-        {
-            UI_SCOPEC("events", UI_PROF_EVENT);
-            while (SDL_PollEvent(&e)) {
-                if (e.type == SDL_EVENT_QUIT) {
-                    app->window->visible = 0;
-                    app->runInBackground = 0;   // QUIT overrides background
-                }
-                HandleEvent(app, &e);
-            }
-        }
-
-        // Reconcile layout with the live window size AND safe-area insets.
-        // On iOS rotation the window size and the safe area update on
-        // DIFFERENT frames: SDL_GetWindowSafeArea keeps reporting the old
-        // orientation's (transposed) insets for a frame or two after the
-        // size already changed. A size-only relayout therefore sized the
-        // panel against a stale safe area, so after rotating back to
-        // portrait the background container came back short. Poll both and
-        // relayout whenever EITHER diverges, so the layout self-heals the
-        // moment the safe area settles. No-op when nothing changed.
-        if (app->window->visible && app->window->sdlWindow) {
-            static int lastW = -1, lastH = -1;
-            static UIScreenInsets lastSafe = { -1, -1, -1, -1 };
-            int liveW = 0, liveH = 0;
-            SDL_GetWindowSize(app->window->sdlWindow, &liveW, &liveH);
-            const UIScreenInsets s = UIScreen_GetSafeArea();
-            if (liveW > 0 && liveH > 0 &&
-                (liveW != lastW || liveH != lastH ||
-                 s.top != lastSafe.top || s.left != lastSafe.left ||
-                 s.bottom != lastSafe.bottom || s.right != lastSafe.right)) {
-                lastW = liveW; lastH = liveH; lastSafe = s;
-                ApplyResize(app, liveW, liveH);
-            }
-        }
-
-        // Advance any in-flight animations with the real elapsed time.
         const Uint64 nowPC = SDL_GetPerformanceCounter();
         const Uint32 dtMs  = (Uint32)((nowPC - lastTickPC) * 1000ULL / freq);
         lastTickPC = nowPC;
-        if (dtMs > 0) {
-            UI_SCOPEC("anim", UI_PROF_LAYOUT);
-            UIAnim_Tick(dtMs);
-        }
 
-        // Render only when the window is actually visible; in background
-        // mode (hidden / minimized to tray) we skip the GPU work.
-        if (app->window->visible) {
-            UI_SCOPEC("render", UI_PROF_RENDER);
-            UIWindow_Render(app->window);
-        }
-
-        UIProfile_FrameEnd();
+        UIApp_RunOneFrame(app, dtMs);
 
         if (app->targetFps > 0) {
             const Uint64 targetNs    = nsPerSec / (Uint64)app->targetFps;
