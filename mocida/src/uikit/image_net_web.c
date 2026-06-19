@@ -1,39 +1,69 @@
 #include <emscripten/fetch.h>
 #include <uikit/debug.h>
+#include <SDL3/SDL.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* Async fetch state handed back to image.c. */
+/* Async fetch state. Callbacks run on the main thread in Emscripten,
+ * but we still use atomics for state flags to be safe across yields. */
 typedef struct WebFetch {
     emscripten_fetch_t* fetch;
-    int done;
+    SDL_AtomicInt done;      /* 0 = in flight, 1 = finished (ok or failed) */
+    SDL_AtomicInt abandoned; /* 1 if the owner asked to cancel */
     int ok;
     void* data;
     size_t size;
 } WebFetch;
 
+static void finish_fetch(emscripten_fetch_t* fetch) {
+    WebFetch* wf = (WebFetch*)fetch->userData;
+    if (!wf) {
+        emscripten_fetch_close(fetch);
+        return;
+    }
+
+    /* If abandoned, just clean up the struct. */
+    if (SDL_GetAtomicInt(&wf->abandoned)) {
+        emscripten_fetch_close(fetch);
+        free(wf->data);
+        free(wf);
+        return;
+    }
+
+    wf->fetch = NULL;
+    emscripten_fetch_close(fetch);
+    SDL_SetAtomicInt(&wf->done, 1);
+}
+
 static void on_success(emscripten_fetch_t* fetch) {
     WebFetch* wf = (WebFetch*)fetch->userData;
-    wf->data = malloc(fetch->numBytes);
-    if (wf->data) {
-        memcpy(wf->data, fetch->data, fetch->numBytes);
-        wf->size = fetch->numBytes;
-        wf->ok = 1;
+    if (!wf) { emscripten_fetch_close(fetch); return; }
+
+    if (!SDL_GetAtomicInt(&wf->abandoned)) {
+        if (fetch->numBytes > 0) {
+            wf->data = malloc(fetch->numBytes);
+            if (wf->data) {
+                memcpy(wf->data, fetch->data, fetch->numBytes);
+                wf->size = fetch->numBytes;
+                wf->ok = 1;
+            } else {
+                UI_ERROR(UI_CAT_IMAGE,
+                         "web fetch: out of memory allocating %llu bytes",
+                         (unsigned long long)fetch->numBytes);
+            }
+        }
     }
-    wf->done = 1;
-    emscripten_fetch_close(fetch);
-    wf->fetch = NULL;
+    finish_fetch(fetch);
 }
 
 static void on_error(emscripten_fetch_t* fetch) {
     WebFetch* wf = (WebFetch*)fetch->userData;
-    UI_ERROR(UI_CAT_IMAGE,
-             "web fetch failed for '%s': HTTP %d",
-             fetch->url, fetch->status);
-    wf->done = 1;
-    wf->ok = 0;
-    emscripten_fetch_close(fetch);
-    wf->fetch = NULL;
+    if (wf && !SDL_GetAtomicInt(&wf->abandoned)) {
+        UI_ERROR(UI_CAT_IMAGE,
+                 "web fetch failed for '%s': HTTP %d",
+                 fetch->url, fetch->status);
+    }
+    finish_fetch(fetch);
 }
 
 /* Start an async download. Returns a cookie the caller owns. */
@@ -48,7 +78,13 @@ void* UIImage_RemoteHttpStart_Web(const char* url) {
     attr.onsuccess = on_success;
     attr.onerror = on_error;
     attr.userData = wf;
+
     wf->fetch = emscripten_fetch(&attr, url);
+    if (!wf->fetch) {
+        UI_ERROR(UI_CAT_IMAGE, "web fetch: failed to start request for '%s'", url);
+        free(wf);
+        return NULL;
+    }
     return wf;
 }
 
@@ -57,7 +93,8 @@ void* UIImage_RemoteHttpStart_Web(const char* url) {
 int UIImage_RemoteHttpPoll_Web(void* cookie, void** outData, size_t* outSize) {
     WebFetch* wf = (WebFetch*)cookie;
     if (!wf) return 1;
-    if (!wf->done) return 0;
+    if (!SDL_GetAtomicInt(&wf->done)) return 0;
+
     if (wf->ok && outData && outSize) {
         *outData = wf->data;
         *outSize = wf->size;
@@ -70,9 +107,19 @@ int UIImage_RemoteHttpPoll_Web(void* cookie, void** outData, size_t* outSize) {
 void WebFetch_Free(void* cookie) {
     WebFetch* wf = (WebFetch*)cookie;
     if (!wf) return;
+
+    /* Mark abandoned first so callbacks don't touch owned data. */
+    SDL_SetAtomicInt(&wf->abandoned, 1);
+
     if (wf->fetch) {
         emscripten_fetch_close(wf->fetch);
+        wf->fetch = NULL;
     }
-    free(wf->data);
-    free(wf);
+
+    /* If the callback already ran, we can free now; otherwise the callback
+     * will free the struct when it fires. */
+    if (SDL_GetAtomicInt(&wf->done)) {
+        free(wf->data);
+        free(wf);
+    }
 }
