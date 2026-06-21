@@ -32,7 +32,24 @@
 #include <uikit/font.h>
 
 #ifdef MOCIDA_WEB
+#include <SDL3_image/SDL_image.h>
+#include <emscripten/em_js.h>
+
 extern void UIApp_ClearWebApp(UIApp* app);
+
+EM_JS(void, mocida_web_set_favicon_from_png, (const unsigned char* data, size_t len), {
+    var bytes = new Uint8Array(HEAPU8.buffer, data, len);
+    var blob = new Blob([bytes], {type: "image/png"});
+    var url = URL.createObjectURL(blob);
+    var link = document.querySelector("link[rel~=\"icon\"]");
+    if (!link) {
+        link = document.createElement("link");
+        link.rel = "icon";
+        link.type = "image/png";
+        document.head.appendChild(link);
+    }
+    link.href = url;
+})
 #endif
 
 // Converts window coordinates (coming from SDL_Event) into the
@@ -1327,11 +1344,50 @@ void UIApp_AddTrayMenuItem(UIApp* app, const char* label,
 
 int UIApp_SetWindowIconFromSurface(UIApp* app, SDL_Surface* surface) {
     if (!app || !app->window || !app->window->sdlWindow || !surface) return 0;
+
+#ifdef MOCIDA_WEB
+    // Browsers don't have a window icon concept like desktop toolkits.
+    // Encode the surface as PNG and use it as the page favicon.
+    SDL_IOStream* io = SDL_IOFromDynamicMem();
+    if (!io) return 0;
+
+    if (!IMG_SavePNG_IO(surface, io, false)) {
+        UI_ERROR(UI_CAT_WINDOW, "IMG_SavePNG_IO failed: %s", SDL_GetError());
+        SDL_CloseIO(io);
+        return 0;
+    }
+
+    const Sint64 size = SDL_GetIOSize(io);
+    if (size <= 0) {
+        SDL_CloseIO(io);
+        return 0;
+    }
+
+    unsigned char* png = (unsigned char*)SDL_malloc((size_t)size);
+    if (!png) {
+        SDL_CloseIO(io);
+        return 0;
+    }
+
+    SDL_SeekIO(io, 0, SDL_IO_SEEK_SET);
+    const size_t read = SDL_ReadIO(io, png, (size_t)size);
+    SDL_CloseIO(io);
+
+    if (read != (size_t)size) {
+        SDL_free(png);
+        return 0;
+    }
+
+    mocida_web_set_favicon_from_png(png, (size_t)size);
+    SDL_free(png);
+    return 1;
+#else
     if (!SDL_SetWindowIcon(app->window->sdlWindow, surface)) {
         UI_ERROR(UI_CAT_WINDOW, "SDL_SetWindowIcon failed: %s", SDL_GetError());
         return 0;
     }
     return 1;
+#endif
 }
 
 int UIApp_SetWindowIcon(UIApp* app, const char* path) {
