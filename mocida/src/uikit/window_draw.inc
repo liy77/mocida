@@ -1172,6 +1172,48 @@ void DrawRoundedRectWithBorder(SDL_Renderer* renderer, SDL_FRect rect,
 // rest of the frame dims). One-frame lag only on a glass widget's first appearance.
 int g_glassBlurSeen = 0;
 
+// Cached procedural noise texture for Acrylic / Vibrancy HUD / Liquid Glass.
+// Generated once per renderer/size and reused. The pattern is a simple
+// pseudo-random RGB grain that approximates the fine surface noise Apple adds
+// to vibrancy materials, especially visible on dark backdrops.
+static SDL_Texture* g_glassNoise = NULL;
+static int g_glassNoiseW = 0;
+static int g_glassNoiseH = 0;
+
+static SDL_Texture* GetGlassNoiseTexture(SDL_Renderer* r, int w, int h) {
+    if (!r || w <= 0 || h <= 0) return NULL;
+    if (g_glassNoise && g_glassNoiseW == w && g_glassNoiseH == h) {
+        return g_glassNoise;
+    }
+    if (g_glassNoise) SDL_DestroyTexture(g_glassNoise);
+
+    SDL_Surface* surf = SDL_CreateSurface(w, h, SDL_PIXELFORMAT_RGBA32);
+    if (!surf) return NULL;
+
+    unsigned char* pixels = (unsigned char*)surf->pixels;
+    const int pitch = surf->pitch;
+    const int bpp = 4;
+    // xorshift32 PRNG — deterministic per run, cheap, no global state.
+    unsigned int rng = 0x12345678u;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+            unsigned char v = (unsigned char)(rng & 0x3F); // 0..63 subtle noise
+            unsigned char* p = pixels + y * pitch + x * bpp;
+            p[0] = v; p[1] = v; p[2] = v; p[3] = 255;
+        }
+    }
+
+    g_glassNoise = SDL_CreateTextureFromSurface(r, surf);
+    SDL_DestroySurface(surf);
+    if (g_glassNoise) {
+        SDL_SetTextureScaleMode(g_glassNoise, SDL_SCALEMODE_LINEAR);
+        g_glassNoiseW = w;
+        g_glassNoiseH = h;
+    }
+    return g_glassNoise;
+}
+
 // In-app glass "backdrop filter": blur the already-rendered framebuffer BEHIND
 // `rect` and paint the blurred result back into it, so a UIGlass widget frosts the
 // app content under it (macOS-vibrancy style). SDL_Renderer exposes no fragment
@@ -1245,13 +1287,37 @@ void DrawGlassBackdropBlur(SDL_Renderer* r, SDL_FRect rect, float blurPx) {
         dw = nw; dh = nh;
     }
 
-    // Restore target + scale, up-sample the smallest level back over the rect.
+    // Restore target + scale. Up-sample back through each mip level with
+    // additive blending so the wider blur contributes a soft "glow" trail
+    // while the finer levels keep edge detail. This is much closer to a
+    // real gaussian / macOS vibrancy look than a single final up-sample.
     SDL_SetRenderTarget(r, target);
     SDL_SetRenderScale(r, sx, sy);
-    SDL_SetTextureScaleMode(cur, SDL_SCALEMODE_LINEAR);
     SDL_SetTextureBlendMode(cur, SDL_BLENDMODE_NONE);
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
     SDL_RenderTexture(r, cur, NULL, &rect);
+
+    if (nLevels > 0) {
+        SDL_SetTextureBlendMode(cur, SDL_BLENDMODE_ADD);
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_ADD);
+        SDL_FRect levelRect = rect;
+        for (int i = nLevels - 1; i >= 0; i--) {
+            SDL_Texture* level = levels[i];
+            SDL_SetTextureScaleMode(level, SDL_SCALEMODE_LINEAR);
+            SDL_SetTextureBlendMode(level, SDL_BLENDMODE_ADD);
+            // Each coarser level contributes progressively less so the center
+            // stays sharp and the falloff stays smooth.
+            Uint8 alpha = (Uint8)(255.0f / (float)(nLevels - i + 1));
+            SDL_SetTextureAlphaMod(level, alpha);
+            SDL_RenderTexture(r, level, NULL, &levelRect);
+        }
+        // Also blend the original capture at very low opacity to restore
+        // some high-frequency detail lost in the downsample chain.
+        SDL_SetTextureScaleMode(cap, SDL_SCALEMODE_LINEAR);
+        SDL_SetTextureBlendMode(cap, SDL_BLENDMODE_ADD);
+        SDL_SetTextureAlphaMod(cap, 32);
+        SDL_RenderTexture(r, cap, NULL, &rect);
+    }
 
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND); // restore for widget draws
     for (int i = 0; i < nLevels; i++) SDL_DestroyTexture(levels[i]);

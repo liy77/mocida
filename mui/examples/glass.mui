@@ -1,0 +1,93 @@
+// glass.mui — UIGlass / backdrop showcase.
+//
+// Demonstrates the region-backdrop Glass widget with macOS-style vibrancy,
+// Liquid Glass, Acrylic and the in-app blur fallback. Run with:
+//
+//   cargo run -p mui-dev -- mui/examples/glass.mui
+//
+// or, after building the monorepo:
+//
+//   ./mocida-rs/target/release/mui-dev mui/examples/glass.mui
+
+view GlassDemo() {
+  mut material = signal("liquid")
+  mut blurPreset = signal(2)   // 0=low, 1=med, 2=high, 3=ultra
+  mut noisePreset = signal(1)  // 0=off, 1=subtle, 2=strong
+
+  App(title: "Glass Demo", width: 900, height: 700,
+      backdrop: "vibrancy-sidebar") {
+    Stack(orientation: vertical, gap: 0) {
+      // Header with a Glass panel
+      Glass(effect: material, radius: 20, tint: #ffffff, tintOpacity: 0.25,
+            blur: blurPreset * 20 + 10,
+            noise: noisePreset * 0.12,
+            padding: 28, margin: 24) {
+        Stack(orientation: vertical, gap: 8) {
+          Text("Glass & Vibrancy", size: 34, color: #0f172a)
+          Text("Region backdrop effects that feel at home on macOS.",
+               size: 15, color: #475569)
+        }
+      }
+
+      // Background content that shows through the glass panels
+      Stack(orientation: horizontal, gap: 16, padding: 24) {
+        Rectangle(width: 120, height: 120, radius: 16, fill: #3b82f6)
+        Rectangle(width: 120, height: 120, radius: 16, fill: #ef4444)
+        Rectangle(width: 120, height: 120, radius: 16, fill: #10b981)
+        Rectangle(width: 120, height: 120, radius: 16, fill: #f59e0b)
+      }
+
+      // Material picker
+      Stack(orientation: vertical, gap: 12, padding: 24) {
+        Text("Material", size: 18, color: #1e293b)
+        Stack(orientation: horizontal, gap: 8, wrap: true) {
+          Button("Liquid Glass", onClick: { material = "liquid" })
+          Button("Vibrancy Sidebar", onClick: { material = "vibrancy-sidebar" })
+          Button("Vibrancy Header", onClick: { material = "vibrancy-header" })
+          Button("Vibrancy Popover", onClick: { material = "vibrancy-popover" })
+          Button("Acrylic", onClick: { material = "acrylic" })
+        }
+      }
+
+      // Two Glass cards side by side with the same content behind them
+      Stack(orientation: horizontal, gap: 20, padding: 24) {
+        Glass(effect: material, radius: 24, tint: #ffffff, tintOpacity: 0.30,
+              blur: blurPreset * 20 + 10,
+              noise: noisePreset * 0.12,
+              padding: 24, width: 380, height: 220) {
+          Stack(orientation: vertical, gap: 10) {
+            Text("Frosted panel", size: 22, color: #0f172a)
+            Text("This panel blurs the colored rectangles behind it.",
+                 size: 14, color: #475569)
+          }
+        }
+
+        Glass(effect: material, radius: 24, tint: #e2e8f0, tintOpacity: 0.45,
+              blur: blurPreset * 20 + 10,
+              noise: noisePreset * 0.12,
+              padding: 24, width: 380, height: 220) {
+          Stack(orientation: vertical, gap: 10) {
+            Text("Tinted panel", size: 22, color: #0f172a)
+            Text("A subtle tint layered on top of the blurred backdrop.",
+                 size: 14, color: #475569)
+          }
+        }
+      }
+
+      // Preset tuners
+      Stack(orientation: vertical, gap: 12, padding: 24) {
+        Text("Blur preset: ${blurPreset} (0=low .. 3=ultra)", size: 14, color: #475569)
+        Stack(orientation: horizontal, gap: 8) {
+          Button("-", onClick: { blurPreset = blurPreset - 1 })
+          Button("+", onClick: { blurPreset = blurPreset + 1 })
+        }
+
+        Text("Noise preset: ${noisePreset} (0=off .. 2=strong)", size: 14, color: #475569)
+        Stack(orientation: horizontal, gap: 8) {
+          Button("-", onClick: { noisePreset = noisePreset - 1 })
+          Button("+", onClick: { noisePreset = noisePreset + 1 })
+        }
+      }
+    }
+  }
+}

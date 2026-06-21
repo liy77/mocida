@@ -4072,6 +4072,7 @@ fn handler_apply_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn 
     };
     let int_pair: Option<(HandlerAction, Rc<RefCell<Signal<i32>>>)> = handler
         .action()
+        .filter(|a| matches!(a, HandlerAction::AddAssign { .. } | HandlerAction::SetInt { .. }))
         .and_then(|a| ctx.signal(a.name()).cloned().map(|s| (a, s)));
     type StrSet = (
         StrAction,

@@ -149,12 +149,42 @@ static void RenderWidget_Glass(UIWindow* window, UIWidget* el,
             fillC.a *= effTintOp * thick * op;
             if (fillC.a > 1.0f) fillC.a = 1.0f;
 
-            // Faint white edge so the panel reads as a glass surface even on a
-            // dark backdrop. Alpha scales with the tint so a near-invisible
-            // glass stays edgeless.
-            UIColor edgeC = (UIColor){ 255, 255, 255, 0.14f * op };
+            // macOS vibrancy-style top highlight: a thin strip of lighter tint
+            // at the top of the panel where the imaginary light source hits.
+            // This replaces the uniform border with the characteristic "glow"
+            // seen on AppKit materials.
+            if (g->radius >= 1.0f) {
+                SDL_FRect topGlow = g_tempRect1;
+                topGlow.h = SDL_max(1.0f, g->radius * 0.6f);
+                if (topGlow.h > g_tempRect1.h * 0.25f) topGlow.h = g_tempRect1.h * 0.25f;
+                UIColor glowC = (UIColor){ 255, 255, 255, 0.16f * op };
+                DrawRoundedRectFill(window->sdlRenderer, topGlow, glowC, g->radius);
+            }
+
+            // Very subtle perimeter edge so the panel still separates from
+            // similarly-toned backdrops.
+            UIColor edgeC = (UIColor){ 255, 255, 255, 0.08f * op };
             DrawRoundedRectWithBorder(window->sdlRenderer, g_tempRect1,
-                                      fillC, g->radius, 1, edgeC);
+                                      (UIColor){0,0,0,0.0f}, g->radius, 1, edgeC);
+
+            // Subtle grain for Acrylic / Vibrancy HUD / Liquid Glass — the
+            // macOS vibrancy look has a fine surface texture that keeps the
+            // panel from looking like a flat plastic overlay.
+            const int supportsNoise =
+                (UIBackdropMaterial_SupportedProps(g->material) & UI_GLASS_PROP_NOISE) != 0;
+            if (supportsNoise && g->noise > 0.001f) {
+                int nw = (int)(g_tempRect1.w * 0.5f + 0.5f);
+                int nh = (int)(g_tempRect1.h * 0.5f + 0.5f);
+                if (nw < 4) nw = 4;
+                if (nh < 4) nh = 4;
+                SDL_Texture* noise = GetGlassNoiseTexture(window->sdlRenderer, nw, nh);
+                if (noise) {
+                    SDL_SetTextureBlendMode(noise, SDL_BLENDMODE_BLEND);
+                    SDL_SetTextureAlphaMod(noise, (Uint8)(g->noise * 40.0f * op));
+                    SDL_SetTextureScaleMode(noise, SDL_SCALEMODE_LINEAR);
+                    SDL_RenderTexture(window->sdlRenderer, noise, NULL, &g_tempRect1);
+                }
+            }
         }
 
         // --- children layout (identical to RenderWidget_Stack) ---
