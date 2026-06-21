@@ -15,17 +15,17 @@ view GlassDemo() {
   mut noisePreset = signal(1)  // 0=off, 1=subtle, 2=strong
 
   App(title: "Glass Demo", width: 900, height: 700,
-      backdrop: "vibrancy-sidebar") {
+      background: #0b1020, backdrop: "none") {
     Stack(orientation: vertical, gap: 0) {
       // Header with a Glass panel
-      Glass(effect: material, radius: 20, tint: #ffffff, tintOpacity: 0.25,
+      Glass(effect: material, radius: 20, tint: #ffffff, tintOpacity: 0.35,
             blur: blurPreset * 20 + 10,
-            noise: noisePreset * 0.12,
+            noise: noisePreset * 0.15,
             padding: 28, margin: 24) {
         Stack(orientation: vertical, gap: 8) {
-          Text("Glass & Vibrancy", size: 34, color: #0f172a)
+          Text("Glass & Vibrancy", size: 34, color: #ffffff)
           Text("Region backdrop effects that feel at home on macOS.",
-               size: 15, color: #475569)
+               size: 15, color: #94a3b8)
         }
       }
 
@@ -39,7 +39,7 @@ view GlassDemo() {
 
       // Material picker
       Stack(orientation: vertical, gap: 12, padding: 24) {
-        Text("Material", size: 18, color: #1e293b)
+        Text("Material", size: 18, color: #e2e8f0)
         Stack(orientation: horizontal, gap: 8, wrap: true) {
           Button("Liquid Glass", onClick: { material = "liquid" })
           Button("Vibrancy Sidebar", onClick: { material = "vibrancy-sidebar" })
@@ -51,38 +51,38 @@ view GlassDemo() {
 
       // Two Glass cards side by side with the same content behind them
       Stack(orientation: horizontal, gap: 20, padding: 24) {
-        Glass(effect: material, radius: 24, tint: #ffffff, tintOpacity: 0.30,
+        Glass(effect: material, radius: 24, tint: #ffffff, tintOpacity: 0.40,
               blur: blurPreset * 20 + 10,
-              noise: noisePreset * 0.12,
+              noise: noisePreset * 0.15,
               padding: 24, width: 380, height: 220) {
           Stack(orientation: vertical, gap: 10) {
-            Text("Frosted panel", size: 22, color: #0f172a)
+            Text("Frosted panel", size: 22, color: #ffffff)
             Text("This panel blurs the colored rectangles behind it.",
-                 size: 14, color: #475569)
+                 size: 14, color: #94a3b8)
           }
         }
 
-        Glass(effect: material, radius: 24, tint: #e2e8f0, tintOpacity: 0.45,
+        Glass(effect: material, radius: 24, tint: #e2e8f0, tintOpacity: 0.55,
               blur: blurPreset * 20 + 10,
-              noise: noisePreset * 0.12,
+              noise: noisePreset * 0.15,
               padding: 24, width: 380, height: 220) {
           Stack(orientation: vertical, gap: 10) {
-            Text("Tinted panel", size: 22, color: #0f172a)
+            Text("Tinted panel", size: 22, color: #ffffff)
             Text("A subtle tint layered on top of the blurred backdrop.",
-                 size: 14, color: #475569)
+                 size: 14, color: #94a3b8)
           }
         }
       }
 
       // Preset tuners
       Stack(orientation: vertical, gap: 12, padding: 24) {
-        Text("Blur preset: ${blurPreset} (0=low .. 3=ultra)", size: 14, color: #475569)
+        Text("Blur preset: ${blurPreset} (0=low .. 3=ultra)", size: 14, color: #94a3b8)
         Stack(orientation: horizontal, gap: 8) {
           Button("-", onClick: { blurPreset = blurPreset - 1 })
           Button("+", onClick: { blurPreset = blurPreset + 1 })
         }
 
-        Text("Noise preset: ${noisePreset} (0=off .. 2=strong)", size: 14, color: #475569)
+        Text("Noise preset: ${noisePreset} (0=off .. 2=strong)", size: 14, color: #94a3b8)
         Stack(orientation: horizontal, gap: 8) {
           Button("-", onClick: { noisePreset = noisePreset - 1 })
           Button("+", onClick: { noisePreset = noisePreset + 1 })
