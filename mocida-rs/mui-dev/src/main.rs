@@ -400,20 +400,11 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Default: start the window MINIMIZED so a CI / shared-screen /
-    // second-display validation run never steals focus from the host.
-    // The process keeps running (per-frame tick + hot-reload), only the
-    // window is hidden in the Dock — restore from the Dock when you want
-    // to look at it. To get the historical "open and steal focus"
-    // behaviour, set `MUI_DEV_VISIBLE=1` in the environment.
-    //
-    // Rationale: the most common use of `mui-dev` is iterating on a
-    // `.mui` while writing it (hot-reload). The user is on the same
-    // desktop, the file is open in their editor, and they don't want a
-    // window jumping in front of their text editor every save. With
-    // this default, the validation run is silent unless explicitly
-    // asked for.
-    if std::env::var_os("MUI_DEV_VISIBLE").is_none() {
+    // Start minimized only when explicitly requested so the normal
+    // `cforge run x.mui` flow opens a visible window. The --minimized
+    // flag (and the historical MUI_DEV_VISIBLE=1 override) is still
+    // available for CI / shared-screen runs that must not steal focus.
+    if opts.minimize && std::env::var_os("MUI_DEV_VISIBLE").is_none() {
         mocida::app::window_minimize();
     }
     app.show().run();
