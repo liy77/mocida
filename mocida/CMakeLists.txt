@@ -414,6 +414,10 @@ if(MOCIDA_WEB)
         target_link_options(mocida PUBLIC
             "--preload-file=${CMAKE_CURRENT_SOURCE_DIR}/fonts@/fonts")
     endif()
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/cmake/shell.html)
+        target_link_options(mocida PUBLIC
+            "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/cmake/shell.html")
+    endif()
 endif()
 
 # Mark the library's own translation units so the public header (app.h)
