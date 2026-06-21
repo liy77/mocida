@@ -16,7 +16,9 @@ view GlassDemo() {
 
   App(title: "Glass Demo", width: 900, height: 700,
       background: #0b1020, backdrop: "none") {
-    Stack(orientation: vertical, gap: 0) {
+    Stack(orientation: vertical, gap: 0, align: center,
+          width: Window.width, height: Window.height,
+          background: #0b1020) {
       // Header with a Glass panel
       Glass(effect: material, radius: 20, tint: #ffffff, tintOpacity: 0.35,
             blur: blurPreset * 20 + 10,
