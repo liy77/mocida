@@ -368,13 +368,11 @@ int UIWindow_Render(UIWindow* window) {
     // tolerating that artifact for.
     int rw = 0, rh = 0;
     SDL_GetWindowSize(window->sdlWindow, &rw, &rh);
-
-    // Keep the renderer's logical presentation locked to the live window
-    // size every frame. On rotation (iOS) the resize event can settle a
-    // frame or two after ApplyResize ran with stale dimensions, leaving the
-    // logical presentation out of sync — which letterboxed/clipped the
-    // whole scene (the "container breaks on rotate-back" bug). Re-applying
-    // here is idempotent and self-heals regardless of resize-event timing.
+    int hostW = rw, hostH = rh;
+    const int sim = UIWindow_IsDeviceSimulatorEnabled(window);
+    if (sim) {
+        UIWindow_DeviceSimulatorGetDeviceSize(window, &rw, &rh);
+    }
     if (rw > 0 && rh > 0) {
         SDL_SetRenderLogicalPresentation(window->sdlRenderer, rw, rh,
                                          SDL_LOGICAL_PRESENTATION_LETTERBOX);
@@ -425,6 +423,8 @@ int UIWindow_Render(UIWindow* window) {
     g_glassBlurSeen = 0;
     const int needsOffscreen = (g_aaMode >= 2) || glassWantsOffscreen;
 
+    SDL_Texture* simTarget = sim ? UIWindow_DeviceSimulatorGetRenderTarget(window) : NULL;
+
     if (needsOffscreen) {
         const int tw = rw * aaScale;
         const int th = rh * aaScale;
@@ -443,12 +443,12 @@ int UIWindow_Render(UIWindow* window) {
             g_smoothW = tw;
             g_smoothH = th;
             SDL_SetTextureScaleMode(g_smoothTexture, SDL_SCALEMODE_LINEAR);
-            g_taaHistoryReady = 0; // size changed - invalidate history
+            g_taaHistoryReady = 0;
         }
         SDL_SetRenderTarget(window->sdlRenderer, g_smoothTexture);
         SDL_SetRenderScale(window->sdlRenderer, (float)aaScale, (float)aaScale);
     } else {
-        SDL_SetRenderTarget(window->sdlRenderer, NULL);
+        SDL_SetRenderTarget(window->sdlRenderer, simTarget);
         SDL_SetRenderScale(window->sdlRenderer, 1.0f, 1.0f);
     }
     
@@ -487,27 +487,16 @@ int UIWindow_Render(UIWindow* window) {
     }
 
 
-    // Post-process pass (when the active AA mode requires one).
     if (needsOffscreen) {
         if (g_aaMode == 4) {
-            // FXAA: edge-detect + blur on the offscreen pixels.
             FxaaPass(window->sdlRenderer, g_smoothTexture, g_smoothW, g_smoothH);
         } else if (g_aaMode == 5) {
-            // TAA: blend with history then push result back into the target.
             TaaPass(window->sdlRenderer, g_smoothTexture, g_smoothW, g_smoothH);
         }
-        // SSAA modes (2 / 3) need no extra pass - the bilinear
-        // downscale on the final blit performs the resolve.
-
-        // Blit the final image to the window. Force blend mode NONE
-        // so the texture's alpha doesn't blend with whatever is in the
-        // window's backbuffer (TaaPass leaves the texture in BLEND mode
-        // and a stray partial alpha would let the previous frame bleed
-        // through, creating a ghost trail).
-        SDL_SetRenderTarget(window->sdlRenderer, NULL);
+        SDL_SetRenderTarget(window->sdlRenderer, simTarget);
         SDL_SetRenderScale(window->sdlRenderer, 1.0f, 1.0f);
 
-        // Clear the backbuffer before the blit. Without this, a freshly
+        // Clear the resolve target before the blit. Without this, a freshly
         // resized backbuffer (which can happen mid-frame during the
         // Windows live-resize loop) can show black/uninitialised
         // pixels on the right/bottom edge. SSAA blits a 1:1 logical
@@ -532,15 +521,26 @@ int UIWindow_Render(UIWindow* window) {
                 255);
         }
         SDL_RenderClear(window->sdlRenderer);
-
         SDL_SetTextureScaleMode(g_smoothTexture, SDL_SCALEMODE_LINEAR);
-        SDL_SetTextureBlendMode(g_smoothTexture, SDL_BLENDMODE_NONE);
 
-        g_tempRect1.x = 0;
-        g_tempRect1.y = 0;
-        g_tempRect1.w = (float)rw;
-        g_tempRect1.h = (float)rh;
+        // Force blend mode NONE so the texture's alpha doesn't blend with
+        // whatever is in the backbuffer (TaaPass leaves the texture in BLEND
+        // mode and a stray partial alpha would let the previous frame bleed
+        // through, creating a ghost trail).
+        SDL_SetTextureBlendMode(g_smoothTexture, SDL_BLENDMODE_NONE);
+        g_tempRect1.x = 0; g_tempRect1.y = 0;
+        g_tempRect1.w = (float)rw; g_tempRect1.h = (float)rh;
         SDL_RenderTexture(window->sdlRenderer, g_smoothTexture, NULL, &g_tempRect1);
+    }
+
+    if (sim) {
+        SDL_SetRenderTarget(window->sdlRenderer, NULL);
+        SDL_SetRenderScale(window->sdlRenderer, 1.0f, 1.0f);
+        SDL_SetRenderLogicalPresentation(window->sdlRenderer, hostW, hostH,
+                                         SDL_LOGICAL_PRESENTATION_LETTERBOX);
+        SDL_SetRenderDrawColor(window->sdlRenderer, 30, 30, 30, 255);
+        SDL_RenderClear(window->sdlRenderer);
+        UIWindow_DeviceSimulatorPresentFrame(window, hostW, hostH);
     }
 
     // Debug overlay draws on top of everything else, before present. In
