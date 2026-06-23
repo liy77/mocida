@@ -59,11 +59,6 @@ impl DeviceSimulator {
         unsafe { msys::UIApp_IsDeviceSimulatorEnabled(app.app.as_ptr()) }
     }
 
-    pub fn current_profile(_app: &crate::Runtime) -> Option<&'static DeviceProfile> {
-        // Optionally: read from C state and map back. For now return None; not needed for MVP.
-        None
-    }
-
     pub fn orientation(app: &crate::Runtime) -> DeviceOrientation {
         let o = unsafe { msys::UIApp_GetCurrentDeviceOrientation(app.app.as_ptr()) };
         if o == msys::UI_DEVICE_ORIENTATION_LANDSCAPE {
