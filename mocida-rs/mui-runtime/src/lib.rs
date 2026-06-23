@@ -31,6 +31,8 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ffi::CString;
+use std::ptr::NonNull;
 use std::rc::Rc;
 
 use copper_syntax::expr::{BinOp, Expr, ExprKind, Literal, StrPart, StrTemplate};
@@ -43,6 +45,7 @@ use mocida::{
     StackOrientation, Switch, Text, TextArea, TextField, TextHAlign, TextVAlign, VerticalAlign,
     VibrancyState, Video, WebView, Widget, WrapMode,
 };
+use mocida::sys as msys;
 use mui_syntax::ast::{Element, Handler, HandlerAction, MuiValue, Node, Prop, PropValue, View};
 use mui_syntax::loader::Registry;
 use mui_syntax::style::{self, Anchor, HAnchor, Rgba, ReactiveEnv, ShadowSpec, VAnchor};
@@ -71,9 +74,88 @@ pub fn build_reactive_env(reactive: &Reactive) -> ReactiveEnv {
 }
 
 pub mod device_profiles;
+pub mod device_simulator;
 mod highlight;
 mod layout;
 use layout::Layout;
+
+/// High-level runtime handle that owns a `UIApp` and tracks simulator state.
+///
+/// This is intentionally a thin wrapper: it keeps the raw app pointer
+/// accessible so the device-simulator wrappers can pass it straight to the
+/// C API, while still letting Rust track whether the simulator is active.
+pub struct Runtime {
+    pub app: NonNull<msys::UIApp>,
+    pub(crate) drop_app: bool,
+    pub device_simulator: Option<crate::device_simulator::DeviceSimulator>,
+}
+
+impl Runtime {
+    /// Create a new runtime with a fresh `UIApp` window.
+    pub fn new(title: &str, width: i32, height: i32) -> std::result::Result<Self, mocida::Error> {
+        let title_c = CString::new(title)?;
+        let ptr = unsafe { msys::UIApp_Create(title_c.as_ptr(), width, height) };
+        if ptr.is_null() {
+            return Err(mocida::Error::Null("UIApp_Create"));
+        }
+        Ok(Self {
+            app: NonNull::new(ptr).expect("UIApp_Create returned a null pointer"),
+            drop_app: true,
+            device_simulator: None,
+        })
+    }
+
+    /// Wrap a raw `UIApp*` that is owned elsewhere.
+    ///
+    /// # Safety
+    /// `ptr` must be a valid, non-null `UIApp*` that outlives this `Runtime`.
+    pub unsafe fn from_raw(ptr: *mut msys::UIApp) -> Self {
+        Self {
+            app: NonNull::new(ptr).expect("null UIApp pointer passed to Runtime::from_raw"),
+            drop_app: false,
+            device_simulator: None,
+        }
+    }
+
+    /// Borrow the raw `UIApp*` for C interop.
+    pub fn as_ptr(&self) -> *mut msys::UIApp {
+        self.app.as_ptr()
+    }
+
+    pub fn enable_device_simulator(
+        &mut self,
+        profile: &crate::device_profiles::DeviceProfile,
+        frame_png_path: Option<&str>,
+        host_scale: f32,
+        orientation: crate::device_simulator::DeviceOrientation,
+    ) {
+        crate::device_simulator::DeviceSimulator::enable(
+            self,
+            profile,
+            frame_png_path,
+            host_scale,
+            orientation,
+        );
+        self.device_simulator = Some(crate::device_simulator::DeviceSimulator);
+    }
+
+    pub fn disable_device_simulator(&mut self) {
+        crate::device_simulator::DeviceSimulator::disable(self);
+        self.device_simulator = None;
+    }
+
+    pub fn is_device_simulator_enabled(&self) -> bool {
+        crate::device_simulator::DeviceSimulator::is_enabled(self)
+    }
+}
+
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        if self.drop_app {
+            unsafe { msys::UIApp_Destroy(self.app.as_ptr()); }
+        }
+    }
+}
 
 /// Anything that can go wrong while turning the AST into widgets.
 #[derive(Debug)]
