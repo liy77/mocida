@@ -707,7 +707,9 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
                     strcmp(((UIWidgetBase*)focused->data)->__widget_type, UI_WIDGET_TEXT) == 0);
                 if (!typing) {
                     UIWindow_DeviceSimulatorToggleOrientation(app->window);
+                    if (!UIApp_IsDeviceSimulatorEnabled(app)) break;
                     const UIDeviceProfile* p = UIApp_GetCurrentDeviceProfile(app);
+                    if (!p) break;
                     UIDeviceOrientation o = UIApp_GetCurrentDeviceOrientation(app);
                     float scale = UIWindow_DeviceSimulatorGetHostScale(app->window);
                     int newW = (int)((o == UI_DEVICE_ORIENTATION_LANDSCAPE ? p->frameH : p->frameW) * scale);
@@ -1180,6 +1182,11 @@ static SDL_HitTestResult SDLCALL MocidaHitTest(SDL_Window* win, const SDL_Point*
         if (app->window->sdlRenderer) {
             SDL_RenderCoordinatesFromWindow(app->window->sdlRenderer,
                                             (float)x, (float)y, &rx, &ry);
+        }
+        if (app && app->window && UIWindow_IsDeviceSimulatorEnabled(app->window)) {
+            float dx, dy;
+            UIWindow_DeviceSimulatorWindowToDevice(app->window, rx, ry, &dx, &dy);
+            rx = dx; ry = dy;
         }
         // If an interactive widget (button, menu, icon, input) is under the
         // point, it owns the click — don't make that pixel draggable. Otherwise
