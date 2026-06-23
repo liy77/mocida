@@ -27,7 +27,9 @@ use std::time::{Duration, SystemTime};
 
 use mocida::text::{get_font, search_fonts};
 use mocida::{App, Children, Color};
+use mui_runtime::device_simulator::DeviceOrientation;
 use mui_runtime::Reactive;
+use mui_runtime::Runtime;
 
 const DEFAULT_SAMPLE: &str = r#"
 view Hello(name: string = "world") {
@@ -50,6 +52,14 @@ struct CliOptions {
     /// …). Combined with `minimize`, this lets the user run a validation
     /// build on a secondary monitor they aren't looking at and never see.
     display: Option<u32>,
+    /// Named device profile to simulate (e.g. `iphone15`, `galaxy_s24`).
+    device: Option<String>,
+    /// Host UI scale factor for the simulator (default 1.0).
+    device_scale: f32,
+    /// Optional PNG frame asset to draw around the simulated screen.
+    device_frame: Option<String>,
+    /// Start the simulator in landscape orientation.
+    landscape: bool,
     /// The `.mui` file to render. Mandatory (positional).
     path: Option<String>,
 }
@@ -67,13 +77,33 @@ fn parse_args() -> CliOptions {
                     }
                 }
             }
+            "--device" => {
+                if let Some(v) = it.next() {
+                    opts.device = Some(v);
+                }
+            }
+            "--device-scale" => {
+                if let Some(v) = it.next() {
+                    opts.device_scale = v.parse::<f32>().unwrap_or(1.0);
+                }
+            }
+            "--device-frame" => {
+                if let Some(v) = it.next() {
+                    opts.device_frame = Some(v);
+                }
+            }
+            "--landscape" => opts.landscape = true,
             "--help" | "-h" => {
                 eprintln!(
-                    "usage: mui-dev [--minimized] [--display N] <file.mui>
-                     
-                       --minimized, -m    start minimized (don't steal focus)
-                       --display N, -d N   place window on display N (0 = primary)
-                     
+                    "usage: mui-dev [options] <file.mui>
+
+                       --minimized, -m       start minimized (don't steal focus)
+                       --display N, -d N     place window on display N (0 = primary)
+                       --device <name>       enable simulator (iphone15, iphone16, galaxy_s24, galaxy_s25ultra, …)
+                       --device-scale <s>    host UI scale factor (default 1.0)
+                       --device-frame <png>  optional PNG frame asset
+                       --landscape           start in landscape orientation
+
                      hot-reload: edit + save <file.mui> and the window updates in place."
                 );
                 std::process::exit(0);
@@ -257,6 +287,33 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
     mui_runtime::apply_render_config(&mut app, &cfg);
     // OS window backdrop (Mica / Acrylic / KDE blur) from `app { backdrop }`.
     mui_runtime::apply_backdrop(&cfg);
+
+    // Enable the device simulator when requested.
+    if let Some(name) = &opts.device {
+        let Some(profile) = mui_runtime::device_profiles::lookup(name) else {
+            eprintln!(
+                "mui-dev: unknown device profile '{name}'\n\nSupported profiles: iphone15, iphone15pro, iphone15promax, iphone16, galaxy_s24, galaxy_s24plus, galaxy_s25, galaxy_s25ultra"
+            );
+            std::process::exit(2);
+        };
+        let orientation = if opts.landscape {
+            DeviceOrientation::Landscape
+        } else {
+            DeviceOrientation::Portrait
+        };
+        let frame_path = opts.device_frame.as_deref();
+        let mut runtime = unsafe { Runtime::from_raw(app.as_ptr()) };
+        if let Err(e) = runtime.enable_device_simulator(
+            profile,
+            frame_path,
+            opts.device_scale,
+            orientation,
+        ) {
+            eprintln!("mui-dev: failed to enable device simulator: {e}");
+            std::process::exit(1);
+        }
+    }
+
     search_fonts();
     let _ = get_font("Arial");
 
