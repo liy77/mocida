@@ -465,6 +465,7 @@ typedef struct SDL_Renderer     SDL_Renderer;
 typedef struct SDL_Texture      SDL_Texture;
 typedef struct SDL_Surface      SDL_Surface;
 typedef struct SDL_AudioStream  SDL_AudioStream;
+typedef struct SDL_FRect        SDL_FRect;
 typedef int SDL_Scancode;
 typedef Uint32 SDL_Keycode;
 
