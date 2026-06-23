@@ -14,6 +14,7 @@ pub enum DeviceOrientation {
 }
 
 impl DeviceOrientation {
+    /// Toggle between portrait and landscape orientations.
     pub fn toggle(self) -> Self {
         match self {
             DeviceOrientation::Portrait => DeviceOrientation::Landscape,
@@ -25,7 +26,7 @@ impl DeviceOrientation {
 /// Enable the device simulator for `app` using `profile`.
 ///
 /// If `frame_png_path` is provided, the simulator loads the device frame from
-/// that file; otherwise no frame image is used. Returns an error if the path
+/// that file; otherwise no frame image is used. Returns an error if a string
 /// contains an interior NUL byte.
 pub fn enable(
     app: &mut crate::Runtime,
@@ -33,11 +34,11 @@ pub fn enable(
     frame_png_path: Option<&str>,
     host_scale: f32,
     orientation: DeviceOrientation,
-) -> Result<(), mocida::Error> {
-    let p = to_c_profile(profile);
-    unsafe {
-        if let Some(path) = frame_png_path {
-            let cpath = CString::new(path)?;
+) -> std::result::Result<(), mocida::Error> {
+    let (p, _name_cstr) = to_c_profile(profile)?;
+    if let Some(path) = frame_png_path {
+        let cpath = CString::new(path)?;
+        unsafe {
             msys::UIApp_EnableDeviceSimulatorFromFile(
                 app.app.as_ptr(),
                 &p,
@@ -45,7 +46,9 @@ pub fn enable(
                 host_scale,
                 orientation_to_c(orientation),
             );
-        } else {
+        }
+    } else {
+        unsafe {
             msys::UIApp_EnableDeviceSimulator(
                 app.app.as_ptr(),
                 &p,
@@ -106,12 +109,14 @@ pub fn device_to_window(app: &crate::Runtime, dx: f32, dy: f32) -> (f32, f32) {
     (wx, wy)
 }
 
-fn to_c_profile(p: &DeviceProfile) -> msys::UIDeviceProfile {
-    // SAFETY: `DeviceProfile::name` is a `'static` string and the C API copies
-    // it synchronously during the enable call, so the pointer only needs to be
-    // valid for the duration of that call.
-    msys::UIDeviceProfile {
-        name: p.name.as_ptr() as *const i8,
+fn to_c_profile(
+    p: &DeviceProfile,
+) -> std::result::Result<(msys::UIDeviceProfile, CString), mocida::Error> {
+    // The returned `CString` owns the NUL-terminated name and must outlive the
+    // `UIDeviceProfile` so the pointer remains valid through the enable call.
+    let name = CString::new(p.name)?;
+    let profile = msys::UIDeviceProfile {
+        name: name.as_ptr(),
         width: p.width,
         height: p.height,
         safeTop: p.safe_top,
@@ -125,7 +130,8 @@ fn to_c_profile(p: &DeviceProfile) -> msys::UIDeviceProfile {
         frameScreenH: p.frame_screen_h,
         frameW: p.frame_w,
         frameH: p.frame_h,
-    }
+    };
+    Ok((profile, name))
 }
 
 fn orientation_to_c(o: DeviceOrientation) -> msys::UIDeviceOrientation {
