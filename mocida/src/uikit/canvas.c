@@ -2,6 +2,10 @@
 #include <uikit/window.h>
 #include <uikit/color.h>
 #include <uikit/font.h>
+#include <uikit/stack.h>
+#include <uikit/glass.h>
+#include <uikit/container.h>
+#include <uikit/rect.h>
 #include <SDL3_ttf/SDL_ttf.h>
 #include <string.h>
 #include <math.h>
@@ -586,4 +590,228 @@ UICanvas* UICanvas_Fill(UICanvas* canvas) {
     }
     free(pts);
     return canvas;
+}
+
+/* ----------------------------------------------------------------------
+ * Callbacks
+ * ---------------------------------------------------------------------- */
+
+UICanvas* UICanvas_OnFrame(UICanvas* canvas, UICanvasFrameCallback cb, void* userdata) {
+    if (!canvas) return NULL;
+    canvas->onFrame = cb;
+    canvas->onFrameUd = userdata;
+    return canvas;
+}
+
+UICanvas* UICanvas_OnMouseMove(UICanvas* canvas, UICanvasMouseCallback cb, void* userdata) {
+    if (!canvas) return NULL;
+    canvas->onMouseMove = cb;
+    canvas->onMouseMoveUd = userdata;
+    return canvas;
+}
+
+UICanvas* UICanvas_OnMouseDown(UICanvas* canvas, UICanvasMouseCallback cb, void* userdata) {
+    if (!canvas) return NULL;
+    canvas->onMouseDown = cb;
+    canvas->onMouseDownUd = userdata;
+    return canvas;
+}
+
+UICanvas* UICanvas_OnMouseUp(UICanvas* canvas, UICanvasMouseCallback cb, void* userdata) {
+    if (!canvas) return NULL;
+    canvas->onMouseUp = cb;
+    canvas->onMouseUpUd = userdata;
+    return canvas;
+}
+
+UICanvas* UICanvas_OnHoverEnter(UICanvas* canvas, UICanvasMouseCallback cb, void* userdata) {
+    if (!canvas) return NULL;
+    canvas->onHoverEnter = cb;
+    canvas->onHoverEnterUd = userdata;
+    return canvas;
+}
+
+UICanvas* UICanvas_OnHoverExit(UICanvas* canvas, UICanvasMouseCallback cb, void* userdata) {
+    if (!canvas) return NULL;
+    canvas->onHoverExit = cb;
+    canvas->onHoverExitUd = userdata;
+    return canvas;
+}
+
+void UICanvas_SetOnKeyDown(UICanvas* canvas, UICanvasKeyCallback cb, void* userdata) {
+    if (!canvas) return;
+    canvas->onKeyDown = cb;
+    canvas->onKeyDownUd = userdata;
+}
+
+/* ----------------------------------------------------------------------
+ * Event dispatch
+ * ---------------------------------------------------------------------- */
+
+static int CanvasHitTest(UIWidget* w, float x, float y) {
+    if (!w || !w->visible || !w->width || !w->height) return 0;
+    return (x >= w->x && x < w->x + *w->width &&
+            y >= w->y && y < w->y + *w->height);
+}
+
+static void CanvasDispatchToWidget(UIWidget* w, float x, float y,
+                                   void (*cb)(UICanvas*, UIMouseEvent, void*),
+                                   void* ud, int type, int button) {
+    UICanvas* c = (UICanvas*)w->data;
+    UIMouseEvent ev = {
+        .x = x - w->x, .y = y - w->y,
+        .dx = x - c->mouseX, .dy = y - c->mouseY,
+        .startX = 0, .startY = 0,
+        .button = button
+    };
+    c->mouseX = ev.x;
+    c->mouseY = ev.y;
+    if (cb) cb(c, ev, ud);
+}
+
+static void CanvasDispatchRecursive(UIChildren* children, float x, float y,
+                                    void (*cb)(UICanvas*, UIMouseEvent, void*),
+                                    void* ud, int type, int button) {
+    if (!children) return;
+    for (int i = 0; i < children->count; i++) {
+        UIWidget* w = children->children[i];
+        if (!w || !w->visible) continue;
+        UIWidgetBase* base = (UIWidgetBase*)w->data;
+        if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_CANVAS)) {
+            if (CanvasHitTest(w, x, y)) {
+                CanvasDispatchToWidget(w, x, y, cb, ud, type, button);
+            }
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_STACK)) {
+            UIStack* s = (UIStack*)base;
+            CanvasDispatchRecursive(s->items, x, y, cb, ud, type, button);
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_GLASS)) {
+            UIGlass* g = (UIGlass*)base;
+            CanvasDispatchRecursive(g->items, x, y, cb, ud, type, button);
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_RECTANGLE)) {
+            UIRectangle* r = (UIRectangle*)base;
+            CanvasDispatchRecursive((UIChildren*)r->children, x, y, cb, ud, type, button);
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_GRID)) {
+            UIGrid* g = (UIGrid*)base;
+            CanvasDispatchRecursive(g->items, x, y, cb, ud, type, button);
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_SCROLL)) {
+            UIScroll* s = (UIScroll*)base;
+            CanvasDispatchRecursive((UIChildren*)s->content, x, y, cb, ud, type, button);
+        }
+    }
+}
+
+void UICanvas_DispatchMouseMove(UIChildren* children, float x, float y) {
+    if (!children) return;
+    for (int i = 0; i < children->count; i++) {
+        UIWidget* w = children->children[i];
+        if (!w || !w->visible) continue;
+        UIWidgetBase* base = (UIWidgetBase*)w->data;
+        if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_CANVAS)) {
+            UICanvas* c = (UICanvas*)base;
+            int inside = CanvasHitTest(w, x, y);
+            if (inside && !c->mouseInside && c->onHoverEnter) {
+                UIMouseEvent ev = { .x = x - w->x, .y = y - w->y, .dx = 0, .dy = 0, .startX = 0, .startY = 0, .button = 0 };
+                c->onHoverEnter(c, ev, c->onHoverEnterUd);
+            }
+            if (!inside && c->mouseInside && c->onHoverExit) {
+                UIMouseEvent ev = { .x = x - w->x, .y = y - w->y, .dx = 0, .dy = 0, .startX = 0, .startY = 0, .button = 0 };
+                c->onHoverExit(c, ev, c->onHoverExitUd);
+            }
+            c->mouseInside = inside;
+            if (inside && c->onMouseMove) {
+                UIMouseEvent ev = {
+                    .x = x - w->x, .y = y - w->y,
+                    .dx = x - c->mouseX, .dy = y - c->mouseY,
+                    .startX = 0, .startY = 0, .button = 0
+                };
+                c->mouseX = ev.x; c->mouseY = ev.y;
+                c->onMouseMove(c, ev, c->onMouseMoveUd);
+            } else {
+                c->mouseX = x - w->x; c->mouseY = y - w->y;
+            }
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_STACK)) {
+            UIStack* s = (UIStack*)base;
+            UICanvas_DispatchMouseMove(s->items, x, y);
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_GLASS)) {
+            UIGlass* g = (UIGlass*)base;
+            UICanvas_DispatchMouseMove(g->items, x, y);
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_RECTANGLE)) {
+            UIRectangle* r = (UIRectangle*)base;
+            UICanvas_DispatchMouseMove((UIChildren*)r->children, x, y);
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_GRID)) {
+            UIGrid* g = (UIGrid*)base;
+            UICanvas_DispatchMouseMove(g->items, x, y);
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_SCROLL)) {
+            UIScroll* s = (UIScroll*)base;
+            UICanvas_DispatchMouseMove((UIChildren*)s->content, x, y);
+        }
+    }
+}
+
+void UICanvas_DispatchMouseDown(UIChildren* children, float x, float y, int button) {
+    if (!children) return;
+    for (int i = 0; i < children->count; i++) {
+        UIWidget* w = children->children[i];
+        if (!w || !w->visible) continue;
+        UIWidgetBase* base = (UIWidgetBase*)w->data;
+        if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_CANVAS)) {
+            if (CanvasHitTest(w, x, y)) {
+                CanvasDispatchToWidget(w, x, y, NULL, NULL, 0, button);
+                UICanvas* c = (UICanvas*)base;
+                if (c->onMouseDown) {
+                    UIMouseEvent ev = { .x = x - w->x, .y = y - w->y, .dx = 0, .dy = 0, .startX = 0, .startY = 0, .button = button };
+                    c->onMouseDown(c, ev, c->onMouseDownUd);
+                }
+                UIWidget_SetFocus(w, 1);
+            }
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_STACK)) {
+            UIStack* s = (UIStack*)base;
+            UICanvas_DispatchMouseDown(s->items, x, y, button);
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_GLASS)) {
+            UIGlass* g = (UIGlass*)base;
+            UICanvas_DispatchMouseDown(g->items, x, y, button);
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_RECTANGLE)) {
+            UIRectangle* r = (UIRectangle*)base;
+            UICanvas_DispatchMouseDown((UIChildren*)r->children, x, y, button);
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_GRID)) {
+            UIGrid* g = (UIGrid*)base;
+            UICanvas_DispatchMouseDown(g->items, x, y, button);
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_SCROLL)) {
+            UIScroll* s = (UIScroll*)base;
+            UICanvas_DispatchMouseDown((UIChildren*)s->content, x, y, button);
+        }
+    }
+}
+
+void UICanvas_DispatchMouseUp(UIChildren* children, float x, float y, int button) {
+    if (!children) return;
+    for (int i = 0; i < children->count; i++) {
+        UIWidget* w = children->children[i];
+        if (!w || !w->visible) continue;
+        UIWidgetBase* base = (UIWidgetBase*)w->data;
+        if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_CANVAS)) {
+            if (CanvasHitTest(w, x, y)) {
+                UICanvas* c = (UICanvas*)base;
+                if (c->onMouseUp) {
+                    UIMouseEvent ev = { .x = x - w->x, .y = y - w->y, .dx = 0, .dy = 0, .startX = 0, .startY = 0, .button = button };
+                    c->onMouseUp(c, ev, c->onMouseUpUd);
+                }
+            }
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_STACK)) {
+            UIStack* s = (UIStack*)base;
+            UICanvas_DispatchMouseUp(s->items, x, y, button);
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_GLASS)) {
+            UIGlass* g = (UIGlass*)base;
+            UICanvas_DispatchMouseUp(g->items, x, y, button);
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_RECTANGLE)) {
+            UIRectangle* r = (UIRectangle*)base;
+            UICanvas_DispatchMouseUp((UIChildren*)r->children, x, y, button);
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_GRID)) {
+            UIGrid* g = (UIGrid*)base;
+            UICanvas_DispatchMouseUp(g->items, x, y, button);
+        } else if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_SCROLL)) {
+            UIScroll* s = (UIScroll*)base;
+            UICanvas_DispatchMouseUp((UIChildren*)s->content, x, y, button);
+        }
+    }
 }
