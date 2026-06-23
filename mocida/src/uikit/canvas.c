@@ -411,3 +411,179 @@ UICanvas* UICanvas_DrawText(UICanvas* canvas, const char* text, float x, float y
     SDL_DestroyTexture(tex);
     return canvas;
 }
+
+/* ----------------------------------------------------------------------
+ * Paths
+ * ---------------------------------------------------------------------- */
+
+static UIPathCmd* PathPush(UICanvas* c, UIPathCmdType type) {
+    if (c->pathCount >= c->pathCap) {
+        int newCap = c->pathCap * 2;
+        UIPathCmd* np = (UIPathCmd*)realloc(c->path, newCap * sizeof(UIPathCmd));
+        if (!np) return NULL;
+        c->path = np;
+        c->pathCap = newCap;
+    }
+    UIPathCmd* cmd = &c->path[c->pathCount++];
+    cmd->type = type;
+    return cmd;
+}
+
+UICanvas* UICanvas_BeginPath(UICanvas* canvas) {
+    if (!canvas) return NULL;
+    canvas->pathCount = 0;
+    canvas->pathHasCur = 0;
+    return canvas;
+}
+
+UICanvas* UICanvas_MoveTo(UICanvas* canvas, float x, float y) {
+    if (!canvas) return NULL;
+    UIPathCmd* cmd = PathPush(canvas, UI_PATH_CMD_MOVE);
+    if (!cmd) return canvas;
+    TransformPoint(canvas, x, y, &cmd->x, &cmd->y);
+    canvas->pathStartX = canvas->pathCurX = cmd->x;
+    canvas->pathStartY = canvas->pathCurY = cmd->y;
+    canvas->pathHasCur = 1;
+    return canvas;
+}
+
+UICanvas* UICanvas_LineTo(UICanvas* canvas, float x, float y) {
+    if (!canvas) return NULL;
+    UIPathCmd* cmd = PathPush(canvas, UI_PATH_CMD_LINE);
+    if (!cmd) return canvas;
+    TransformPoint(canvas, x, y, &cmd->x, &cmd->y);
+    canvas->pathCurX = cmd->x;
+    canvas->pathCurY = cmd->y;
+    canvas->pathHasCur = 1;
+    return canvas;
+}
+
+UICanvas* UICanvas_Arc(UICanvas* canvas, float x, float y, float r,
+                       float startAngle, float endAngle) {
+    if (!canvas) return NULL;
+    UIPathCmd* cmd = PathPush(canvas, UI_PATH_CMD_ARC);
+    if (!cmd) return canvas;
+    TransformPoint(canvas, x, y, &cmd->x, &cmd->y);
+    cmd->r = r; cmd->startAngle = startAngle; cmd->endAngle = endAngle;
+    float a = endAngle;
+    canvas->pathCurX = cmd->x + cosf(a) * r;
+    canvas->pathCurY = cmd->y + sinf(a) * r;
+    canvas->pathHasCur = 1;
+    return canvas;
+}
+
+UICanvas* UICanvas_BezierCurveTo(UICanvas* canvas, float cp1x, float cp1y,
+                                 float cp2x, float cp2y, float x, float y) {
+    if (!canvas) return NULL;
+    UIPathCmd* cmd = PathPush(canvas, UI_PATH_CMD_BEZIER);
+    if (!cmd) return canvas;
+    TransformPoint(canvas, cp1x, cp1y, &cmd->cp1x, &cmd->cp1y);
+    TransformPoint(canvas, cp2x, cp2y, &cmd->cp2x, &cmd->cp2y);
+    TransformPoint(canvas, x, y, &cmd->x, &cmd->y);
+    canvas->pathCurX = cmd->x;
+    canvas->pathCurY = cmd->y;
+    canvas->pathHasCur = 1;
+    return canvas;
+}
+
+UICanvas* UICanvas_ClosePath(UICanvas* canvas) {
+    if (!canvas || !canvas->pathHasCur) return canvas;
+    UIPathCmd* cmd = PathPush(canvas, UI_PATH_CMD_CLOSE);
+    if (!cmd) return canvas;
+    canvas->pathCurX = canvas->pathStartX;
+    canvas->pathCurY = canvas->pathStartY;
+    return canvas;
+}
+
+static void PathToPoints(UICanvas* c, SDL_FPoint** outPts, int* outCount) {
+    int count = 1;
+    for (int i = 0; i < c->pathCount; i++) {
+        UIPathCmd* cmd = &c->path[i];
+        if (cmd->type == UI_PATH_CMD_MOVE) count++;
+        else if (cmd->type == UI_PATH_CMD_LINE || cmd->type == UI_PATH_CMD_CLOSE) count++;
+        else if (cmd->type == UI_PATH_CMD_ARC) {
+            float sweep = cmd->endAngle - cmd->startAngle;
+            while (sweep < 0) sweep += 2.0f * (float)M_PI;
+            count += SDL_max(8, (int)(cmd->r * sweep));
+        }
+        else if (cmd->type == UI_PATH_CMD_BEZIER) count += 16;
+    }
+    SDL_FPoint* pts = (SDL_FPoint*)calloc((size_t)count, sizeof(SDL_FPoint));
+    int n = 0;
+    for (int i = 0; i < c->pathCount; i++) {
+        UIPathCmd* cmd = &c->path[i];
+        if (cmd->type == UI_PATH_CMD_MOVE) {
+            pts[n++] = (SDL_FPoint){ cmd->x, cmd->y };
+        } else if (cmd->type == UI_PATH_CMD_LINE) {
+            pts[n++] = (SDL_FPoint){ cmd->x, cmd->y };
+        } else if (cmd->type == UI_PATH_CMD_CLOSE) {
+            pts[n++] = (SDL_FPoint){ c->pathStartX, c->pathStartY };
+        } else if (cmd->type == UI_PATH_CMD_ARC) {
+            float sweep = cmd->endAngle - cmd->startAngle;
+            while (sweep < 0) sweep += 2.0f * (float)M_PI;
+            int segs = SDL_max(8, (int)(cmd->r * sweep));
+            for (int k = 0; k <= segs; k++) {
+                float a = cmd->startAngle + (float)k / (float)segs * sweep;
+                pts[n++] = (SDL_FPoint){ cmd->x + cosf(a)*cmd->r, cmd->y + sinf(a)*cmd->r };
+            }
+        } else if (cmd->type == UI_PATH_CMD_BEZIER) {
+            for (int k = 0; k <= 16; k++) {
+                float t = (float)k / 16.0f;
+                float mt = 1.0f - t;
+                float b0 = mt*mt*mt, b1 = 3*mt*mt*t, b2 = 3*mt*t*t, b3 = t*t*t;
+                pts[n++] = (SDL_FPoint){
+                    b0*c->pathCurX + b1*cmd->cp1x + b2*cmd->cp2x + b3*cmd->x,
+                    b0*c->pathCurY + b1*cmd->cp1y + b2*cmd->cp2y + b3*cmd->y
+                };
+            }
+        }
+    }
+    *outPts = pts;
+    *outCount = n;
+}
+
+UICanvas* UICanvas_Stroke(UICanvas* canvas) {
+    if (!canvas || canvas->pathCount == 0) return canvas;
+    SDL_Renderer* r = UICanvas_GetRenderer(canvas);
+    if (!r) return canvas;
+    SDL_FPoint* pts = NULL;
+    int n = 0;
+    PathToPoints(canvas, &pts, &n);
+    if (n > 1) {
+        SetDrawColor(r, CurState(canvas)->strokeColor, CurState(canvas)->globalAlpha);
+        SDL_SetRenderDrawBlendMode(r, CurState(canvas)->blendMode);
+        SDL_RenderLines(r, pts, n);
+    }
+    free(pts);
+    return canvas;
+}
+
+UICanvas* UICanvas_Fill(UICanvas* canvas) {
+    if (!canvas || canvas->pathCount == 0) return canvas;
+    SDL_Renderer* r = UICanvas_GetRenderer(canvas);
+    if (!r) return canvas;
+    SDL_FPoint* pts = NULL;
+    int n = 0;
+    PathToPoints(canvas, &pts, &n);
+    if (n > 2) {
+        SDL_Vertex* v = (SDL_Vertex*)calloc((size_t)n, sizeof(SDL_Vertex));
+        int* idx = (int*)calloc((size_t)((n-2)*3), sizeof(int));
+        if (v && idx) {
+            for (int i = 0; i < n; i++) {
+                v[i].position = pts[i];
+                v[i].color = (SDL_FColor){1,1,1,1};
+            }
+            for (int i = 0; i < n - 2; i++) {
+                idx[i*3+0] = 0;
+                idx[i*3+1] = i+1;
+                idx[i*3+2] = i+2;
+            }
+            SetDrawColor(r, CurState(canvas)->fillColor, CurState(canvas)->globalAlpha);
+            SDL_SetRenderDrawBlendMode(r, CurState(canvas)->blendMode);
+            SDL_RenderGeometry(r, NULL, v, n, idx, (n-2)*3);
+        }
+        free(v); free(idx);
+    }
+    free(pts);
+    return canvas;
+}
