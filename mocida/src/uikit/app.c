@@ -413,8 +413,14 @@ static void ApplyResize(UIApp* app, int new_width, int new_height) {
     }
 #endif
 
+    int layoutW = new_width;
+    int layoutH = new_height;
+    if (UIWindow_IsDeviceSimulatorEnabled(app->window)) {
+        UIWindow_DeviceSimulatorGetDeviceSize(app->window, &layoutW, &layoutH);
+    }
+
     if (app->mainWidget) {
-        UIWidget_SetSize(app->mainWidget, (float)new_width, (float)new_height);
+        UIWidget_SetSize(app->mainWidget, (float)layoutW, (float)layoutH);
     }
     if (app->window->sdlRenderer) {
         SDL_SetRenderLogicalPresentation(app->window->sdlRenderer,
@@ -611,6 +617,15 @@ static UICursor PickHoverCursor(UIChildren* children, float x, float y) {
     return PickHoverCursorImpl(children, x, y, NULL);
 }
 
+static void ApplySimulatorMouseTransform(UIApp* app, float* rx, float* ry) {
+    if (app && app->window && UIWindow_IsDeviceSimulatorEnabled(app->window)) {
+        float dx = 0, dy = 0;
+        UIWindow_DeviceSimulatorWindowToDevice(app->window, *rx, *ry, &dx, &dy);
+        *rx = dx;
+        *ry = dy;
+    }
+}
+
 void HandleEvent(UIApp* app, SDL_Event* event) {
     if (!app || !app->window) return;
 
@@ -618,6 +633,7 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
         case SDL_EVENT_MOUSE_MOTION: {
             float rx, ry;
             WindowToRenderCoords(app, event->motion.x, event->motion.y, &rx, &ry);
+            ApplySimulatorMouseTransform(app, &rx, &ry);
             // A scrollbar-thumb drag in progress owns the motion: move it and
             // swallow the event so hover/selection logic doesn't also react.
             if (ScrollbarDragMove(app->window->children, ry)) break;
@@ -643,6 +659,7 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
         case SDL_EVENT_MOUSE_BUTTON_DOWN: {
             float rx, ry;
             WindowToRenderCoords(app, event->button.x, event->button.y, &rx, &ry);
+            ApplySimulatorMouseTransform(app, &rx, &ry);
             // Establish the z-order occluder so a click over an overlay can't
             // also reach widgets behind it (unless they're propagatingEvents).
             OcclusionBegin(app->window->children, rx, ry);
@@ -681,6 +698,24 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
             // doesn't also propagate to text widgets. In release builds
             // this is a no-op that returns 0.
             if (UIDebugOverlay_HandleScancode((int)event->key.scancode)) break;
+            if (UIWindow_IsDeviceSimulatorEnabled(app->window) &&
+                event->key.key == SDLK_R) {
+                UIWidget* focused = UIWidget_GetFocused();
+                int typing = focused && focused->data && (
+                    strcmp(((UIWidgetBase*)focused->data)->__widget_type, UI_WIDGET_TEXTFIELD) == 0 ||
+                    strcmp(((UIWidgetBase*)focused->data)->__widget_type, UI_WIDGET_TEXTAREA) == 0 ||
+                    strcmp(((UIWidgetBase*)focused->data)->__widget_type, UI_WIDGET_TEXT) == 0);
+                if (!typing) {
+                    UIWindow_DeviceSimulatorToggleOrientation(app->window);
+                    const UIDeviceProfile* p = UIApp_GetCurrentDeviceProfile(app);
+                    UIDeviceOrientation o = UIApp_GetCurrentDeviceOrientation(app);
+                    float scale = UIWindow_DeviceSimulatorGetHostScale(app->window);
+                    int newW = (int)((o == UI_DEVICE_ORIENTATION_LANDSCAPE ? p->frameH : p->frameW) * scale);
+                    int newH = (int)((o == UI_DEVICE_ORIENTATION_LANDSCAPE ? p->frameW : p->frameH) * scale);
+                    SDL_SetWindowSize(app->window->sdlWindow, newW, newH);
+                    break;
+                }
+            }
             UITextField_DispatchKeyDown(app->window->children, app->window->sdlWindow,
                                         event->key.scancode, event->key.mod);
             UITextArea_DispatchKeyDown (app->window->children, app->window->sdlWindow,
@@ -700,6 +735,7 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
         case SDL_EVENT_MOUSE_BUTTON_UP: {
             float rx, ry;
             WindowToRenderCoords(app, event->button.x, event->button.y, &rx, &ry);
+            ApplySimulatorMouseTransform(app, &rx, &ry);
             // End any scrollbar-thumb drag before the usual up-dispatch.
             ScrollbarDragEnd(app->window->children);
             OcclusionBegin(app->window->children, rx, ry);
@@ -719,6 +755,7 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
         case SDL_EVENT_MOUSE_WHEEL: {
             float rx, ry;
             WindowToRenderCoords(app, event->wheel.mouse_x, event->wheel.mouse_y, &rx, &ry);
+            ApplySimulatorMouseTransform(app, &rx, &ry);
             const SDL_Keymod mods = SDL_GetModState();
             const int shift = (mods & SDL_KMOD_SHIFT) != 0;
             // Occlusion: a wheel over an overlay must not scroll the editor
@@ -738,6 +775,7 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
             // file over the window.
             float rx, ry;
             WindowToRenderCoords(app, event->drop.x, event->drop.y, &rx, &ry);
+            ApplySimulatorMouseTransform(app, &rx, &ry);
             UIFileDrop_DispatchDragPosition(app->window->children, rx, ry);
 
             // Also keep the legacy window-position update so old code
@@ -749,6 +787,7 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
         case SDL_EVENT_DROP_FILE: {
             float rx, ry;
             WindowToRenderCoords(app, event->drop.x, event->drop.y, &rx, &ry);
+            ApplySimulatorMouseTransform(app, &rx, &ry);
             UIFileDrop_DispatchDropFile(app->window->children, rx, ry,
                                         event->drop.data);
             break;

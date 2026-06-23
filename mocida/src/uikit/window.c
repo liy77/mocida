@@ -1082,7 +1082,8 @@ void UIWindow_SetEventCallback(UIWindow* window, UI_EVENT event, UIEventCallback
 
 void UIWindow_Destroy(UIWindow* window) {
     if (!window) return;
-    
+    UIWindow_DisableDeviceSimulator(window);
+
     // Clean smooth texture
     if (g_smoothTexture) {
         SDL_DestroyTexture(g_smoothTexture);
