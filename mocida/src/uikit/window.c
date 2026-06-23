@@ -15,6 +15,7 @@
 #include <uikit/video.h>
 #include <uikit/file_drop.h>
 #include "canvas_internal.h"
+#include "device_simulator_internal.h"
 #include <uikit/asset.h>
 #include <uikit/overlay.h>
 #include <uikit/debug.h>
@@ -647,21 +648,25 @@ void UIWindow_SetActive(UIWindow* window) {
 // UIWindow holds. On desktop the safe area == the whole window, so all
 // insets come out 0; on iOS the top reflects the notch / status bar.
 UIScreenInsets UIScreen_GetSafeArea(void) {
-    UIScreenInsets ins = { 0, 0, 0, 0 };
+    UIScreenInsets ins = {0, 0, 0, 0};
     if (!g_activeWindow || !g_activeWindow->sdlWindow) return ins;
-    int ww = 0, wh = 0;
-    SDL_GetWindowSize(g_activeWindow->sdlWindow, &ww, &wh);
-    SDL_Rect r;
-    if (SDL_GetWindowSafeArea(g_activeWindow->sdlWindow, &r) && r.w > 0 && r.h > 0) {
-        ins.left   = r.x;
-        ins.top    = r.y;
-        ins.right  = ww - (r.x + r.w);
-        ins.bottom = wh - (r.y + r.h);
-        if (ins.left   < 0) ins.left   = 0;
-        if (ins.top    < 0) ins.top    = 0;
-        if (ins.right  < 0) ins.right  = 0;
-        if (ins.bottom < 0) ins.bottom = 0;
+    if (UIWindow_IsDeviceSimulatorEnabled(g_activeWindow)) {
+        UIWindow_DeviceSimulatorGetSafeArea(g_activeWindow, &ins);
+    } else {
+        SDL_Rect r;
+        if (SDL_GetWindowSafeArea(g_activeWindow->sdlWindow, &r) && r.w > 0 && r.h > 0) {
+            int ww = 0, wh = 0;
+            SDL_GetWindowSize(g_activeWindow->sdlWindow, &ww, &wh);
+            ins.top    = r.y;
+            ins.bottom = wh - (r.y + r.h);
+            ins.left   = r.x;
+            ins.right  = ww - (r.x + r.w);
+        }
     }
+    if (ins.left   < 0) ins.left   = 0;
+    if (ins.top    < 0) ins.top    = 0;
+    if (ins.right  < 0) ins.right  = 0;
+    if (ins.bottom < 0) ins.bottom = 0;
     return ins;
 }
 

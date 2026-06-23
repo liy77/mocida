@@ -31,6 +31,7 @@
 #include <uikit/asset.h>
 #include <uikit/crash.h>
 #include <uikit/font.h>
+#include "device_simulator_internal.h"
 
 #ifdef MOCIDA_WEB
 #include <SDL3_image/SDL_image.h>
@@ -1713,10 +1714,23 @@ int UIApp_GetTargetFPS(UIApp* app) {
 // screen size adopted at creation (not the requested desktop default), so
 // it's the right value to drive responsive initial layout from.
 int UIApp_GetWidth(UIApp* app) {
-    return (app && app->window) ? app->window->width : 0;
+    if (!app || !app->window) return 0;
+    if (UIWindow_IsDeviceSimulatorEnabled(app->window)) {
+        int w = 0, h = 0;
+        UIWindow_DeviceSimulatorGetDeviceSize(app->window, &w, &h);
+        return w;
+    }
+    return app->window->width;
 }
+
 int UIApp_GetHeight(UIApp* app) {
-    return (app && app->window) ? app->window->height : 0;
+    if (!app || !app->window) return 0;
+    if (UIWindow_IsDeviceSimulatorEnabled(app->window)) {
+        int w = 0, h = 0;
+        UIWindow_DeviceSimulatorGetDeviceSize(app->window, &w, &h);
+        return h;
+    }
+    return app->window->height;
 }
 
 void UIApp_SetMSAASamples(UIApp* app, int samples) {
