@@ -122,6 +122,15 @@ void UIApp_EnableDeviceSimulator(
     float hostScale,             // escala visual da janela (ex: 2.0)
     UIDeviceOrientation orientation);
 
+// Conveniência: carrega o PNG da moldura automaticamente.
+// Se `framePath` for NULL ou o arquivo não existir, usa fallback de bezel.
+void UIApp_EnableDeviceSimulatorFromFile(
+    UIApp* app,
+    const UIDeviceProfile* profile,
+    const char* framePath,
+    float hostScale,
+    UIDeviceOrientation orientation);
+
 void UIApp_DisableDeviceSimulator(UIApp* app);
 bool UIApp_IsDeviceSimulatorEnabled(UIApp* app);
 
@@ -157,51 +166,47 @@ SDL_Texture* UIApp_GetDeviceSimulatorRenderTarget(UIApp* app);
 
 ## 5. Integração com o Runtime C
 
-### 5.1 `UIApp`
+### 5.1 Onde o estado fica
 
-`struct UIApp` ganha campos opcionais:
+O estado do simulador é mantido por um ponteiro opaco dentro de `UIWindow` (`void* __deviceSimulator`), porque o ponto de renderização real é `UIWindow_Render`. A API pública em `UIApp` é apenas um wrapper que delega para a implementação interna em `device_simulator.c`.
 
-```c
-bool deviceSimulatorEnabled;
-UIDeviceProfile deviceProfile;
-UIDeviceOrientation deviceOrientation;
-SDL_Texture* deviceRenderTarget;
-SDL_Texture* deviceFrameTexture;
-float hostScale;
-```
-
-### 5.2 `UIWindow_GetSize` / `UIScreen_GetSize`
+### 5.2 `UIApp_GetWidth/Height` / `UIScreen_GetSize`
 
 Quando o simulador está ativo, retornam as dimensões do profile considerando a orientação:
 
 - Portrait: `width × height`
 - Landscape: `height × width`
 
-### 5.3 `UIApp_Present`
+### 5.3 `UIWindow_Render`
+
+`UIWindow_Render` ganha um gancho no início/fim:
 
 ```c
-void UIApp_Present(UIApp* app) {
-    if (app->deviceSimulatorEnabled) {
-        // 1. Renderiza a app na textura do device
-        SDL_SetRenderTarget(renderer, app->deviceRenderTarget);
-        SDL_SetRenderScale(renderer, 1.0f, 1.0f);
-        SDL_SetRenderViewport(renderer, NULL);
-        RenderApp(app);
+int UIWindow_Render(UIWindow* window) {
+    // ... query live window size (host) ...
 
-        // 2. Volta ao backbuffer
-        SDL_SetRenderTarget(renderer, NULL);
-
-        // 3. Limpa a janela
-        SDL_SetRenderDrawColor(renderer, 30, 30, 30, 255);
-        SDL_RenderClear(renderer);
-
-        // 4. Desenha a moldura e a textura do device
-        DeviceSimulator_PresentFrame(app);
-    } else {
-        RenderApp(app);
+    if (window->deviceSimulator) {
+        // Salva tamanho host e força render no tamanho do device
+        int hostW = rw, hostH = rh;
+        DeviceSimulator_GetDeviceSize(window, &rw, &rh);
+        target = DeviceSimulator_GetRenderTarget(window);
+        SDL_SetRenderTarget(renderer, target);
+        SDL_SetRenderLogicalPresentation(renderer, rw, rh, SDL_LOGICAL_PRESENTATION_LETTERBOX);
     }
 
-    SDL_RenderPresent(renderer);
+    // Renderiza a árvore de widgets normalmente (clear, children, AA pass)
+    // ...
+
+    if (window->deviceSimulator) {
+        // Volta ao backbuffer e desenha moldura + tela do device
+        SDL_SetRenderTarget(renderer, NULL);
+        SDL_SetRenderLogicalPresentation(renderer, hostW, hostH, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+        SDL_SetRenderDrawColor(renderer, 30, 30, 30, 255);
+        SDL_RenderClear(renderer);
+        DeviceSimulator_PresentFrame(window, hostW, hostH);
+    }
+
+    // Debug overlay + SDL_RenderPresent
 }
 ```
 
@@ -290,10 +295,9 @@ pub const GALAXY_S25_ULTRA: DeviceProfile = DeviceProfile { ... };
 
 1. Parse dos argumentos.
 2. Se `--device` foi passado:
-   - Carrega `assets/devices/<name>.png` via SDL_image (se faltar, passa `NULL`).
    - Calcula tamanho da janela: `profile.frame_w * hostScale` × `profile.frame_h * hostScale`.
    - Cria a janela com esse tamanho.
-   - Chama `UIApp_EnableDeviceSimulator(app, &profile, frameTexture, hostScale, orientation)`.
+   - Chama `UIApp_EnableDeviceSimulatorFromFile(app, &profile, "assets/devices/<name>.png", hostScale, orientation)`.
 3. No loop principal:
    - Processa eventos SDL.
    - Detecta tecla `R` e chama `UIApp_SetDeviceOrientation(...)`.
