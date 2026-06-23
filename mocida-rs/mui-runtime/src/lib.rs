@@ -46,6 +46,8 @@ use mocida::{
     VibrancyState, Video, WebView, Widget, WrapMode,
 };
 use mocida::sys as msys;
+use crate::device_profiles::DeviceProfile;
+use crate::device_simulator::DeviceOrientation;
 use mui_syntax::ast::{Element, Handler, HandlerAction, MuiValue, Node, Prop, PropValue, View};
 use mui_syntax::loader::Registry;
 use mui_syntax::style::{self, Anchor, HAnchor, Rgba, ReactiveEnv, ShadowSpec, VAnchor};
@@ -119,12 +121,15 @@ impl Runtime {
         self.app.as_ptr()
     }
 
+    /// Enable the device simulator for this runtime.
+    ///
+    /// See [`device_simulator::enable`](crate::device_simulator::enable) for details.
     pub fn enable_device_simulator(
         &mut self,
-        profile: &crate::device_profiles::DeviceProfile,
+        profile: &DeviceProfile,
         frame_png_path: Option<&str>,
         host_scale: f32,
-        orientation: crate::device_simulator::DeviceOrientation,
+        orientation: DeviceOrientation,
     ) -> std::result::Result<(), mocida::Error> {
         crate::device_simulator::enable(
             self,
@@ -135,33 +140,54 @@ impl Runtime {
         )
     }
 
+    /// Disable the device simulator for this runtime.
+    ///
+    /// See [`device_simulator::disable`](crate::device_simulator::disable) for details.
     pub fn disable_device_simulator(&mut self) {
         crate::device_simulator::disable(self);
     }
 
+    /// Returns whether the device simulator is currently enabled.
+    ///
+    /// See [`device_simulator::is_enabled`](crate::device_simulator::is_enabled) for details.
     pub fn is_device_simulator_enabled(&self) -> bool {
         crate::device_simulator::is_enabled(self)
     }
 
-    pub fn device_simulator_orientation(&self) -> crate::device_simulator::DeviceOrientation {
+    /// Returns the current simulator orientation.
+    ///
+    /// See [`device_simulator::orientation`](crate::device_simulator::orientation) for details.
+    pub fn device_simulator_orientation(&self) -> DeviceOrientation {
         crate::device_simulator::orientation(self)
     }
 
+    /// Set the simulator orientation.
+    ///
+    /// See [`device_simulator::set_orientation`](crate::device_simulator::set_orientation) for details.
     pub fn set_device_simulator_orientation(
         &mut self,
-        orientation: crate::device_simulator::DeviceOrientation,
+        orientation: DeviceOrientation,
     ) {
         crate::device_simulator::set_orientation(self, orientation);
     }
 
+    /// Toggle the simulator orientation between portrait and landscape.
+    ///
+    /// See [`device_simulator::toggle_orientation`](crate::device_simulator::toggle_orientation) for details.
     pub fn toggle_device_simulator_orientation(&mut self) {
         crate::device_simulator::toggle_orientation(self);
     }
 
+    /// Convert a window-coordinate point to simulated device coordinates.
+    ///
+    /// See [`device_simulator::window_to_device`](crate::device_simulator::window_to_device) for details.
     pub fn device_simulator_window_to_device(&self, wx: f32, wy: f32) -> (f32, f32) {
         crate::device_simulator::window_to_device(self, wx, wy)
     }
 
+    /// Convert a simulated device-coordinate point to window coordinates.
+    ///
+    /// See [`device_simulator::device_to_window`](crate::device_simulator::device_to_window) for details.
     pub fn device_simulator_device_to_window(&self, dx: f32, dy: f32) -> (f32, f32) {
         crate::device_simulator::device_to_window(self, dx, dy)
     }

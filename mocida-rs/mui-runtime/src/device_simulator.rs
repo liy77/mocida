@@ -4,9 +4,12 @@ use crate::device_profiles::DeviceProfile;
 use mocida::sys as msys;
 use std::ffi::CString;
 
+/// Orientation of a simulated device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceOrientation {
+    /// Portrait orientation (taller than wide).
     Portrait,
+    /// Landscape orientation (wider than tall).
     Landscape,
 }
 
@@ -31,8 +34,8 @@ pub fn enable(
     host_scale: f32,
     orientation: DeviceOrientation,
 ) -> Result<(), mocida::Error> {
+    let p = to_c_profile(profile);
     unsafe {
-        let p = to_c_profile(profile);
         if let Some(path) = frame_png_path {
             let cpath = CString::new(path)?;
             msys::UIApp_EnableDeviceSimulatorFromFile(
