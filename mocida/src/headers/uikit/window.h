@@ -54,7 +54,7 @@ typedef struct {
  * It contains properties for size, position, visibility,
  * title, background color, and child widgets.
  */
-typedef struct {
+typedef struct UIWindow {
     int width;                       /**< Logical width in pixels. */
     int height;                      /**< Logical height in pixels. */
     float x;                         /**< Window X on the screen. */
@@ -76,6 +76,7 @@ typedef struct {
     UIColor backdropTint;            /**< Optional tint forwarded to the OS backdrop. */
     float   backdropTintOpacity;     /**< 0..1 strength of backdropTint. */
     int     backdropNative;          /**< 1 when a native compositor effect is active (window made transparent). */
+    void*   __deviceSimulator;       /**< Internal device simulator state. */
 } UIWindow;
 
 /**

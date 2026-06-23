@@ -33,6 +33,7 @@
 #include <uikit/debug.h>
 #include <uikit/profile.h>
 #include <uikit/screen.h>
+#include <uikit/device_simulator.h>
 #include <uikit/bundle.h>
 #include <uikit/overlay.h>
 #include <uikit/crash.h>
@@ -165,7 +166,7 @@ typedef void (*UIAppTickCallback)(void* userdata);
  * the vast majority of programs; multi-window apps share these
  * settings across windows.
  */
-typedef struct {
+typedef struct UIApp {
     UIWindow* window;          /**< Backing window the app is rendering into. */
     UIWidget* mainWidget;      /**< Root widget mounted under `window->children`. */
     UIColor backgroundColor;   /**< Window clear color used between frames. */
