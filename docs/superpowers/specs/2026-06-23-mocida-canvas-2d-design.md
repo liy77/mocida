@@ -304,14 +304,16 @@ A API Rust espelhará a API C de forma idiomática.
 ### Novos arquivos
 - `mocida/src/headers/uikit/canvas.h`
 - `mocida/src/uikit/canvas.c`
-- `mocida/examples/canvas_basic.c`
-- `mocida/examples/canvas_particles.c`
+- `mocida/src/uikit/canvas_internal.h` — definição interna da struct `UICanvas` (compartilhada entre `canvas.c` e `window.c`).
+- `mocida/tests/test_canvas_basic.c`
+- `mocida/tests/test_canvas_particles.c`
 
 ### Arquivos modificados
 - `mocida/src/headers/uikit/widget.h` — adicionar `#define UI_WIDGET_CANVAS "@uikit/canvas"` junto aos outros tipos.
+- `mocida/src/uikit/window.c` — incluir `canvas_internal.h` para acesso à struct `UICanvas` no `RenderWidget_Canvas`.
 - `mocida/src/uikit/window_widgets.inc` — adicionar `RenderWidget_Canvas` e registrá-lo em `RenderSingleWidget_Inner`.
-- `mocida/src/uikit/app.c` — chamar `UICanvas_DispatchMouseMove`, `UICanvas_DispatchMouseDown` e `UICanvas_DispatchMouseUp` no loop de eventos.
-- `mocida/CMakeLists.txt` — incluir `mocida/src/uikit/canvas.c` nos fontes.
+- `mocida/src/uikit/window_render.inc` — adicionar caso `UI_WIDGET_CANVAS` no dispatch de render.
+- `mocida/src/uikit/app.c` — incluir `canvas.h` e chamar `UICanvas_DispatchMouseMove`, `UICanvas_DispatchMouseDown` e `UICanvas_DispatchMouseUp` no loop de eventos.
 
 ---
 
