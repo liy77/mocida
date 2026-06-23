@@ -51,30 +51,20 @@ impl DeviceProfile {
     }
 }
 
-pub const IPHONE_15: DeviceProfile = DeviceProfile::framed(
-    "iphone15", 393, 852, 59, 34, 0, 0, 3.0,
-);
-pub const IPHONE_15_PRO: DeviceProfile = DeviceProfile::framed(
-    "iphone15pro", 393, 852, 59, 34, 0, 0, 3.0,
-);
-pub const IPHONE_15_PRO_MAX: DeviceProfile = DeviceProfile::framed(
-    "iphone15promax", 430, 932, 59, 34, 0, 0, 3.0,
-);
-pub const IPHONE_16: DeviceProfile = DeviceProfile::framed(
-    "iphone16", 393, 852, 59, 34, 0, 0, 3.0,
-);
-pub const GALAXY_S24: DeviceProfile = DeviceProfile::framed(
-    "galaxy_s24", 360, 780, 24, 24, 0, 0, 3.0,
-);
-pub const GALAXY_S24_PLUS: DeviceProfile = DeviceProfile::framed(
-    "galaxy_s24plus", 384, 832, 24, 24, 0, 0, 3.2,
-);
-pub const GALAXY_S25: DeviceProfile = DeviceProfile::framed(
-    "galaxy_s25", 360, 780, 24, 24, 0, 0, 3.0,
-);
-pub const GALAXY_S25_ULTRA: DeviceProfile = DeviceProfile::framed(
-    "galaxy_s25ultra", 384, 832, 24, 24, 0, 0, 3.2,
-);
+pub const IPHONE_15: DeviceProfile = DeviceProfile::framed("iphone15", 393, 852, 59, 34, 0, 0, 3.0);
+pub const IPHONE_15_PRO: DeviceProfile =
+    DeviceProfile::framed("iphone15pro", 393, 852, 59, 34, 0, 0, 3.0);
+pub const IPHONE_15_PRO_MAX: DeviceProfile =
+    DeviceProfile::framed("iphone15promax", 430, 932, 59, 34, 0, 0, 3.0);
+pub const IPHONE_16: DeviceProfile = DeviceProfile::framed("iphone16", 393, 852, 59, 34, 0, 0, 3.0);
+pub const GALAXY_S24: DeviceProfile =
+    DeviceProfile::framed("galaxy_s24", 360, 780, 24, 24, 0, 0, 3.0);
+pub const GALAXY_S24_PLUS: DeviceProfile =
+    DeviceProfile::framed("galaxy_s24plus", 384, 832, 24, 24, 0, 0, 3.2);
+pub const GALAXY_S25: DeviceProfile =
+    DeviceProfile::framed("galaxy_s25", 360, 780, 24, 24, 0, 0, 3.0);
+pub const GALAXY_S25_ULTRA: DeviceProfile =
+    DeviceProfile::framed("galaxy_s25ultra", 384, 832, 24, 24, 0, 0, 3.2);
 
 pub const PROFILE_NAMES: &[&str] = &[
     "iphone15",

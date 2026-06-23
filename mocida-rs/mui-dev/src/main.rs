@@ -27,8 +27,8 @@ use std::time::{Duration, SystemTime};
 
 use mocida::text::{get_font, search_fonts};
 use mocida::{App, Children, Color};
-use mui_runtime::device_simulator::DeviceOrientation;
 use mui_runtime::device_profiles::PROFILE_NAMES;
+use mui_runtime::device_simulator::DeviceOrientation;
 use mui_runtime::Reactive;
 use mui_runtime::Runtime;
 
@@ -87,16 +87,20 @@ fn parse_args() -> CliOptions {
             "--minimized" | "-m" => opts.minimize = true,
             "--display" | "-d" => {
                 let v = require_arg(&a, &mut it);
-                if let Ok(n) = v.parse::<u32>() {
-                    opts.display = Some(n);
-                }
+                opts.display = Some(v.parse::<u32>().unwrap_or_else(|_| {
+                    eprintln!("mui-dev: --display requires a valid number");
+                    std::process::exit(2);
+                }));
             }
             "--device" => {
                 opts.device = Some(require_arg(&a, &mut it));
             }
             "--device-scale" => {
                 let v = require_arg(&a, &mut it);
-                opts.device_scale = v.parse::<f32>().unwrap_or(1.0);
+                opts.device_scale = v.parse::<f32>().unwrap_or_else(|_| {
+                    eprintln!("mui-dev: --device-scale requires a valid number");
+                    std::process::exit(2);
+                });
             }
             "--device-frame" => {
                 opts.device_frame = Some(require_arg(&a, &mut it));
@@ -160,7 +164,6 @@ fn main() -> ExitCode {
 struct Built {
     children: Children,
     reactive: Reactive,
-    view_name: String,
     /// All files that fed this build (entry + imports) — the hot-reload watch
     /// set, so editing an imported component reloads too.
     sources: Vec<PathBuf>,
@@ -205,7 +208,6 @@ fn build_seeded(
     Ok(Built {
         children,
         reactive,
-        view_name: view.name.clone(),
         sources: loaded.sources,
     })
 }
@@ -326,12 +328,9 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
         // SAFETY: `app` was created above and outlives this temporary `Runtime`
         // wrapper, which is only used to configure the device simulator.
         let mut runtime = unsafe { Runtime::from_raw(app.as_ptr()) };
-        if let Err(e) = runtime.enable_device_simulator(
-            profile,
-            frame_path,
-            opts.device_scale,
-            orientation,
-        ) {
+        if let Err(e) =
+            runtime.enable_device_simulator(profile, frame_path, opts.device_scale, orientation)
+        {
             eprintln!("mui-dev: failed to enable device simulator: {e}");
             std::process::exit(1);
         }
@@ -344,7 +343,6 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
     let Built {
         children,
         reactive,
-        view_name: _,
         sources,
     } = build(&source, path.as_deref())?;
     println!("mui-dev: rendering view `{view_name}` from {label}");
@@ -388,7 +386,10 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
         let last_size = Rc::new(Cell::new((0i32, 0i32, 0i32, 0i32)));
         println!(
             "mui-dev: watching {p} (+{} imported file(s)) for changes — edit + save to hot-reload",
-            watch_list.lock().map(|l| l.len().saturating_sub(1)).unwrap_or(0)
+            watch_list
+                .lock()
+                .map(|l| l.len().saturating_sub(1))
+                .unwrap_or(0)
         );
         app.on_tick(move || {
             // (0) Window resize / monitor change → reactive rebuild, so

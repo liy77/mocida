@@ -35,22 +35,21 @@ use std::ffi::CString;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
-use copper_syntax::expr::{BinOp, Expr, ExprKind, Literal, StrPart, StrTemplate};
-use mocida::text::by_ptr;
-use mocida::{
-    BackdropMaterial, Button, Checkbox, Children, Color, Cursor, Dialog, FillMode, FontStyle, Glass,
-    GlassThickness, Grid, GridView,
-    HorizontalAlign, Image, ListView, MouseArea, MouseAreaEvent, ProgressBar, RadioButton,
-    Rectangle, Scroll, Shadow, Signal, Slider, Sound, Spinner, Stack, StackAlign, StackJustify,
-    StackOrientation, Switch, Text, TextArea, TextField, TextHAlign, TextVAlign, VerticalAlign,
-    VibrancyState, Video, WebView, Widget, WrapMode,
-};
-use mocida::sys as msys;
 use crate::device_profiles::DeviceProfile;
 use crate::device_simulator::DeviceOrientation;
+use copper_syntax::expr::{BinOp, Expr, ExprKind, Literal, StrPart, StrTemplate};
+use mocida::sys as msys;
+use mocida::text::by_ptr;
+use mocida::{
+    BackdropMaterial, Button, Checkbox, Children, Color, Cursor, Dialog, FillMode, FontStyle,
+    Glass, GlassThickness, Grid, GridView, HorizontalAlign, Image, ListView, MouseArea,
+    MouseAreaEvent, ProgressBar, RadioButton, Rectangle, Scroll, Shadow, Signal, Slider, Sound,
+    Spinner, Stack, StackAlign, StackJustify, StackOrientation, Switch, Text, TextArea, TextField,
+    TextHAlign, TextVAlign, VerticalAlign, VibrancyState, Video, WebView, Widget, WrapMode,
+};
 use mui_syntax::ast::{Element, Handler, HandlerAction, MuiValue, Node, Prop, PropValue, View};
 use mui_syntax::loader::Registry;
-use mui_syntax::style::{self, Anchor, HAnchor, Rgba, ReactiveEnv, ShadowSpec, VAnchor};
+use mui_syntax::style::{self, Anchor, HAnchor, ReactiveEnv, Rgba, ShadowSpec, VAnchor};
 
 /// Build a `ReactiveEnv` from the live signal slot. Only platform-related
 /// signals (`is_macos`, `is_windows`, `is_linux`) are mirrored into the env;
@@ -109,6 +108,8 @@ impl Runtime {
     ///
     /// # Safety
     /// `ptr` must be a valid, non-null `UIApp*` that outlives this `Runtime`.
+    /// The constructed `Runtime` uses `drop_app: false`, so the caller keeps
+    /// ownership of `UIApp`; this wrapper will not destroy or double-free it.
     pub unsafe fn from_raw(ptr: *mut msys::UIApp) -> Self {
         Self {
             app: NonNull::new(ptr).expect("null UIApp pointer passed to Runtime::from_raw"),
@@ -131,13 +132,7 @@ impl Runtime {
         host_scale: f32,
         orientation: DeviceOrientation,
     ) -> std::result::Result<(), mocida::Error> {
-        crate::device_simulator::enable(
-            self,
-            profile,
-            frame_png_path,
-            host_scale,
-            orientation,
-        )
+        crate::device_simulator::enable(self, profile, frame_png_path, host_scale, orientation)
     }
 
     /// Disable the device simulator for this runtime.
@@ -164,10 +159,7 @@ impl Runtime {
     /// Set the simulator orientation.
     ///
     /// See [`device_simulator::set_orientation`] for details.
-    pub fn set_device_simulator_orientation(
-        &mut self,
-        orientation: DeviceOrientation,
-    ) {
+    pub fn set_device_simulator_orientation(&mut self, orientation: DeviceOrientation) {
         crate::device_simulator::set_orientation(self, orientation);
     }
 
@@ -196,7 +188,9 @@ impl Runtime {
 impl Drop for Runtime {
     fn drop(&mut self) {
         if self.drop_app {
-            unsafe { msys::UIApp_Destroy(self.app.as_ptr()); }
+            unsafe {
+                msys::UIApp_Destroy(self.app.as_ptr());
+            }
         }
     }
 }
@@ -411,9 +405,15 @@ impl Default for WindowConfig {
 impl WindowConfig {
     /// True when the document asked for a custom (client-side) title bar.
     pub fn wants_custom_titlebar(&self) -> bool {
-        self.titlebar.as_deref().map(|t| {
-            matches!(t.to_ascii_lowercase().as_str(), "custom" | "client" | "none")
-        }).unwrap_or(false)
+        self.titlebar
+            .as_deref()
+            .map(|t| {
+                matches!(
+                    t.to_ascii_lowercase().as_str(),
+                    "custom" | "client" | "none"
+                )
+            })
+            .unwrap_or(false)
     }
 
     /// The renderer the `.mui` asks for on the CURRENT OS: the per-OS override
@@ -544,7 +544,11 @@ fn renderer_sdl_name(r: &str) -> Option<&'static str> {
 pub fn prefer_renderer(cfg: &WindowConfig) {
     // Honour the .mui's per-OS choice (rendererWindows/Macos/Linux) else its
     // cross-platform `renderer`. The document is authoritative.
-    if let Some(name) = cfg.resolved_renderer().as_deref().and_then(renderer_sdl_name) {
+    if let Some(name) = cfg
+        .resolved_renderer()
+        .as_deref()
+        .and_then(renderer_sdl_name)
+    {
         std::env::set_var("SDL_RENDER_DRIVER", name);
     }
 }
@@ -597,7 +601,9 @@ pub fn apply_render_config(app: &mut mocida::App, cfg: &WindowConfig) {
 /// leaves the window opaque. A no-op when no native compositor effect exists —
 /// the window stays opaque and any in-app `Glass` widgets still paint.
 pub fn apply_backdrop(cfg: &WindowConfig) {
-    let Some(spec) = cfg.backdrop.as_deref() else { return };
+    let Some(spec) = cfg.backdrop.as_deref() else {
+        return;
+    };
     let material = BackdropMaterial::from_effect(spec);
     if material == BackdropMaterial::None {
         return;
@@ -729,7 +735,13 @@ fn subscribe_structural(ctx: &mut Ctx, nodes: &[Node]) {
     let mut conds: Vec<String> = Vec::new();
     let mut for_names: Vec<String> = Vec::new();
     let mut visited: Vec<String> = Vec::new();
-    collect_structural(nodes, &mut conds, &mut for_names, ctx.components, &mut visited);
+    collect_structural(
+        nodes,
+        &mut conds,
+        &mut for_names,
+        ctx.components,
+        &mut visited,
+    );
     conds.sort();
     conds.dedup();
     for cond in &conds {
@@ -1051,7 +1063,9 @@ fn build_node(ctx: &mut Ctx, node: &Node, layout: &mut Layout) -> Result<Option<
             // — the swatch overlay clips so scrolled-out swatches don't paint over the
             // toolbar/gutter.
             if prop_bool(el, "clip") == Some(true) && !w.as_ptr().is_null() {
-                unsafe { mocida::sys::UIWidget_SetClipChildren(w.as_ptr(), 1); }
+                unsafe {
+                    mocida::sys::UIWidget_SetClipChildren(w.as_ptr(), 1);
+                }
             }
             Ok(Some(w))
         }
@@ -1292,8 +1306,9 @@ fn child_self_align(node: &Node) -> Option<i32> {
 /// every child-positioning site.
 fn child_margin(node: &Node) -> (f32, f32, f32, f32) {
     match node {
-        Node::Element(el) => style::box_spacing_reactive(el, "margin", None)
-            .unwrap_or((0.0, 0.0, 0.0, 0.0)),
+        Node::Element(el) => {
+            style::box_spacing_reactive(el, "margin", None).unwrap_or((0.0, 0.0, 0.0, 0.0))
+        }
         _ => (0.0, 0.0, 0.0, 0.0),
     }
 }
@@ -1687,17 +1702,41 @@ fn rgba_from_hex(s: &str) -> Option<Rgba> {
     let h = s.trim().trim_start_matches('#');
     let exp = |c: &str| u8::from_str_radix(c, 16).ok();
     let (r, g, b, a) = match h.len() {
-        3 => (exp(&h[0..1])? * 17, exp(&h[1..2])? * 17, exp(&h[2..3])? * 17, 255),
-        4 => (exp(&h[0..1])? * 17, exp(&h[1..2])? * 17, exp(&h[2..3])? * 17, exp(&h[3..4])? * 17),
-        6 => (u8::from_str_radix(&h[0..2], 16).ok()?, u8::from_str_radix(&h[2..4], 16).ok()?, u8::from_str_radix(&h[4..6], 16).ok()?, 255),
-        8 => (u8::from_str_radix(&h[0..2], 16).ok()?, u8::from_str_radix(&h[2..4], 16).ok()?, u8::from_str_radix(&h[4..6], 16).ok()?, u8::from_str_radix(&h[6..8], 16).ok()?),
+        3 => (
+            exp(&h[0..1])? * 17,
+            exp(&h[1..2])? * 17,
+            exp(&h[2..3])? * 17,
+            255,
+        ),
+        4 => (
+            exp(&h[0..1])? * 17,
+            exp(&h[1..2])? * 17,
+            exp(&h[2..3])? * 17,
+            exp(&h[3..4])? * 17,
+        ),
+        6 => (
+            u8::from_str_radix(&h[0..2], 16).ok()?,
+            u8::from_str_radix(&h[2..4], 16).ok()?,
+            u8::from_str_radix(&h[4..6], 16).ok()?,
+            255,
+        ),
+        8 => (
+            u8::from_str_radix(&h[0..2], 16).ok()?,
+            u8::from_str_radix(&h[2..4], 16).ok()?,
+            u8::from_str_radix(&h[4..6], 16).ok()?,
+            u8::from_str_radix(&h[6..8], 16).ok()?,
+        ),
         _ => return None,
     };
     Some(Rgba { r, g, b, a })
 }
 
 /// The string-signal a color prop is bound to (a bare ident), if any.
-fn color_prop_signal(ctx: &Ctx, el: &Element, names: &[&str]) -> Option<Rc<RefCell<Signal<String>>>> {
+fn color_prop_signal(
+    ctx: &Ctx,
+    el: &Element,
+    names: &[&str],
+) -> Option<Rc<RefCell<Signal<String>>>> {
     for name in names {
         if let Some(p) = find_prop(el, name) {
             if let PropValue::Expr(e) = &p.value {
@@ -1728,7 +1767,12 @@ fn subscribe_reactive_rect_color(ctx: &mut Ctx, el: &Element, ptr: *mut mocida::
         .or_else(|| color_eval(ctx, el, "fill"))
         .or_else(|| color_eval(ctx, el, "bg"))
         .or_else(|| color_eval(ctx, el, "color"))
-        .unwrap_or(Rgba { r: 0, g: 0, b: 0, a: 255 });
+        .unwrap_or(Rgba {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        });
     let static_to = color_eval(ctx, el, "gradientTo");
     let horizontal = matches!(
         style::enum_member(el, "gradientDir").as_deref(),
@@ -1744,10 +1788,17 @@ fn subscribe_reactive_rect_color(ctx: &mut Ctx, el: &Element, ptr: *mut mocida::
         };
         if has_grad {
             let c2 = match to_ptr {
-                Some(p) => rgba_from_hex(&str_from_signal(p)).unwrap_or(static_to.unwrap_or(static_bg)),
+                Some(p) => {
+                    rgba_from_hex(&str_from_signal(p)).unwrap_or(static_to.unwrap_or(static_bg))
+                }
                 None => static_to.unwrap_or(static_bg),
             };
-            mocida::sys::UIRectangle_SetGradient(ptr, to_color(c1).into_raw(), to_color(c2).into_raw(), horizontal as i32);
+            mocida::sys::UIRectangle_SetGradient(
+                ptr,
+                to_color(c1).into_raw(),
+                to_color(c2).into_raw(),
+                horizontal as i32,
+            );
         } else {
             mocida::sys::UIRectangle_SetColor(ptr, to_color(c1).into_raw());
         }
@@ -1816,9 +1867,7 @@ fn build_stack(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     // free-layout, or the conditional wrapper gets flowed off-screen by the
     // parent's normal vertical layout and its absolute children never show.
     let child_absolute = el.children.iter().any(|n| match n {
-        Node::Element(child) => {
-            find_prop(child, "x").is_some() && find_prop(child, "y").is_some()
-        }
+        Node::Element(child) => find_prop(child, "x").is_some() && find_prop(child, "y").is_some(),
         _ => false,
     });
     // Auto-detection only sees DIRECT element children, not ones nested in `if`/`for`
@@ -1902,26 +1951,36 @@ fn build_stack(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     // bounds sets the signal to "0" (closing the `if signal == "1"` that gates it).
     // Clicks on the popup's own widgets capture first (dispatch stops); clicks on the
     // popup's empty padding fall to the catcher but test inside-bounds → no close.
-    let dismiss_sig = prop_string_value(ctx, el, "dismiss").and_then(|n| ctx.string_signal(&n).cloned());
+    let dismiss_sig =
+        prop_string_value(ctx, el, "dismiss").and_then(|n| ctx.string_signal(&n).cloned());
     let card_ptr: std::rc::Rc<std::cell::Cell<usize>> = std::rc::Rc::new(std::cell::Cell::new(0));
     if let Some(sig) = &dismiss_sig {
         let cp = card_ptr.clone();
         let s = sig.clone();
-        let catcher_ma = MouseArea::new()?
-            .on(MouseAreaEvent::MouseDown, move |ev| {
-                let p = cp.get() as *mut mocida::sys::UIWidget;
-                if p.is_null() { return; }
-                let inside = unsafe {
-                    let wx = (*p).x;
-                    let wy = (*p).y;
-                    let ww = if (*p).width.is_null() { 0.0 } else { *(*p).width };
-                    let wh = if (*p).height.is_null() { 0.0 } else { *(*p).height };
-                    ev.x >= wx && ev.x < wx + ww && ev.y >= wy && ev.y < wy + wh
+        let catcher_ma = MouseArea::new()?.on(MouseAreaEvent::MouseDown, move |ev| {
+            let p = cp.get() as *mut mocida::sys::UIWidget;
+            if p.is_null() {
+                return;
+            }
+            let inside = unsafe {
+                let wx = (*p).x;
+                let wy = (*p).y;
+                let ww = if (*p).width.is_null() {
+                    0.0
+                } else {
+                    *(*p).width
                 };
-                if !inside {
-                    let _ = s.borrow_mut().set("0".to_string());
-                }
-            });
+                let wh = if (*p).height.is_null() {
+                    0.0
+                } else {
+                    *(*p).height
+                };
+                ev.x >= wx && ev.x < wx + ww && ev.y >= wy && ev.y < wy + wh
+            };
+            if !inside {
+                let _ = s.borrow_mut().set("0".to_string());
+            }
+        });
         // The popup is ALWAYS rendered (hidden via `visible`), so this full-window
         // catcher persists and would eat every editor click. Enable it only while the
         // popup is shown (signal == "1"). Safe: the catcher isn't freed on close
@@ -1930,14 +1989,24 @@ fn build_stack(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
         let catcher_ptr = catcher_ma.as_ptr();
         let truthy = |v: &str| !(v.is_empty() || v == "0" || v == "false");
         let sp = sig.borrow().as_ptr();
-        unsafe { mocida::sys::UIMouseArea_SetEnabled(catcher_ptr, if truthy(&str_from_signal(sp)) { 1 } else { 0 }); }
+        unsafe {
+            mocida::sys::UIMouseArea_SetEnabled(
+                catcher_ptr,
+                if truthy(&str_from_signal(sp)) { 1 } else { 0 },
+            );
+        }
         let upd = move || unsafe {
-            mocida::sys::UIMouseArea_SetEnabled(catcher_ptr, if truthy(&str_from_signal(sp)) { 1 } else { 0 });
+            mocida::sys::UIMouseArea_SetEnabled(
+                catcher_ptr,
+                if truthy(&str_from_signal(sp)) { 1 } else { 0 },
+            );
         };
         if let Ok(sub) = sig.borrow_mut().subscribe(move |_| upd()) {
             ctx.reactive._subs.push(sub);
         }
-        let catcher = catcher_ma.into_widget_sized(100000.0, 100000.0)?.position(0.0, 0.0);
+        let catcher = catcher_ma
+            .into_widget_sized(100000.0, 100000.0)?
+            .position(0.0, 0.0);
         stack.add(catcher)?;
     }
 
@@ -1990,8 +2059,12 @@ fn build_stack(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     // dim_prop so they can be bound vars/signals (e.g. a floating popup container
     // positioned from `ac_x`/`ac_y`), not just literals like plain `place()`.
     let (mut x, mut y) = place(el, layout, w, h);
-    if let Some(px) = dim_prop(ctx, el, "x") { x = px; }
-    if let Some(py) = dim_prop(ctx, el, "y") { y = py; }
+    if let Some(px) = dim_prop(ctx, el, "x") {
+        x = px;
+    }
+    if let Some(py) = dim_prop(ctx, el, "y") {
+        y = py;
+    }
     let mut widget = stack.into_widget_sized(w, h)?.position(x, y);
     if let Some(op) = style::f32_prop(el, "opacity") {
         widget = widget.opacity(op);
@@ -2113,9 +2186,7 @@ fn build_glass(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     }
 
     let child_absolute = el.children.iter().any(|n| match n {
-        Node::Element(child) => {
-            find_prop(child, "x").is_some() && find_prop(child, "y").is_some()
-        }
+        Node::Element(child) => find_prop(child, "x").is_some() && find_prop(child, "y").is_some(),
         _ => false,
     });
     if child_absolute {
@@ -2189,8 +2260,12 @@ fn build_glass(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     let w = self_w_known.unwrap_or((inner_w + pl + pr).max(1.0));
     let h = self_h_known.unwrap_or((inner_h + pt + pb).max(1.0));
     let (mut x, mut y) = place(el, layout, w, h);
-    if let Some(px) = dim_prop(ctx, el, "x") { x = px; }
-    if let Some(py) = dim_prop(ctx, el, "y") { y = py; }
+    if let Some(px) = dim_prop(ctx, el, "x") {
+        x = px;
+    }
+    if let Some(py) = dim_prop(ctx, el, "y") {
+        y = py;
+    }
     let mut widget = glass.into_widget_sized(w, h)?.position(x, y);
     if let Some(op) = style::f32_prop(el, "opacity") {
         widget = widget.opacity(op);
@@ -2235,7 +2310,11 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
         .map(|ln| text_extent(ln, size).0)
         .fold(0.0_f32, f32::max);
     let (_full_w, line_h) = text_extent(&label, size);
-    let natural_w = if widest_line > 0.0 { widest_line } else { text_extent(&label, size).0 };
+    let natural_w = if widest_line > 0.0 {
+        widest_line
+    } else {
+        text_extent(&label, size).0
+    };
     let wrap_mode = style::enum_member(el, "wrap").and_then(|s| wrap_from(&s));
     let w = dim_prop(ctx, el, "width").unwrap_or(natural_w);
     let h = dim_prop(ctx, el, "height").unwrap_or_else(|| {
@@ -2817,12 +2896,15 @@ fn build_textarea(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
     // rebuild, so the editor keeps focus/caret/scroll while zooming. Mirrors the
     // progress-bar reactive value; disjoint field access (`signals` vs `_subs`)
     // keeps the subscribe + push from conflicting.
-    let size_name: Option<String> = ["size", "fontSize"].iter().find_map(|p| {
-        match find_prop(el, p).map(|pr| &pr.value) {
-            Some(PropValue::Expr(e)) => names_read(e).into_iter().find(|n| ctx.signal(n).is_some()),
-            _ => None,
-        }
-    });
+    let size_name: Option<String> =
+        ["size", "fontSize"]
+            .iter()
+            .find_map(|p| match find_prop(el, p).map(|pr| &pr.value) {
+                Some(PropValue::Expr(e)) => {
+                    names_read(e).into_iter().find(|n| ctx.signal(n).is_some())
+                }
+                _ => None,
+            });
     if let Some(name) = &size_name {
         if let Some(sig) = ctx.reactive.signals.get(name) {
             let sig_ptr = sig.borrow().as_ptr();
@@ -3501,8 +3583,10 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
     // flips the sign for a handle on the far edge of the resized element (e.g. a
     // panel docked on the right grows as its LEFT-edge handle moves left). The host
     // clamps the signal to a sane range.
-    let drag_x_sig = prop_string_value(ctx, el, "dragXSignal").and_then(|n| ctx.signal(&n).cloned());
-    let drag_y_sig = prop_string_value(ctx, el, "dragYSignal").and_then(|n| ctx.signal(&n).cloned());
+    let drag_x_sig =
+        prop_string_value(ctx, el, "dragXSignal").and_then(|n| ctx.signal(&n).cloned());
+    let drag_y_sig =
+        prop_string_value(ctx, el, "dragYSignal").and_then(|n| ctx.signal(&n).cloned());
     if drag_x_sig.is_some() || drag_y_sig.is_some() {
         area = area.draggable(true);
         // A resize handle gets the matching resize cursor automatically (↔ for a
@@ -3513,8 +3597,16 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
         } else {
             area = area.cursor(Cursor::NsResize);
         }
-        let inv_x: f32 = if prop_bool(el, "dragInvertX").unwrap_or(false) { -1.0 } else { 1.0 };
-        let inv_y: f32 = if prop_bool(el, "dragInvertY").unwrap_or(false) { -1.0 } else { 1.0 };
+        let inv_x: f32 = if prop_bool(el, "dragInvertX").unwrap_or(false) {
+            -1.0
+        } else {
+            1.0
+        };
+        let inv_y: f32 = if prop_bool(el, "dragInvertY").unwrap_or(false) {
+            -1.0
+        } else {
+            1.0
+        };
         // Accumulate the delta into the signal each drag tick. We DON'T flag the
         // tree dirty (no rebuild): a rebuild mid-drag would recreate — and thus
         // cancel — this MouseArea. Instead, signal-bound `width`/`height` props are
@@ -3541,12 +3633,18 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
     // renderer coords) into int signals — the color picker maps a click in the
     // sat/val square / hue bar to a value. Press-based (not drag) so the popup can
     // rebuild on each pick without cancelling an in-flight drag.
-    let click_x_sig = prop_string_value(ctx, el, "clickXSignal").and_then(|n| ctx.signal(&n).cloned());
-    let click_y_sig = prop_string_value(ctx, el, "clickYSignal").and_then(|n| ctx.signal(&n).cloned());
+    let click_x_sig =
+        prop_string_value(ctx, el, "clickXSignal").and_then(|n| ctx.signal(&n).cloned());
+    let click_y_sig =
+        prop_string_value(ctx, el, "clickYSignal").and_then(|n| ctx.signal(&n).cloned());
     if click_x_sig.is_some() || click_y_sig.is_some() {
         area = area.on(MouseAreaEvent::MouseDown, move |ev| {
-            if let Some(s) = &click_x_sig { let _ = s.borrow_mut().set(ev.x.round() as i32); }
-            if let Some(s) = &click_y_sig { let _ = s.borrow_mut().set(ev.y.round() as i32); }
+            if let Some(s) = &click_x_sig {
+                let _ = s.borrow_mut().set(ev.x.round() as i32);
+            }
+            if let Some(s) = &click_y_sig {
+                let _ = s.borrow_mut().set(ev.y.round() as i32);
+            }
         });
     }
 
@@ -3627,7 +3725,12 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
     // (subtle grey; red for close) without a structural rebuild.
     if let Some(hover_bg) = style::color_prop(el, "hoverBackground") {
         let rect_ptr = rect.as_ptr();
-        let normal = to_color(style::background(el).unwrap_or(Rgba { r: 0, g: 0, b: 0, a: 0 }));
+        let normal = to_color(style::background(el).unwrap_or(Rgba {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0,
+        }));
         let hover = to_color(hover_bg);
         let p_enter = rect_ptr as usize;
         let p_exit = rect_ptr as usize;
@@ -3649,8 +3752,12 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
     // for-loop aux var), mirroring build_rectangle. Without this a MouseArea only
     // flow-positions, so an absolutely-placed clickable box piled at the origin.
     let (mut x, mut y) = place(el, layout, w, h);
-    if let Some(px) = dim_prop(ctx, el, "x") { x = px; }
-    if let Some(py) = dim_prop(ctx, el, "y") { y = py; }
+    if let Some(px) = dim_prop(ctx, el, "x") {
+        x = px;
+    }
+    if let Some(py) = dim_prop(ctx, el, "y") {
+        y = py;
+    }
     Ok(apply_anchor(
         rect.into_widget_sized(w, h)?.position(x, y),
         style::anchor(el),
@@ -3873,8 +3980,18 @@ fn parse_hex_color(s: &str) -> Option<Rgba> {
     let h = s.strip_prefix('#')?;
     let byte = |i: usize| u8::from_str_radix(h.get(i..i + 2)?, 16).ok();
     match h.len() {
-        6 => Some(Rgba { r: byte(0)?, g: byte(2)?, b: byte(4)?, a: 255 }),
-        8 => Some(Rgba { r: byte(0)?, g: byte(2)?, b: byte(4)?, a: byte(6)? }),
+        6 => Some(Rgba {
+            r: byte(0)?,
+            g: byte(2)?,
+            b: byte(4)?,
+            a: 255,
+        }),
+        8 => Some(Rgba {
+            r: byte(0)?,
+            g: byte(2)?,
+            b: byte(4)?,
+            a: byte(6)?,
+        }),
         _ => None,
     }
 }
@@ -4199,7 +4316,12 @@ fn handler_apply_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn 
     };
     let int_pair: Option<(HandlerAction, Rc<RefCell<Signal<i32>>>)> = handler
         .action()
-        .filter(|a| matches!(a, HandlerAction::AddAssign { .. } | HandlerAction::SetInt { .. }))
+        .filter(|a| {
+            matches!(
+                a,
+                HandlerAction::AddAssign { .. } | HandlerAction::SetInt { .. }
+            )
+        })
         .and_then(|a| ctx.signal(a.name()).cloned().map(|s| (a, s)));
     type StrSet = (
         StrAction,
@@ -4989,10 +5111,18 @@ fn screen_member(base: &Expr, field: &str) -> Option<String> {
         return Some(n.to_string());
     }
     match (ns.as_str(), field) {
-        ("Screen", "safeTop") => Some(unsafe { mocida::sys::UIScreen_GetSafeArea().top }.to_string()),
-        ("Screen", "safeBottom") => Some(unsafe { mocida::sys::UIScreen_GetSafeArea().bottom }.to_string()),
-        ("Screen", "safeLeft") => Some(unsafe { mocida::sys::UIScreen_GetSafeArea().left }.to_string()),
-        ("Screen", "safeRight") => Some(unsafe { mocida::sys::UIScreen_GetSafeArea().right }.to_string()),
+        ("Screen", "safeTop") => {
+            Some(unsafe { mocida::sys::UIScreen_GetSafeArea().top }.to_string())
+        }
+        ("Screen", "safeBottom") => {
+            Some(unsafe { mocida::sys::UIScreen_GetSafeArea().bottom }.to_string())
+        }
+        ("Screen", "safeLeft") => {
+            Some(unsafe { mocida::sys::UIScreen_GetSafeArea().left }.to_string())
+        }
+        ("Screen", "safeRight") => {
+            Some(unsafe { mocida::sys::UIScreen_GetSafeArea().right }.to_string())
+        }
         ("Window", "title") | ("App", "title") => Some(unsafe {
             let p = mocida::sys::UIApp_GetTitleG();
             if p.is_null() {
@@ -5112,12 +5242,16 @@ fn subscribe_reactive_position(ctx: &mut Ctx, el: &Element, ptr: *mut mocida::sy
         .collect();
     let str_ptrs: Vec<(String, *mut mocida::sys::UISignal)> = reads
         .iter()
-        .filter_map(|n| ctx.string_signal(n).map(|s| (n.clone(), s.borrow().as_ptr())))
+        .filter_map(|n| {
+            ctx.string_signal(n)
+                .map(|s| (n.clone(), s.borrow().as_ptr()))
+        })
         .collect();
     let updater = move || {
         let mut vals = baked.clone();
         for (n, p) in &int_ptrs {
-            vals.insert(n.clone(), unsafe { mocida::sys::UISignal_GetInt(*p) } as f32);
+            vals.insert(n.clone(), unsafe { mocida::sys::UISignal_GetInt(*p) }
+                as f32);
         }
         for (n, p) in &str_ptrs {
             if let Ok(f) = unsafe { str_from_signal(*p) }.parse::<f32>() {
@@ -5174,7 +5308,9 @@ fn subscribe_reactive_visible(ctx: &mut Ctx, el: &Element, ptr: *mut mocida::sys
     let truthy = |s: &str| !(s.is_empty() || s == "0" || s == "false");
     if let Some(sig) = ctx.string_signal(&name).cloned() {
         let p = sig.borrow().as_ptr();
-        unsafe { (*ptr).visible = if truthy(&str_from_signal(p)) { 1 } else { 0 }; }
+        unsafe {
+            (*ptr).visible = if truthy(&str_from_signal(p)) { 1 } else { 0 };
+        }
         let updater = move || unsafe {
             (*ptr).visible = if truthy(&str_from_signal(p)) { 1 } else { 0 };
         };
@@ -5183,9 +5319,19 @@ fn subscribe_reactive_visible(ctx: &mut Ctx, el: &Element, ptr: *mut mocida::sys
         }
     } else if let Some(sig) = ctx.signal(&name).cloned() {
         let p = sig.borrow().as_ptr();
-        unsafe { (*ptr).visible = if mocida::sys::UISignal_GetInt(p) != 0 { 1 } else { 0 }; }
+        unsafe {
+            (*ptr).visible = if mocida::sys::UISignal_GetInt(p) != 0 {
+                1
+            } else {
+                0
+            };
+        }
         let updater = move || unsafe {
-            (*ptr).visible = if mocida::sys::UISignal_GetInt(p) != 0 { 1 } else { 0 };
+            (*ptr).visible = if mocida::sys::UISignal_GetInt(p) != 0 {
+                1
+            } else {
+                0
+            };
         };
         if let Ok(sub) = sig.borrow_mut().subscribe(move |_| updater()) {
             ctx.reactive._subs.push(sub);
@@ -5232,12 +5378,16 @@ fn subscribe_reactive_size(ctx: &mut Ctx, el: &Element, ptr: *mut mocida::sys::U
         .collect();
     let str_ptrs: Vec<(String, *mut mocida::sys::UISignal)> = reads
         .iter()
-        .filter_map(|n| ctx.string_signal(n).map(|s| (n.clone(), s.borrow().as_ptr())))
+        .filter_map(|n| {
+            ctx.string_signal(n)
+                .map(|s| (n.clone(), s.borrow().as_ptr()))
+        })
         .collect();
     let updater = move || {
         let mut vals = baked.clone();
         for (n, p) in &int_ptrs {
-            vals.insert(n.clone(), unsafe { mocida::sys::UISignal_GetInt(*p) } as f32);
+            vals.insert(n.clone(), unsafe { mocida::sys::UISignal_GetInt(*p) }
+                as f32);
         }
         for (n, p) in &str_ptrs {
             if let Ok(f) = unsafe { str_from_signal(*p) }.parse::<f32>() {
