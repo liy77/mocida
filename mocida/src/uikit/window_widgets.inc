@@ -3674,3 +3674,27 @@ static void RenderWidget_Dropdown(UIWindow* window, UIWidget* el,
         }
 }
 
+
+static void RenderWidget_Canvas(UIWindow* window, UIWidget* el,
+                                UIWidgetBase* base, float op) {
+    UICanvas* canvas = (UICanvas*)base;
+    if (!el->width || !el->height) return;
+    (void)op; /* widget opacity requires offscreen target; deferred to future milestone */
+
+    FlushRenderBatch(window->sdlRenderer);
+
+    SDL_Rect clip = {
+        (int)el->x, (int)el->y,
+        (int)ceilf(*el->width), (int)ceilf(*el->height)
+    };
+    SDL_SetRenderClipRect(window->sdlRenderer, &clip);
+
+    canvas->currentRenderer = window->sdlRenderer;
+    if (canvas->onFrame) {
+        canvas->onFrame(canvas, window->sdlRenderer, canvas->onFrameUd);
+    }
+    canvas->currentRenderer = NULL;
+
+    FlushRenderBatch(window->sdlRenderer);
+    SDL_SetRenderClipRect(window->sdlRenderer, NULL);
+}

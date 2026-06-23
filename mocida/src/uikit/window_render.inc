@@ -376,5 +376,9 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
         RenderWidget_Dropdown(window, el, base, op);
         return;
     }
+    if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_CANVAS)) {
+        RenderWidget_Canvas(window, el, base, op);
+        return;
+    }
 
 }

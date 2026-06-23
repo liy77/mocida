@@ -14,6 +14,7 @@
 #include <uikit/popup.h>
 #include <uikit/video.h>
 #include <uikit/file_drop.h>
+#include "canvas_internal.h"
 #include <uikit/asset.h>
 #include <uikit/overlay.h>
 #include <uikit/debug.h>

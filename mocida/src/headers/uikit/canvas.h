@@ -3,6 +3,7 @@
 
 #include <SDL3/SDL.h>
 #include <uikit/widget.h>
+#include <uikit/children.h>
 #include <uikit/mouse_area.h>
 #include <uikit/color.h>
 #include <uikit/image.h>

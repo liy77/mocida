@@ -27,6 +27,7 @@
 #include <uikit/popup.h>
 #include <uikit/file_drop.h>
 #include <uikit/anim.h>
+#include <uikit/canvas.h>
 #include <uikit/asset.h>
 #include <uikit/crash.h>
 #include <uikit/font.h>
@@ -634,6 +635,7 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
             // WebView2 composition-mode visuals have no native message
             // loop - forward mouse motion via SendMouseInput.
             UIWebView_DispatchMouseMotion  (app->window->children, rx, ry);
+            UICanvas_DispatchMouseMove     (app->window->children, rx, ry);
             UICursor_Apply(PickHoverCursor(app->window->children, rx, ry));
             break;
         }
@@ -664,6 +666,7 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
                 UITabView_DispatchMouseDown  (app->window->children, rx, ry, event->button.button);
                 UIDialog_DispatchMouseDown   (app->window->children, rx, ry, event->button.button);
                 UIPopup_DispatchMouseDown    (app->window->children, rx, ry, event->button.button);
+                UICanvas_DispatchMouseDown   (app->window->children, rx, ry, event->button.button);
             }
             break;
         }
@@ -708,6 +711,7 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
                 UITextField_DispatchMouseUp (app->window->children, rx, ry, event->button.button);
                 UITextArea_DispatchMouseUp  (app->window->children, rx, ry, event->button.button);
                 UIText_DispatchMouseUp      (app->window->children, rx, ry, event->button.button);
+                UICanvas_DispatchMouseUp    (app->window->children, rx, ry, event->button.button);
             }
             break;
         }
