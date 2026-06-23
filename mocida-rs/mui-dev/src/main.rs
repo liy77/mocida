@@ -28,6 +28,7 @@ use std::time::{Duration, SystemTime};
 use mocida::text::{get_font, search_fonts};
 use mocida::{App, Children, Color};
 use mui_runtime::device_simulator::DeviceOrientation;
+use mui_runtime::device_profiles::PROFILE_NAMES;
 use mui_runtime::Reactive;
 use mui_runtime::Runtime;
 
@@ -40,7 +41,7 @@ view Hello(name: string = "world") {
 }
 "#;
 
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 struct CliOptions {
     /// When set, minimize the window right after show so it doesn't steal
     /// focus from the desktop session the user is currently using. The
@@ -64,6 +65,20 @@ struct CliOptions {
     path: Option<String>,
 }
 
+impl Default for CliOptions {
+    fn default() -> Self {
+        Self {
+            minimize: false,
+            display: None,
+            device: None,
+            device_scale: 1.0,
+            device_frame: None,
+            landscape: false,
+            path: None,
+        }
+    }
+}
+
 fn parse_args() -> CliOptions {
     let mut opts = CliOptions::default();
     let mut it = std::env::args().skip(1);
@@ -71,26 +86,20 @@ fn parse_args() -> CliOptions {
         match a.as_str() {
             "--minimized" | "-m" => opts.minimize = true,
             "--display" | "-d" => {
-                if let Some(v) = it.next() {
-                    if let Ok(n) = v.parse::<u32>() {
-                        opts.display = Some(n);
-                    }
+                let v = require_arg(&a, &mut it);
+                if let Ok(n) = v.parse::<u32>() {
+                    opts.display = Some(n);
                 }
             }
             "--device" => {
-                if let Some(v) = it.next() {
-                    opts.device = Some(v);
-                }
+                opts.device = Some(require_arg(&a, &mut it));
             }
             "--device-scale" => {
-                if let Some(v) = it.next() {
-                    opts.device_scale = v.parse::<f32>().unwrap_or(1.0);
-                }
+                let v = require_arg(&a, &mut it);
+                opts.device_scale = v.parse::<f32>().unwrap_or(1.0);
             }
             "--device-frame" => {
-                if let Some(v) = it.next() {
-                    opts.device_frame = Some(v);
-                }
+                opts.device_frame = Some(require_arg(&a, &mut it));
             }
             "--landscape" => opts.landscape = true,
             "--help" | "-h" => {
@@ -99,12 +108,13 @@ fn parse_args() -> CliOptions {
 
                        --minimized, -m       start minimized (don't steal focus)
                        --display N, -d N     place window on display N (0 = primary)
-                       --device <name>       enable simulator (iphone15, iphone16, galaxy_s24, galaxy_s25ultra, …)
+                       --device <name>       enable simulator ({})
                        --device-scale <s>    host UI scale factor (default 1.0)
                        --device-frame <png>  optional PNG frame asset
                        --landscape           start in landscape orientation
 
-                     hot-reload: edit + save <file.mui> and the window updates in place."
+                     hot-reload: edit + save <file.mui> and the window updates in place.",
+                    PROFILE_NAMES.join(", ")
                 );
                 std::process::exit(0);
             }
@@ -116,6 +126,16 @@ fn parse_args() -> CliOptions {
         }
     }
     opts
+}
+
+fn require_arg(flag: &str, it: &mut impl Iterator<Item = String>) -> String {
+    match it.next() {
+        Some(v) => v,
+        None => {
+            eprintln!("mui-dev: '{flag}' requires an argument (try --help)");
+            std::process::exit(2);
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -292,7 +312,8 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(name) = &opts.device {
         let Some(profile) = mui_runtime::device_profiles::lookup(name) else {
             eprintln!(
-                "mui-dev: unknown device profile '{name}'\n\nSupported profiles: iphone15, iphone15pro, iphone15promax, iphone16, galaxy_s24, galaxy_s24plus, galaxy_s25, galaxy_s25ultra"
+                "mui-dev: unknown device profile '{name}'\n\nSupported profiles: {}",
+                PROFILE_NAMES.join(", ")
             );
             std::process::exit(2);
         };
@@ -302,6 +323,8 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
             DeviceOrientation::Portrait
         };
         let frame_path = opts.device_frame.as_deref();
+        // SAFETY: `app` was created above and outlives this temporary `Runtime`
+        // wrapper, which is only used to configure the device simulator.
         let mut runtime = unsafe { Runtime::from_raw(app.as_ptr()) };
         if let Err(e) = runtime.enable_device_simulator(
             profile,

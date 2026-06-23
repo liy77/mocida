@@ -76,6 +76,17 @@ pub const GALAXY_S25_ULTRA: DeviceProfile = DeviceProfile::framed(
     "galaxy_s25ultra", 384, 832, 24, 24, 0, 0, 3.2,
 );
 
+pub const PROFILE_NAMES: &[&str] = &[
+    "iphone15",
+    "iphone15pro",
+    "iphone15promax",
+    "iphone16",
+    "galaxy_s24",
+    "galaxy_s24plus",
+    "galaxy_s25",
+    "galaxy_s25ultra",
+];
+
 pub fn lookup(name: &str) -> Option<&'static DeviceProfile> {
     Some(match name {
         "iphone15" => &IPHONE_15,
