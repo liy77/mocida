@@ -5,6 +5,7 @@
 #define UI_WIDGET_TEXT "@uikit/text"
 #define UI_WIDGET_WIDGET "@uikit/widget" // Base widget type
 #define UI_WIDGET_IMAGE "@uikit/image"
+#define UI_WIDGET_CANVAS "@uikit/canvas"
 
 #define UI_DYNAMIC_SIZE -1.0f // Dynamic size indicator
 
