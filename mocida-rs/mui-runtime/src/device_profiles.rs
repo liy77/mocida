@@ -20,6 +20,7 @@ pub struct DeviceProfile {
 
 impl DeviceProfile {
     /// Generic frame geometry: 20 px side bezels, 70 px top bezel for camera.
+    #[allow(clippy::too_many_arguments)]
     const fn framed(
         name: &'static str,
         width: i32,

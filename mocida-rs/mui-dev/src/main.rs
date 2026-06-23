@@ -55,7 +55,7 @@ struct CliOptions {
     display: Option<u32>,
     /// Named device profile to simulate (e.g. `iphone15`, `galaxy_s24`).
     device: Option<String>,
-    /// Host UI scale factor for the simulator (default 1.0).
+    /// Host UI scale factor for the simulator (default 2.0).
     device_scale: f32,
     /// Optional PNG frame asset to draw around the simulated screen.
     device_frame: Option<String>,
@@ -71,7 +71,7 @@ impl Default for CliOptions {
             minimize: false,
             display: None,
             device: None,
-            device_scale: 1.0,
+            device_scale: 2.0,
             device_frame: None,
             landscape: false,
             path: None,
@@ -101,6 +101,10 @@ fn parse_args() -> CliOptions {
                     eprintln!("mui-dev: --device-scale requires a valid number");
                     std::process::exit(2);
                 });
+                if opts.device_scale <= 0.0 {
+                    eprintln!("mui-dev: --device-scale must be positive");
+                    std::process::exit(2);
+                }
             }
             "--device-frame" => {
                 opts.device_frame = Some(require_arg(&a, &mut it));
@@ -113,7 +117,7 @@ fn parse_args() -> CliOptions {
                        --minimized, -m       start minimized (don't steal focus)
                        --display N, -d N     place window on display N (0 = primary)
                        --device <name>       enable simulator ({})
-                       --device-scale <s>    host UI scale factor (default 1.0)
+                       --device-scale <s>    host UI scale factor (default 2.0)
                        --device-frame <png>  optional PNG frame asset
                        --landscape           start in landscape orientation
 
@@ -324,6 +328,21 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
         } else {
             DeviceOrientation::Portrait
         };
+        let window_w = ((if opts.landscape {
+            profile.frame_h
+        } else {
+            profile.frame_w
+        } as f32)
+            * opts.device_scale) as i32;
+        let window_h = ((if opts.landscape {
+            profile.frame_w
+        } else {
+            profile.frame_h
+        } as f32)
+            * opts.device_scale) as i32;
+        app.set_window_size(window_w, window_h)
+            .set_min_size(window_w, window_h)
+            .set_max_size(window_w, window_h);
         let frame_path = opts.device_frame.as_deref();
         // SAFETY: `app` was created above and outlives this temporary `Runtime`
         // wrapper, which is only used to configure the device simulator.

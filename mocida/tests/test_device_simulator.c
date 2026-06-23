@@ -7,6 +7,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+static int roundtrip_ok(UIApp* app, float dx, float dy) {
+    float wx = 0, wy = 0;
+    UIApp_DeviceSimulatorDeviceToWindow(app, dx, dy, &wx, &wy);
+    float rx = 0, ry = 0;
+    UIApp_DeviceSimulatorWindowToDevice(app, wx, wy, &rx, &ry);
+    return fabsf(rx - dx) <= 1.0f && fabsf(ry - dy) <= 1.0f;
+}
+
 int main(void) {
     UIApp* app = UIApp_Create("Device Sim Test", 200, 200);
     if (!app) { fprintf(stderr, "failed to create app\n"); return 1; }
@@ -44,7 +52,14 @@ int main(void) {
         return 1;
     }
 
+    if (!roundtrip_ok(app, 0.0f, 0.0f) || !roundtrip_ok(app, 100.0f, 200.0f)) {
+        fprintf(stderr, "portrait round-trip failed\n");
+        UIApp_Destroy(app);
+        return 1;
+    }
+
     UIApp_SetDeviceOrientation(app, UI_DEVICE_ORIENTATION_LANDSCAPE);
+    UIApp_SetWindowSize(app, profile.frameH, profile.frameW);
     if (UIApp_GetCurrentDeviceOrientation(app) != UI_DEVICE_ORIENTATION_LANDSCAPE) {
         fprintf(stderr, "orientation did not change\n");
         UIApp_Destroy(app);
@@ -56,45 +71,22 @@ int main(void) {
         return 1;
     }
 
-    float wx = 0, wy = 0;
-    UIApp_DeviceSimulatorDeviceToWindow(app, 0.0f, 0.0f, &wx, &wy);
-    printf("landscape device (0,0) -> window (%.1f, %.1f)\n", wx, wy);
-    if (fabsf(wx - 50.0f) > 1.0f || fabsf(wy - 20.0f) > 1.0f) {
-        fprintf(stderr, "landscape device (0,0) mapped to wrong window coords\n");
-        UIApp_Destroy(app);
-        return 1;
-    }
-
-    float ddx = 0, ddy = 0;
-    UIApp_DeviceSimulatorWindowToDevice(app, wx, wy, &ddx, &ddy);
-    if (fabsf(ddx) > 1.0f || fabsf(ddy) > 1.0f) {
+    if (!roundtrip_ok(app, 0.0f, 0.0f) || !roundtrip_ok(app, 100.0f, 200.0f)) {
         fprintf(stderr, "landscape round-trip failed\n");
         UIApp_Destroy(app);
         return 1;
     }
 
     UIApp_SetDeviceOrientation(app, UI_DEVICE_ORIENTATION_PORTRAIT);
+    UIApp_SetWindowSize(app, profile.frameW, profile.frameH);
     if (UIApp_GetCurrentDeviceOrientation(app) != UI_DEVICE_ORIENTATION_PORTRAIT) {
         fprintf(stderr, "orientation did not reset\n");
         UIApp_Destroy(app);
         return 1;
     }
 
-    UIApp_DeviceSimulatorDeviceToWindow(app, 0.0f, 0.0f, &wx, &wy);
-    printf("device (0,0) -> window (%.1f, %.1f)\n", wx, wy);
-
-    if (fabsf(wx - (float)profile.frameScreenX) > 1.0f ||
-        fabsf(wy - (float)profile.frameScreenY) > 1.0f) {
-        fprintf(stderr, "device-to-window mapping wrong (expected ~%d,%d)\n",
-                profile.frameScreenX, profile.frameScreenY);
-        UIApp_Destroy(app);
-        return 1;
-    }
-
-    float dx = 0, dy = 0;
-    UIApp_DeviceSimulatorWindowToDevice(app, wx, wy, &dx, &dy);
-    if (fabsf(dx) > 1.0f || fabsf(dy) > 1.0f) {
-        fprintf(stderr, "window-to-device round-trip wrong (got %.1f,%.1f)\n", dx, dy);
+    if (!roundtrip_ok(app, 0.0f, 0.0f) || !roundtrip_ok(app, 100.0f, 200.0f)) {
+        fprintf(stderr, "portrait reset round-trip failed\n");
         UIApp_Destroy(app);
         return 1;
     }

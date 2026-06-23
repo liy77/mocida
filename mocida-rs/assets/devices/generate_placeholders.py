@@ -12,9 +12,13 @@ from PIL import Image, ImageDraw
 # Notch styling is a generic placeholder shared across all devices.
 DEVICES = [
     ("iphone15", 433, 972, 20, 70, 393, 852),
+    ("iphone15pro", 433, 972, 20, 70, 393, 852),
+    ("iphone15promax", 470, 1052, 20, 70, 430, 932),
     ("iphone16", 433, 972, 20, 70, 393, 852),
     ("galaxy_s24", 400, 900, 20, 70, 360, 780),
+    ("galaxy_s24plus", 424, 952, 20, 70, 384, 832),
     ("galaxy_s25", 400, 900, 20, 70, 360, 780),
+    ("galaxy_s25ultra", 424, 952, 20, 70, 384, 832),
 ]
 
 OUT_DIR = Path(__file__).parent
@@ -28,7 +32,7 @@ def make_frame(name: str, frame_w: int, frame_h: int, screen_x: int, screen_y: i
     draw.rounded_rectangle(body, radius=40, fill=(30, 30, 35, 255), outline=(60, 60, 70, 255), width=4)
     # Screen area
     screen = (screen_x, screen_y, screen_x + screen_w - 1, screen_y + screen_h - 1)
-    draw.rectangle(screen, fill=(10, 100, 200, 255))
+    draw.rectangle(screen, fill=(0, 0, 0, 0))
     # Camera / speaker notch bar (generic placeholder, not device-specific)
     notch_w = 120
     notch_h = 28

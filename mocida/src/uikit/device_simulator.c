@@ -206,19 +206,6 @@ void UIApp_SetDeviceOrientation(UIApp* app, UIDeviceOrientation orientation) {
     UIWindow_DeviceSimulatorSetOrientation(app->window, orientation);
 }
 
-// Stub implementations for functions declared in headers but not yet fully implemented.
-// These will be replaced by later tasks.
-
-bool UIApp_GetDeviceSimulatorViewport(UIApp* app, SDL_FRect* outViewport) {
-    (void)app; (void)outViewport;
-    return false;
-}
-
-SDL_Texture* UIApp_GetDeviceSimulatorRenderTarget(UIApp* app) {
-    (void)app;
-    return NULL;
-}
-
 void UIApp_DeviceSimulatorWindowToDevice(UIApp* app, float wx, float wy,
                                          float* dx, float* dy) {
     if (!app || !app->window) { if (dx) *dx = wx; if (dy) *dy = wy; return; }
@@ -240,9 +227,10 @@ void UIWindow_DeviceSimulatorWindowToDevice(UIWindow* window,
     const float scale = state->hostScale;
     const int landscape = state->orientation == UI_DEVICE_ORIENTATION_LANDSCAPE;
 
-    float hostW = (float)p->frameW * scale;
-    float hostH = (float)p->frameH * scale;
-    if (landscape) { float t = hostW; hostW = hostH; hostH = t; }
+    int rawW = 0, rawH = 0;
+    if (window && window->sdlWindow) SDL_GetWindowSize(window->sdlWindow, &rawW, &rawH);
+    float hostW = (float)rawW;
+    float hostH = (float)rawH;
     float cx = hostW * 0.5f;
     float cy = hostH * 0.5f;
 
@@ -292,9 +280,10 @@ void UIWindow_DeviceSimulatorDeviceToWindow(UIWindow* window,
         fy = (float)p->frameScreenY + dy * ((float)p->frameScreenH / (float)dh);
     }
 
-    float hostW = (float)p->frameW * scale;
-    float hostH = (float)p->frameH * scale;
-    if (landscape) { float t = hostW; hostW = hostH; hostH = t; }
+    int rawW = 0, rawH = 0;
+    if (window && window->sdlWindow) SDL_GetWindowSize(window->sdlWindow, &rawW, &rawH);
+    float hostW = (float)rawW;
+    float hostH = (float)rawH;
     float cx = hostW * 0.5f;
     float cy = hostH * 0.5f;
 

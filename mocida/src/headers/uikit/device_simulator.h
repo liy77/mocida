@@ -44,9 +44,6 @@ const UIDeviceProfile* UIApp_GetCurrentDeviceProfile(UIApp* app);
 UIDeviceOrientation UIApp_GetCurrentDeviceOrientation(UIApp* app);
 void UIApp_SetDeviceOrientation(UIApp* app, UIDeviceOrientation orientation);
 
-bool UIApp_GetDeviceSimulatorViewport(UIApp* app, SDL_FRect* outViewport);
-SDL_Texture* UIApp_GetDeviceSimulatorRenderTarget(UIApp* app);
-
 void UIApp_DeviceSimulatorWindowToDevice(UIApp* app, float wx, float wy,
                                          float* dx, float* dy);
 void UIApp_DeviceSimulatorDeviceToWindow(UIApp* app, float dx, float dy,
