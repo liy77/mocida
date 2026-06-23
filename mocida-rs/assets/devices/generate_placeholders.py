@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Generate placeholder device frame PNGs for the mui-dev simulator."""
+"""Generate placeholder device frame PNGs for the mui-dev simulator.
+
+Frame geometry (bezels and screen offsets) must match the logic in
+DeviceProfile::framed in mocida-rs/mui-runtime/src/device_profiles.rs.
+"""
 
 from pathlib import Path
 from PIL import Image, ImageDraw
 
+# Each tuple is (name, frame_w, frame_h, screen_x, screen_y, screen_w, screen_h).
+# Notch styling is a generic placeholder shared across all devices.
 DEVICES = [
     ("iphone15", 433, 972, 20, 70, 393, 852),
     ("iphone16", 433, 972, 20, 70, 393, 852),
@@ -23,7 +29,7 @@ def make_frame(name: str, frame_w: int, frame_h: int, screen_x: int, screen_y: i
     # Screen area
     screen = (screen_x, screen_y, screen_x + screen_w - 1, screen_y + screen_h - 1)
     draw.rectangle(screen, fill=(10, 100, 200, 255))
-    # Camera / speaker notch bar
+    # Camera / speaker notch bar (generic placeholder, not device-specific)
     notch_w = 120
     notch_h = 28
     notch_x = (frame_w - notch_w) // 2
