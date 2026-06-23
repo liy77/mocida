@@ -226,3 +226,188 @@ UICanvas* UICanvas_Scale(UICanvas* canvas, float x, float y) {
     MatMul(CurState(canvas)->matrix, t, CurState(canvas)->matrix);
     return canvas;
 }
+
+/* ----------------------------------------------------------------------
+ * Helpers de renderização
+ * ---------------------------------------------------------------------- */
+
+static void SetDrawColor(SDL_Renderer* r, UIColor c, float alpha) {
+    SDL_SetRenderDrawColor(r,
+        (Uint8)SDL_clamp((int)c.r, 0, 255),
+        (Uint8)SDL_clamp((int)c.g, 0, 255),
+        (Uint8)SDL_clamp((int)c.b, 0, 255),
+        (Uint8)SDL_clamp((int)(c.a * alpha * 255.0f), 0, 255));
+}
+
+static void TransformPoint(UICanvas* canvas, float x, float y, float* ox, float* oy) {
+    float* m = CurState(canvas)->matrix;
+    *ox = m[0]*x + m[1]*y + m[2];
+    *oy = m[3]*x + m[4]*y + m[5];
+}
+
+/* ----------------------------------------------------------------------
+ * Cache mínimo de fontes abertas: (path, size) -> TTF_Font*
+ * ---------------------------------------------------------------------- */
+
+typedef struct {
+    char* path;
+    float size;
+    TTF_Font* font;
+} CanvasFontCacheEntry;
+
+static CanvasFontCacheEntry* s_fontCache = NULL;
+static int s_fontCacheCount = 0;
+static int s_fontCacheCap = 0;
+
+static TTF_Font* CanvasGetFont(const char* family, float size) {
+    char* path = UIGetFont(family);
+    if (!path) path = (char*)UIGetDefaultFontPath();
+    if (!path) return NULL;
+    for (int i = 0; i < s_fontCacheCount; i++) {
+        if (s_fontCache[i].size == size && strcmp(s_fontCache[i].path, path) == 0) {
+            return s_fontCache[i].font;
+        }
+    }
+    TTF_Font* font = TTF_OpenFont(path, size);
+    if (!font) return NULL;
+    if (s_fontCacheCount >= s_fontCacheCap) {
+        s_fontCacheCap = s_fontCacheCap ? s_fontCacheCap * 2 : 8;
+        s_fontCache = (CanvasFontCacheEntry*)realloc(s_fontCache, s_fontCacheCap * sizeof(*s_fontCache));
+    }
+    s_fontCache[s_fontCacheCount].path = strdup(path);
+    s_fontCache[s_fontCacheCount].size = size;
+    s_fontCache[s_fontCacheCount].font = font;
+    s_fontCacheCount++;
+    return font;
+}
+
+/* ----------------------------------------------------------------------
+ * Primitivas imediatas
+ * ---------------------------------------------------------------------- */
+
+UICanvas* UICanvas_FillRect(UICanvas* canvas, float x, float y, float w, float h) {
+    if (!canvas) return NULL;
+    SDL_Renderer* r = UICanvas_GetRenderer(canvas);
+    if (!r) return canvas;
+    SetDrawColor(r, CurState(canvas)->fillColor, CurState(canvas)->globalAlpha);
+    SDL_SetRenderDrawBlendMode(r, CurState(canvas)->blendMode);
+    float x0, y0, x1, y1, x2, y2, x3, y3;
+    TransformPoint(canvas, x,   y,   &x0, &y0);
+    TransformPoint(canvas, x+w, y,   &x1, &y1);
+    TransformPoint(canvas, x+w, y+h, &x2, &y2);
+    TransformPoint(canvas, x,   y+h, &x3, &y3);
+    SDL_Vertex v[4];
+    v[0].position = (SDL_FPoint){ x0, y0 }; v[0].tex_coord = (SDL_FPoint){0,0}; v[0].color = (SDL_FColor){1,1,1,1};
+    v[1].position = (SDL_FPoint){ x1, y1 }; v[1].tex_coord = (SDL_FPoint){0,0}; v[1].color = (SDL_FColor){1,1,1,1};
+    v[2].position = (SDL_FPoint){ x2, y2 }; v[2].tex_coord = (SDL_FPoint){0,0}; v[2].color = (SDL_FColor){1,1,1,1};
+    v[3].position = (SDL_FPoint){ x3, y3 }; v[3].tex_coord = (SDL_FPoint){0,0}; v[3].color = (SDL_FColor){1,1,1,1};
+    int idx[6] = { 0,1,2, 0,2,3 };
+    SDL_RenderGeometry(r, NULL, v, 4, idx, 6);
+    return canvas;
+}
+
+UICanvas* UICanvas_StrokeRect(UICanvas* canvas, float x, float y, float w, float h) {
+    if (!canvas) return NULL;
+    SDL_Renderer* r = UICanvas_GetRenderer(canvas);
+    if (!r) return canvas;
+    SetDrawColor(r, CurState(canvas)->strokeColor, CurState(canvas)->globalAlpha);
+    SDL_SetRenderDrawBlendMode(r, CurState(canvas)->blendMode);
+    float x0, y0;
+    TransformPoint(canvas, x, y, &x0, &y0);
+    SDL_FRect rect = { x0, y0, w, h };
+    SDL_RenderRect(r, &rect);
+    return canvas;
+}
+
+UICanvas* UICanvas_FillCircle(UICanvas* canvas, float x, float y, float radius) {
+    if (!canvas || radius <= 0.0f) return canvas;
+    SDL_Renderer* r = UICanvas_GetRenderer(canvas);
+    if (!r) return canvas;
+    const int segs = SDL_max(16, (int)(radius * 2.0f));
+    SDL_Vertex* v = (SDL_Vertex*)calloc((size_t)(segs + 2), sizeof(SDL_Vertex));
+    int* idx = (int*)calloc((size_t)(segs * 3), sizeof(int));
+    if (!v || !idx) { free(v); free(idx); return canvas; }
+    float cx, cy;
+    TransformPoint(canvas, x, y, &cx, &cy);
+    v[0].position = (SDL_FPoint){ cx, cy };
+    v[0].color = (SDL_FColor){1,1,1,1};
+    for (int i = 0; i <= segs; i++) {
+        float a = (float)i / (float)segs * 2.0f * (float)M_PI;
+        float px = cx + cosf(a) * radius;
+        float py = cy + sinf(a) * radius;
+        v[i+1].position = (SDL_FPoint){ px, py };
+        v[i+1].color = (SDL_FColor){1,1,1,1};
+    }
+    for (int i = 0; i < segs; i++) {
+        idx[i*3+0] = 0;
+        idx[i*3+1] = i+1;
+        idx[i*3+2] = i+2;
+    }
+    SetDrawColor(r, CurState(canvas)->fillColor, CurState(canvas)->globalAlpha);
+    SDL_SetRenderDrawBlendMode(r, CurState(canvas)->blendMode);
+    SDL_RenderGeometry(r, NULL, v, segs + 2, idx, segs * 3);
+    free(v); free(idx);
+    return canvas;
+}
+
+UICanvas* UICanvas_StrokeCircle(UICanvas* canvas, float x, float y, float radius) {
+    if (!canvas || radius <= 0.0f) return canvas;
+    SDL_Renderer* r = UICanvas_GetRenderer(canvas);
+    if (!r) return canvas;
+    float cx, cy;
+    TransformPoint(canvas, x, y, &cx, &cy);
+    SetDrawColor(r, CurState(canvas)->strokeColor, CurState(canvas)->globalAlpha);
+    SDL_SetRenderDrawBlendMode(r, CurState(canvas)->blendMode);
+    const int segs = SDL_max(16, (int)(radius * 2.0f));
+    SDL_FPoint* pts = (SDL_FPoint*)calloc((size_t)(segs + 1), sizeof(SDL_FPoint));
+    if (!pts) return canvas;
+    for (int i = 0; i <= segs; i++) {
+        float a = (float)i / (float)segs * 2.0f * (float)M_PI;
+        pts[i].x = cx + cosf(a) * radius;
+        pts[i].y = cy + sinf(a) * radius;
+    }
+    SDL_RenderLines(r, pts, segs + 1);
+    free(pts);
+    return canvas;
+}
+
+UICanvas* UICanvas_DrawImage(UICanvas* canvas, UIImage* image, float x, float y, float w, float h) {
+    if (!canvas || !image) return canvas;
+    SDL_Renderer* r = UICanvas_GetRenderer(canvas);
+    if (!r) return canvas;
+    SDL_Texture* tex = image->__SDL_texture;
+    if (!tex) return canvas;
+    float x0, y0;
+    TransformPoint(canvas, x, y, &x0, &y0);
+    SDL_FRect dst = { x0, y0, w, h };
+    SDL_SetTextureAlphaMod(tex, (Uint8)SDL_clamp((int)(CurState(canvas)->globalAlpha * 255.0f), 0, 255));
+    SDL_SetTextureBlendMode(tex, CurState(canvas)->blendMode);
+    SDL_RenderTexture(r, tex, NULL, &dst);
+    SDL_SetTextureAlphaMod(tex, 255);
+    return canvas;
+}
+
+UICanvas* UICanvas_DrawText(UICanvas* canvas, const char* text, float x, float y,
+                            const char* fontFamily, float size) {
+    if (!canvas || !text || !fontFamily || size <= 0.0f) return canvas;
+    SDL_Renderer* r = UICanvas_GetRenderer(canvas);
+    if (!r) return canvas;
+    TTF_Font* font = CanvasGetFont(fontFamily, size);
+    if (!font) return canvas;
+    UIColor c = CurState(canvas)->fillColor;
+    SDL_Color sc = { (Uint8)c.r, (Uint8)c.g, (Uint8)c.b,
+                     (Uint8)SDL_clamp((int)(c.a * CurState(canvas)->globalAlpha * 255.0f), 0, 255) };
+    SDL_Surface* surf = TTF_RenderText_Blended(font, text, strlen(text), sc);
+    if (!surf) return canvas;
+    SDL_Texture* tex = SDL_CreateTextureFromSurface(r, surf);
+    SDL_DestroySurface(surf);
+    if (!tex) return canvas;
+    float tw, th;
+    SDL_GetTextureSize(tex, &tw, &th);
+    float x0, y0;
+    TransformPoint(canvas, x, y, &x0, &y0);
+    SDL_FRect dst = { x0, y0, tw, th };
+    SDL_RenderTexture(r, tex, NULL, &dst);
+    SDL_DestroyTexture(tex);
+    return canvas;
+}
