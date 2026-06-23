@@ -70,6 +70,7 @@ pub fn build_reactive_env(reactive: &Reactive) -> ReactiveEnv {
     env
 }
 
+pub mod device_profiles;
 mod highlight;
 mod layout;
 use layout::Layout;
@@ -4862,6 +4863,10 @@ fn screen_member(base: &Expr, field: &str) -> Option<String> {
         return Some(n.to_string());
     }
     match (ns.as_str(), field) {
+        ("Screen", "safeTop") => Some(unsafe { mocida::sys::UIScreen_GetSafeArea().top }.to_string()),
+        ("Screen", "safeBottom") => Some(unsafe { mocida::sys::UIScreen_GetSafeArea().bottom }.to_string()),
+        ("Screen", "safeLeft") => Some(unsafe { mocida::sys::UIScreen_GetSafeArea().left }.to_string()),
+        ("Screen", "safeRight") => Some(unsafe { mocida::sys::UIScreen_GetSafeArea().right }.to_string()),
         ("Window", "title") | ("App", "title") => Some(unsafe {
             let p = mocida::sys::UIApp_GetTitleG();
             if p.is_null() {
