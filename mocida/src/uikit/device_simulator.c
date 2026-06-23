@@ -238,21 +238,37 @@ void UIWindow_DeviceSimulatorWindowToDevice(UIWindow* window,
     if (!state || !dx || !dy) { if (dx) *dx = wx; if (dy) *dy = wy; return; }
     const UIDeviceProfile* p = &state->profile;
     const float scale = state->hostScale;
-    int hostW = 0, hostH = 0;
-    if (window && window->sdlWindow) SDL_GetWindowSize(window->sdlWindow, &hostW, &hostH);
+    const int landscape = state->orientation == UI_DEVICE_ORIENTATION_LANDSCAPE;
+
+    float hostW = (float)p->frameW * scale;
+    float hostH = (float)p->frameH * scale;
+    if (landscape) { float t = hostW; hostW = hostH; hostH = t; }
     float cx = hostW * 0.5f;
     float cy = hostH * 0.5f;
 
-    int cosA = (state->orientation == UI_DEVICE_ORIENTATION_LANDSCAPE) ? 0 : 1;
-    int sinA = (state->orientation == UI_DEVICE_ORIENTATION_LANDSCAPE) ? -1 : 0;
-
-    float fx = p->frameW * 0.5f + ((wx - cx) * cosA - (wy - cy) * sinA) / scale;
-    float fy = p->frameH * 0.5f + ((wx - cx) * sinA + (wy - cy) * cosA) / scale;
+    // Inverse of SDL clockwise 90° rotation: (u,v) -> (v,-u); identity for portrait.
+    float fx, fy;
+    if (landscape) {
+        fx = p->frameW * 0.5f + (wy - cy) / scale;
+        fy = p->frameH * 0.5f - (wx - cx) / scale;
+    } else {
+        fx = p->frameW * 0.5f + (wx - cx) / scale;
+        fy = p->frameH * 0.5f + (wy - cy) / scale;
+    }
 
     int dw = 0, dh = 0;
     GetDeviceSize(state, &dw, &dh);
-    *dx = (fx - (float)p->frameScreenX) * ((float)dw / (float)p->frameScreenW);
-    *dy = (fy - (float)p->frameScreenY) * ((float)dh / (float)p->frameScreenH);
+    if (landscape) {
+        *dx = ((float)p->frameScreenY + (float)p->frameScreenH - fy) *
+              ((float)dw / (float)p->frameScreenH);
+        *dy = (fx - (float)p->frameScreenX) *
+              ((float)dh / (float)p->frameScreenW);
+    } else {
+        *dx = (fx - (float)p->frameScreenX) *
+              ((float)dw / (float)p->frameScreenW);
+        *dy = (fy - (float)p->frameScreenY) *
+              ((float)dh / (float)p->frameScreenH);
+    }
 }
 
 void UIWindow_DeviceSimulatorDeviceToWindow(UIWindow* window,
@@ -262,21 +278,34 @@ void UIWindow_DeviceSimulatorDeviceToWindow(UIWindow* window,
     if (!state || !wx || !wy) { if (wx) *wx = dx; if (wy) *wy = dy; return; }
     const UIDeviceProfile* p = &state->profile;
     const float scale = state->hostScale;
+    const int landscape = state->orientation == UI_DEVICE_ORIENTATION_LANDSCAPE;
     int dw = 0, dh = 0;
     GetDeviceSize(state, &dw, &dh);
-    float fx = (float)p->frameScreenX + dx * ((float)p->frameScreenW / (float)dw);
-    float fy = (float)p->frameScreenY + dy * ((float)p->frameScreenH / (float)dh);
 
-    int hostW = 0, hostH = 0;
-    if (window && window->sdlWindow) SDL_GetWindowSize(window->sdlWindow, &hostW, &hostH);
+    float fx, fy;
+    if (landscape) {
+        fx = (float)p->frameScreenX + dy * ((float)p->frameScreenW / (float)dh);
+        fy = (float)p->frameScreenY + (float)p->frameScreenH -
+             dx * ((float)p->frameScreenH / (float)dw);
+    } else {
+        fx = (float)p->frameScreenX + dx * ((float)p->frameScreenW / (float)dw);
+        fy = (float)p->frameScreenY + dy * ((float)p->frameScreenH / (float)dh);
+    }
+
+    float hostW = (float)p->frameW * scale;
+    float hostH = (float)p->frameH * scale;
+    if (landscape) { float t = hostW; hostW = hostH; hostH = t; }
     float cx = hostW * 0.5f;
     float cy = hostH * 0.5f;
 
-    int cosA = (state->orientation == UI_DEVICE_ORIENTATION_LANDSCAPE) ? 0 : 1;
-    int sinA = (state->orientation == UI_DEVICE_ORIENTATION_LANDSCAPE) ? -1 : 0;
-
-    *wx = cx + scale * ((fx - p->frameW * 0.5f) * cosA + (fy - p->frameH * 0.5f) * sinA);
-    *wy = cy + scale * (-(fx - p->frameW * 0.5f) * sinA + (fy - p->frameH * 0.5f) * cosA);
+    // SDL clockwise 90° rotation: (u,v) -> (-v, u); identity for portrait.
+    if (landscape) {
+        *wx = cx - (fy - p->frameH * 0.5f) * scale;
+        *wy = cy + (fx - p->frameW * 0.5f) * scale;
+    } else {
+        *wx = cx + (fx - p->frameW * 0.5f) * scale;
+        *wy = cy + (fy - p->frameH * 0.5f) * scale;
+    }
 }
 
 static void DrawFallbackBezel(SDL_Renderer* r, int hostW, int hostH) {
