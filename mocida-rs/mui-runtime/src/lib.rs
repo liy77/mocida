@@ -79,15 +79,14 @@ mod highlight;
 mod layout;
 use layout::Layout;
 
-/// High-level runtime handle that owns a `UIApp` and tracks simulator state.
+/// High-level runtime handle that owns a `UIApp`.
 ///
 /// This is intentionally a thin wrapper: it keeps the raw app pointer
 /// accessible so the device-simulator wrappers can pass it straight to the
-/// C API, while still letting Rust track whether the simulator is active.
+/// C API.
 pub struct Runtime {
     pub app: NonNull<msys::UIApp>,
     pub(crate) drop_app: bool,
-    pub device_simulator: Option<crate::device_simulator::DeviceSimulator>,
 }
 
 impl Runtime {
@@ -101,7 +100,6 @@ impl Runtime {
         Ok(Self {
             app: NonNull::new(ptr).expect("UIApp_Create returned a null pointer"),
             drop_app: true,
-            device_simulator: None,
         })
     }
 
@@ -113,7 +111,6 @@ impl Runtime {
         Self {
             app: NonNull::new(ptr).expect("null UIApp pointer passed to Runtime::from_raw"),
             drop_app: false,
-            device_simulator: None,
         }
     }
 
@@ -128,24 +125,45 @@ impl Runtime {
         frame_png_path: Option<&str>,
         host_scale: f32,
         orientation: crate::device_simulator::DeviceOrientation,
-    ) {
-        crate::device_simulator::DeviceSimulator::enable(
+    ) -> std::result::Result<(), mocida::Error> {
+        crate::device_simulator::enable(
             self,
             profile,
             frame_png_path,
             host_scale,
             orientation,
-        );
-        self.device_simulator = Some(crate::device_simulator::DeviceSimulator);
+        )
     }
 
     pub fn disable_device_simulator(&mut self) {
-        crate::device_simulator::DeviceSimulator::disable(self);
-        self.device_simulator = None;
+        crate::device_simulator::disable(self);
     }
 
     pub fn is_device_simulator_enabled(&self) -> bool {
-        crate::device_simulator::DeviceSimulator::is_enabled(self)
+        crate::device_simulator::is_enabled(self)
+    }
+
+    pub fn device_simulator_orientation(&self) -> crate::device_simulator::DeviceOrientation {
+        crate::device_simulator::orientation(self)
+    }
+
+    pub fn set_device_simulator_orientation(
+        &mut self,
+        orientation: crate::device_simulator::DeviceOrientation,
+    ) {
+        crate::device_simulator::set_orientation(self, orientation);
+    }
+
+    pub fn toggle_device_simulator_orientation(&mut self) {
+        crate::device_simulator::toggle_orientation(self);
+    }
+
+    pub fn device_simulator_window_to_device(&self, wx: f32, wy: f32) -> (f32, f32) {
+        crate::device_simulator::window_to_device(self, wx, wy)
+    }
+
+    pub fn device_simulator_device_to_window(&self, dx: f32, dy: f32) -> (f32, f32) {
+        crate::device_simulator::device_to_window(self, dx, dy)
     }
 }
 
