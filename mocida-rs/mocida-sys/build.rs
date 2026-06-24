@@ -95,15 +95,15 @@ fn main() {
     if let Some(lib_dir) = &lib_dir {
         let _ = lib_dir; // link-search above already tells clang where to look
         let _ = link_static; // currently unused; the bare -l form wins
-        // The macOS ld (clang) does NOT understand `-l dylib=mocida`
-        // (the kind prefix becomes part of the name), so we can't use
-        // `rustc-link-lib=dylib=mocida` here. The bare -lmocida form
-        // works because clang's default search order on the
-        // `link-search` dir is `lib<name>.dylib` first, then `.a`.
-        // On Linux the same -l<name> form resolves to lib<name>.so
-        // then lib<name>.a. On Windows (handled separately) the
-        // build script copies the .dll next to the binary, and
-        // .lib is in the link-search dir.
+                             // The macOS ld (clang) does NOT understand `-l dylib=mocida`
+                             // (the kind prefix becomes part of the name), so we can't use
+                             // `rustc-link-lib=dylib=mocida` here. The bare -lmocida form
+                             // works because clang's default search order on the
+                             // `link-search` dir is `lib<name>.dylib` first, then `.a`.
+                             // On Linux the same -l<name> form resolves to lib<name>.so
+                             // then lib<name>.a. On Windows (handled separately) the
+                             // build script copies the .dll next to the binary, and
+                             // .lib is in the link-search dir.
         println!("cargo:rustc-link-lib={}", lib_name);
     } else {
         // No lib dir configured — fall back to the bare -l form too
@@ -147,6 +147,64 @@ fn main() {
                 println!("cargo:rustc-link-lib=SDL3");
             }
         }
+    }
+
+    // macOS: mocida's static lib bundles SDL3/SDL3_image/SDL3_ttf (also static)
+    // and references WebKit, AVFoundation, CoreMedia, curl, and other OS libs.
+    // Surface them here so consumers don't have to thread them through manually.
+    if cfg!(target_os = "macos") && !is_web {
+        if let Some(lib_dir) = &lib_dir {
+            // Every directory that contains one of the .a files below.
+            let extra_dirs = [
+                lib_dir.join("SDL"),
+                lib_dir.join("SDL_image"),
+                lib_dir.join("SDL_image/external/libwebp"),
+                lib_dir.join("SDL_ttf"),
+                lib_dir.join("SDL_ttf/external/freetype"),
+                lib_dir.join("SDL_ttf/external/harfbuzz"),
+                lib_dir.join("SDL_ttf/external/plutosvg"),
+                lib_dir.join("SDL_ttf/external/plutovg"),
+                lib_dir.join("mimalloc"),
+            ];
+            for d in &extra_dirs {
+                if d.exists() {
+                    println!("cargo:rustc-link-search=native={}", d.display());
+                }
+            }
+
+            // Static libs — link those that are present in the build tree.
+            let static_libs = [
+                ("SDL/libSDL3.a",                          "SDL3"),
+                ("SDL/libSDL_uclibc.a",                    "SDL_uclibc"),
+                ("SDL_image/libSDL3_image.a",              "SDL3_image"),
+                ("SDL_image/external/libwebp/libsharpyuv.a","sharpyuv"),
+                ("SDL_ttf/libSDL3_ttf.a",                  "SDL3_ttf"),
+                ("SDL_ttf/external/freetype/libfreetype.a","freetype"),
+                ("SDL_ttf/external/harfbuzz/libharfbuzz.a","harfbuzz"),
+                ("SDL_ttf/external/plutosvg/libplutosvg.a","plutosvg"),
+                ("SDL_ttf/external/plutovg/libplutovg.a",  "plutovg"),
+                ("mimalloc/libmimalloc.a",                 "mimalloc"),
+            ];
+            for (rel, name) in &static_libs {
+                if lib_dir.join(rel).exists() {
+                    println!("cargo:rustc-link-lib=static={}", name);
+                }
+            }
+        }
+
+        // OS frameworks required by mocida (WebView, AV, Metal, etc.)
+        for fw in ["WebKit", "AppKit", "Foundation", "CoreGraphics", "CoreText",
+                   "IOKit", "CoreFoundation", "Security", "Metal", "QuartzCore",
+                   "UniformTypeIdentifiers", "AVFoundation", "CoreMedia",
+                   "CoreVideo", "CoreAudio", "AudioToolbox", "GameController",
+                   "ForceFeedback", "Carbon", "CoreHaptics", "CoreBluetooth"] {
+            println!("cargo:rustc-link-lib=framework={}", fw);
+        }
+        // System dylibs.
+        println!("cargo:rustc-link-lib=dylib=curl");
+        println!("cargo:rustc-link-lib=dylib=z");
+        println!("cargo:rustc-link-lib=dylib=iconv");
+        println!("cargo:rustc-link-lib=dylib=bz2");
     }
 
     // Mocida pulls in WebView2, Media Foundation, DirectComposition, ...
