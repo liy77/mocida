@@ -19,7 +19,7 @@ pub struct DeviceProfile {
 }
 
 impl DeviceProfile {
-    /// Generic frame geometry: 20 px side bezels, 70 px top bezel for camera.
+    /// Realistic thin-bezel frame geometry: 14 px uniform bezel.
     #[allow(clippy::too_many_arguments)]
     const fn framed(
         name: &'static str,
@@ -31,8 +31,9 @@ impl DeviceProfile {
         safe_right: i32,
         scale: f32,
     ) -> Self {
-        let frame_w = width + 40;
-        let frame_h = height + 120;
+        let bezel = 14; // realistic thin bezel, ~1.5 mm at phone scale
+        let frame_w = width + 2 * bezel;
+        let frame_h = height + 2 * bezel;
         Self {
             name,
             width,
@@ -42,8 +43,8 @@ impl DeviceProfile {
             safe_left,
             safe_right,
             scale,
-            frame_screen_x: 20,
-            frame_screen_y: 70,
+            frame_screen_x: bezel,
+            frame_screen_y: bezel,
             frame_screen_w: width,
             frame_screen_h: height,
             frame_w,
