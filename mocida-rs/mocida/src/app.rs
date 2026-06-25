@@ -471,6 +471,30 @@ impl App {
         self
     }
 
+    /// Controls whether individual OS title-bar chrome buttons are visible.
+    ///
+    /// - **macOS**: hides/shows the traffic-light buttons (close / minimize /
+    ///   zoom). Hidden buttons leave a gap in the title bar, exactly like
+    ///   apps such as Preview in presentation mode.
+    /// - **Windows**: removes/restores `WS_MINIMIZEBOX` / `WS_MAXIMIZEBOX`
+    ///   style bits and grays/enables the close entry in the system menu.
+    ///   Full visual removal of the close ×-button is not possible on Windows
+    ///   without a custom title bar — this method grays it out instead.
+    /// - Other platforms: no-op.
+    pub fn set_window_buttons(
+        &mut self,
+        close: bool,
+        minimize: bool,
+        maximize: bool,
+    ) -> &mut Self {
+        let win_ptr = unsafe { mocida_sys::UIApp_GetWindow(self.ptr) } as *mut mocida_sys::UIWindow;
+        let sdl_win = if win_ptr.is_null() { std::ptr::null_mut() } else { unsafe { (*win_ptr).sdlWindow } };
+        if !sdl_win.is_null() {
+            unsafe { platform::set_window_buttons(sdl_win, close, minimize, maximize) };
+        }
+        self
+    }
+
     /// Enables (or disables) a custom client-side title bar on the
     /// already-created window: drops the native chrome and installs the
     /// drag/resize hit-test. The window must have been created borderless via
@@ -595,4 +619,340 @@ extern "C" fn event_trampoline(data: sys::UIEventData) {
     let state = unsafe { &mut *(ptr as *mut EventState) };
     let view = crate::event::EventData::from_raw(&data);
     (state.handler)(view);
+}
+
+// ── Platform-specific window-button visibility ─────────────────────────────
+
+#[cfg(target_os = "macos")]
+mod platform {
+    use std::ffi::{c_char, c_void};
+
+    // SDL3 is already linked transitively via mocida; declare only what we need.
+    extern "C" {
+        fn SDL_GetWindowProperties(window: *mut crate::sys::SDL_Window) -> u32;
+        fn SDL_GetPointerProperty(
+            props: u32,
+            name: *const c_char,
+            default_value: *mut c_void,
+        ) -> *mut c_void;
+    }
+
+    // libobjc is a macOS system library; always available.
+    #[link(name = "objc")]
+    extern "C" {
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        // Declared without variadic args; cast to the right signature via transmute.
+        fn objc_msgSend(obj: *mut c_void, sel: *mut c_void) -> *mut c_void;
+    }
+
+    pub(super) unsafe fn set_window_buttons(
+        sdl_win: *mut crate::sys::SDL_Window,
+        close: bool,
+        minimize: bool,
+        maximize: bool,
+    ) {
+        let props = SDL_GetWindowProperties(sdl_win);
+        if props == 0 {
+            return;
+        }
+        // SDL_PROP_WINDOW_COCOA_WINDOW_POINTER
+        let ns_win = SDL_GetPointerProperty(
+            props,
+            b"SDL.window.cocoa.window\0".as_ptr() as *const c_char,
+            std::ptr::null_mut(),
+        );
+        if ns_win.is_null() {
+            return;
+        }
+
+        let sel_btn = sel_registerName(b"standardWindowButton:\0".as_ptr() as *const c_char);
+        let sel_hidden = sel_registerName(b"setHidden:\0".as_ptr() as *const c_char);
+
+        // [NSWindow standardWindowButton:idx] → NSButton*
+        type GetBtnFn = unsafe extern "C" fn(*mut c_void, *mut c_void, u64) -> *mut c_void;
+        // [NSButton setHidden:BOOL] — returns nil (ObjC void methods return nil on arm64/x86_64)
+        type SetHiddenFn = unsafe extern "C" fn(*mut c_void, *mut c_void, u8) -> *mut c_void;
+
+        // transmute between fn-pointer types of the same size: valid on all
+        // platforms because `objc_msgSend` is variadic at the ABI level.
+        let base: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void = objc_msgSend;
+        let get_btn: GetBtnFn = std::mem::transmute(base);
+        let set_hidden: SetHiddenFn = std::mem::transmute(base);
+
+        // NSWindowButton: Close=0, Miniaturize=1, Zoom=2
+        for (btn_idx, visible) in [(0u64, close), (1, minimize), (2, maximize)] {
+            let btn = get_btn(ns_win, sel_btn, btn_idx);
+            if !btn.is_null() {
+                let _ = set_hidden(btn, sel_hidden, u8::from(!visible));
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod platform {
+    use std::ffi::{c_char, c_void};
+
+    extern "C" {
+        fn SDL_GetWindowProperties(window: *mut crate::sys::SDL_Window) -> u32;
+        fn SDL_GetPointerProperty(
+            props: u32,
+            name: *const c_char,
+            default_value: *mut c_void,
+        ) -> *mut c_void;
+    }
+
+    extern "system" {
+        fn GetWindowLongPtrW(hwnd: *mut c_void, n_index: i32) -> isize;
+        fn SetWindowLongPtrW(hwnd: *mut c_void, n_index: i32, dw_new_long: isize) -> isize;
+        fn SetWindowPos(
+            hwnd: *mut c_void,
+            hwnd_insert_after: *mut c_void,
+            x: i32,
+            y: i32,
+            cx: i32,
+            cy: i32,
+            u_flags: u32,
+        ) -> i32;
+        fn GetSystemMenu(hwnd: *mut c_void, b_revert: i32) -> *mut c_void;
+        fn EnableMenuItem(h_menu: *mut c_void, u_id_enable_item: u32, u_enable: u32) -> i32;
+    }
+
+    const GWL_STYLE: i32 = -16;
+    const WS_MINIMIZEBOX: isize = 0x0002_0000;
+    const WS_MAXIMIZEBOX: isize = 0x0001_0000;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+    const SC_CLOSE: u32 = 0xF060;
+    const MF_BYCOMMAND: u32 = 0x0000;
+    const MF_GRAYED: u32 = 0x0001;
+    const MF_ENABLED: u32 = 0x0000;
+
+    pub(super) unsafe fn set_window_buttons(
+        sdl_win: *mut crate::sys::SDL_Window,
+        close: bool,
+        minimize: bool,
+        maximize: bool,
+    ) {
+        let props = SDL_GetWindowProperties(sdl_win);
+        if props == 0 {
+            return;
+        }
+        // SDL_PROP_WINDOW_WIN32_HWND_POINTER
+        let hwnd = SDL_GetPointerProperty(
+            props,
+            b"SDL.window.win32.hwnd\0".as_ptr() as *const c_char,
+            std::ptr::null_mut(),
+        );
+        if hwnd.is_null() {
+            return;
+        }
+
+        // Minimize / maximize: Win32 style bits
+        let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        if minimize {
+            style |= WS_MINIMIZEBOX;
+        } else {
+            style &= !WS_MINIMIZEBOX;
+        }
+        if maximize {
+            style |= WS_MAXIMIZEBOX;
+        } else {
+            style &= !WS_MAXIMIZEBOX;
+        }
+        SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+
+        // Close button: Windows can't hide the ×; gray/enable it via system menu.
+        let menu = GetSystemMenu(hwnd, 0);
+        if !menu.is_null() {
+            EnableMenuItem(
+                menu,
+                SC_CLOSE,
+                MF_BYCOMMAND | if close { MF_ENABLED } else { MF_GRAYED },
+            );
+        }
+
+        // Repaint the non-client frame immediately.
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod platform {
+    use std::ffi::{c_char, c_int, c_long, c_ulong, c_void};
+
+    extern "C" {
+        fn SDL_GetWindowProperties(window: *mut crate::sys::SDL_Window) -> u32;
+        fn SDL_GetPointerProperty(
+            props: u32,
+            name: *const c_char,
+            default_value: *mut c_void,
+        ) -> *mut c_void;
+        fn SDL_GetNumberProperty(props: u32, name: *const c_char, default_value: i64) -> i64;
+    }
+
+    // dlsym resolves in already-loaded libraries when handle = RTLD_DEFAULT (null).
+    // libdl is linked explicitly for pre-glibc-2.34 systems; on newer glibc it's a no-op.
+    #[link(name = "dl")]
+    extern "C" {
+        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    }
+
+    // Motif window manager hints — honored by virtually all X11 WMs and XWayland.
+    #[repr(C)]
+    struct MotifWmHints {
+        flags: c_ulong,
+        functions: c_ulong,
+        decorations: c_ulong,
+        input_mode: c_long,
+        status: c_ulong,
+    }
+
+    const MWM_HINTS_FUNCTIONS: c_ulong   = 1 << 0;
+    const MWM_HINTS_DECORATIONS: c_ulong = 1 << 1;
+    const MWM_FUNC_MOVE: c_ulong         = 1 << 2;
+    const MWM_FUNC_MINIMIZE: c_ulong     = 1 << 3;
+    const MWM_FUNC_MAXIMIZE: c_ulong     = 1 << 4;
+    const MWM_FUNC_CLOSE: c_ulong        = 1 << 5;
+    const MWM_DECOR_BORDER: c_ulong      = 1 << 1;
+    const MWM_DECOR_RESIZEH: c_ulong     = 1 << 2;
+    const MWM_DECOR_TITLE: c_ulong       = 1 << 3;
+    const MWM_DECOR_MENU: c_ulong        = 1 << 4;
+    const MWM_DECOR_MINIMIZE: c_ulong    = 1 << 5;
+    const MWM_DECOR_MAXIMIZE: c_ulong    = 1 << 6;
+    const PROP_MODE_REPLACE: c_int       = 0;
+
+    type XInternAtomFn =
+        unsafe extern "C" fn(*mut c_void, *const c_char, c_int) -> c_ulong;
+    type XChangePropertyFn = unsafe extern "C" fn(
+        *mut c_void,
+        c_ulong,
+        c_ulong,
+        c_ulong,
+        c_int,
+        c_int,
+        *const u8,
+        c_int,
+    ) -> c_int;
+    type XFlushFn = unsafe extern "C" fn(*mut c_void) -> c_int;
+
+    pub(super) unsafe fn set_window_buttons(
+        sdl_win: *mut crate::sys::SDL_Window,
+        close: bool,
+        minimize: bool,
+        maximize: bool,
+    ) {
+        let props = SDL_GetWindowProperties(sdl_win);
+        if props == 0 {
+            return;
+        }
+
+        // X11 Display* — null on native Wayland (safe early exit, pure no-op).
+        let display = SDL_GetPointerProperty(
+            props,
+            b"SDL.window.x11.display\0".as_ptr() as *const c_char,
+            std::ptr::null_mut(),
+        );
+        if display.is_null() {
+            return;
+        }
+
+        let xwin = SDL_GetNumberProperty(
+            props,
+            b"SDL.window.x11.window\0".as_ptr() as *const c_char,
+            0,
+        ) as c_ulong;
+        if xwin == 0 {
+            return;
+        }
+
+        // SDL3's X11 backend already loaded libX11 into the process; locate
+        // the symbols via RTLD_DEFAULT (null handle) without a hard link dep.
+        let intern_sym =
+            dlsym(std::ptr::null_mut(), b"XInternAtom\0".as_ptr() as *const c_char);
+        let change_sym =
+            dlsym(std::ptr::null_mut(), b"XChangeProperty\0".as_ptr() as *const c_char);
+        let flush_sym =
+            dlsym(std::ptr::null_mut(), b"XFlush\0".as_ptr() as *const c_char);
+        if intern_sym.is_null() || change_sym.is_null() || flush_sym.is_null() {
+            return;
+        }
+
+        let x_intern: XInternAtomFn = std::mem::transmute(intern_sym);
+        let x_change: XChangePropertyFn = std::mem::transmute(change_sym);
+        let x_flush: XFlushFn = std::mem::transmute(flush_sym);
+
+        let motif_atom = x_intern(
+            display,
+            b"_MOTIF_WM_HINTS\0".as_ptr() as *const c_char,
+            0, // False — create if absent
+        );
+        if motif_atom == 0 {
+            return;
+        }
+
+        // Build allowed-functions mask (WM uses this for the menu and button state).
+        let mut functions: c_ulong = MWM_FUNC_MOVE;
+        if close {
+            functions |= MWM_FUNC_CLOSE;
+        }
+        if minimize {
+            functions |= MWM_FUNC_MINIMIZE;
+        }
+        if maximize {
+            functions |= MWM_FUNC_MAXIMIZE;
+        }
+
+        // Build decoration mask (controls which buttons are painted in the title bar).
+        let mut decorations: c_ulong =
+            MWM_DECOR_BORDER | MWM_DECOR_RESIZEH | MWM_DECOR_TITLE | MWM_DECOR_MENU;
+        if minimize {
+            decorations |= MWM_DECOR_MINIMIZE;
+        }
+        if maximize {
+            decorations |= MWM_DECOR_MAXIMIZE;
+        }
+
+        let hints = MotifWmHints {
+            flags: MWM_HINTS_FUNCTIONS | MWM_HINTS_DECORATIONS,
+            functions,
+            decorations,
+            input_mode: 0,
+            status: 0,
+        };
+
+        // XChangeProperty with format=32 reads `nelements` c_ulong-sized values.
+        x_change(
+            display,
+            xwin,
+            motif_atom,
+            motif_atom, // type = _MOTIF_WM_HINTS (convention)
+            32,
+            PROP_MODE_REPLACE,
+            std::ptr::addr_of!(hints) as *const u8,
+            5, // MotifWmHints has 5 fields
+        );
+        x_flush(display);
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+mod platform {
+    pub(super) unsafe fn set_window_buttons(
+        _sdl_win: *mut crate::sys::SDL_Window,
+        _close: bool,
+        _minimize: bool,
+        _maximize: bool,
+    ) {
+    }
 }
