@@ -10,7 +10,7 @@
 //! ```no_run
 //! use mocida::menu_bar::{Menu, MenuItemId};
 //!
-//! let bar = Menu::new("OndaEngine")
+//! let bar = Menu::new("Mocidad")
 //!     .submenu(
 //!         Menu::new("File")
 //!             .item("New Project", Some("CmdOrCtrl+N"), MenuItemId::NewProject)
@@ -143,7 +143,7 @@ enum Entry {
 }
 
 /// Builder for a (sub)menu. `title` is the visible name (e.g. "File");
-/// for the root menu, use the app's display name (e.g. "OndaEngine").
+/// for the root menu, use the app's display name (e.g. "Mocidad").
 pub struct Menu {
     title: String,
     entries: Vec<Entry>,

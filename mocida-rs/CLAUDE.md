@@ -3,7 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 > **Start with the workspace master guide:** `../CLAUDE.md` (mocida workspace) — it
-> covers the full stack (C ↔ FFI ↔ runtime ↔ OndaEngine host), the exact
+> covers the full stack (C ↔ FFI ↔ runtime ↔ Mocidad host), the exact
 > build/deploy workflow, the GUI test harness, and the debugging playbook. This file
 > is the **bindings + runtime internals** companion.
 
@@ -13,7 +13,7 @@ Rust bindings for [Mocida](https://github.com/liy77/mocida), a Windows-first C U
 
 Every public header in upstream `mocida/src/headers/uikit/*.h` has a corresponding Rust module under `mocida/src/`. The README's "API coverage" table is the source of truth for what's wrapped.
 
-Crates: `mocida-sys` (FFI), `mocida` (wrapper), `mui-runtime` (interprets `.mui` → live widget tree; the engine OndaEngine's host links), `mui-dev` (dev runner).
+Crates: `mocida-sys` (FFI), `mocida` (wrapper), `mui-runtime` (interprets `.mui` → live widget tree; the engine Mocidad's host links), `mui-dev` (dev runner).
 
 ## Build commands
 

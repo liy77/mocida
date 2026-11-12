@@ -1863,7 +1863,7 @@ fn build_rectangle(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
         y = py;
     }
     let rect_ptr = rect.as_ptr();
-    // Expose the game canvas host so OndaEngine's Play mode can inject the live
+    // Expose the game canvas host so Mocidad's Play mode can inject the live
     // `main.mui` tree into it (see [`game_host_ptr`]).
     if id_name(el).as_deref() == Some("game-host") {
         GAME_HOST.with(|c| c.set(rect_ptr as usize));
@@ -2912,15 +2912,15 @@ fn build_textfield(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
 
 thread_local! {
     /// Raw pointer to the most-recently-built `UITextArea`. A host that needs
-    /// caret access (e.g. OndaEngine's autocomplete) reads it via
+    /// caret access (e.g. Mocidad's autocomplete) reads it via
     /// [`editor_textarea_ptr`]. It stays valid until the next structural rebuild
     /// recreates the widget and is refreshed by every rebuild that includes a
-    /// TextArea — OndaEngine has exactly one (the code editor), so "last built"
+    /// TextArea — Mocidad has exactly one (the code editor), so "last built"
     /// is unambiguous.
     static EDITOR_TA: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 
     /// Raw pointer to the most-recently-built `Rectangle` carrying `id: "game-host"`.
-    /// OndaEngine's Play mode reads this via [`game_host_ptr`] to inject the live
+    /// Mocidad's Play mode reads this via [`game_host_ptr`] to inject the live
     /// `main.mui` game tree into the Game tab's canvas with `UIRectangle_AddChild`.
     /// Reset to 0 on every rebuild that does NOT build the host, so the host can
     /// tell when the canvas was recreated and re-inject.
@@ -2935,7 +2935,7 @@ pub fn editor_textarea_ptr() -> *mut mocida::sys::UITextArea {
 }
 
 /// The most-recently-built `Rectangle` marked `id: "game-host"` (null until one
-/// is built). OndaEngine injects the running `main.mui` tree here while playing.
+/// is built). Mocidad injects the running `main.mui` tree here while playing.
 /// The pointer is refreshed on every build: it is set when a `game-host` rect is
 /// built and cleared (0) otherwise, so a changed value means "canvas recreated".
 pub fn game_host_ptr() -> *mut mocida::sys::UIRectangle {
@@ -3124,7 +3124,7 @@ fn build_textarea(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
     }
 
     // Reactive font size: when `size:`/`fontSize:` is bound to an int signal
-    // (e.g. OndaEngine's `editor_font`, bumped by Ctrl+/Ctrl- in onKeyInput),
+    // (e.g. Mocidad's `editor_font`, bumped by Ctrl+/Ctrl- in onKeyInput),
     // resize the area's font IN PLACE via UITextArea_SetFontSize whenever it
     // changes. That invalidates the line cache (re-renders) WITHOUT a structural
     // rebuild, so the editor keeps focus/caret/scroll while zooming. Mirrors the
