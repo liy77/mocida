@@ -8,14 +8,13 @@ use std::os::raw::c_uint;
 
 // The bindgen wrapper exports the C types and functions at the crate
 // root via `pub use bindings::*` in lib.rs. We import them here.
-pub use crate::{
-    ui_menu_bar_create, ui_menu_bar_destroy, ui_menu_bar_item_create,
-    ui_menu_bar_item_destroy, ui_menu_bar_separator, ui_menu_bar_append_item,
-    ui_menu_bar_append_submenu, ui_menu_bar_append_separator,
-    ui_menu_bar_set, ui_menu_bar_set_item_callback,
-    UIMenuBar, UIMenuBarItem,
-};
 pub use crate::bindings::ui_menu_bar_item_callback_t as RawMenuItemCallback;
+pub use crate::{
+    ui_menu_bar_append_item, ui_menu_bar_append_separator, ui_menu_bar_append_submenu,
+    ui_menu_bar_create, ui_menu_bar_destroy, ui_menu_bar_item_create, ui_menu_bar_item_destroy,
+    ui_menu_bar_separator, ui_menu_bar_set, ui_menu_bar_set_item_callback, UIMenuBar,
+    UIMenuBarItem,
+};
 
 /// Owning handle to a `UIMenuBar`. Drop calls `ui_menu_bar_destroy`
 /// unless the menu has been transferred to the app via
@@ -26,11 +25,17 @@ impl Menu {
     /// Wrap a raw pointer returned by the C side. Returns `None` if
     /// the pointer is null (the C allocators return null on OOM).
     pub fn from_raw(ptr: *mut UIMenuBar) -> Option<Self> {
-        if ptr.is_null() { None } else { Some(Self(ptr)) }
+        if ptr.is_null() {
+            None
+        } else {
+            Some(Self(ptr))
+        }
     }
 
     /// Borrow the raw handle. Do NOT outlive the wrapper.
-    pub fn as_raw(&self) -> *mut UIMenuBar { self.0 }
+    pub fn as_raw(&self) -> *mut UIMenuBar {
+        self.0
+    }
 
     /// Append a leaf item. Consumes the item.
     pub fn append_item(&mut self, item: Item) {
@@ -84,7 +89,11 @@ pub struct Item(*mut UIMenuBarItem);
 
 impl Item {
     fn from_raw(ptr: *mut UIMenuBarItem) -> Option<Self> {
-        if ptr.is_null() { None } else { Some(Self(ptr)) }
+        if ptr.is_null() {
+            None
+        } else {
+            Some(Self(ptr))
+        }
     }
 
     /// Build a leaf menu item. `shortcut` is SDL-style
@@ -99,9 +108,7 @@ impl Item {
             }
             None => std::ptr::null(),
         };
-        let raw = unsafe {
-            ui_menu_bar_item_create(label_c.as_ptr(), sc_ptr, id)
-        };
+        let raw = unsafe { ui_menu_bar_item_create(label_c.as_ptr(), sc_ptr, id) };
         Self::from_raw(raw).expect("ui_menu_bar_item_create returned NULL (OOM)")
     }
 
@@ -135,9 +142,6 @@ unsafe impl Send for Item {}
 /// # Safety
 /// The callback must be `unsafe extern "C"` and must not panic. The
 /// `user` pointer is whatever you passed in.
-pub unsafe fn set_item_callback(
-    cb: RawMenuItemCallback,
-    user: *mut std::os::raw::c_void,
-) {
+pub unsafe fn set_item_callback(cb: RawMenuItemCallback, user: *mut std::os::raw::c_void) {
     ui_menu_bar_set_item_callback(cb, user);
 }

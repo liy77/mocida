@@ -39,6 +39,20 @@ typedef struct UIMenuBarItem UIMenuBarItem;
 // the main thread.
 typedef void (*ui_menu_bar_item_callback_t)(uint32_t id, void* user);
 
+// Reserved ids: an item created with one of these runs the platform's stock
+// action (macOS: the standard AppKit selector) instead of the host callback.
+// Host ids must stay below UI_MENU_BAR_ROLE_FIRST.
+#define UI_MENU_BAR_ROLE_FIRST       0xFFFF0000u
+#define UI_MENU_BAR_ROLE_ABOUT       0xFFFF0001u
+#define UI_MENU_BAR_ROLE_HIDE        0xFFFF0002u
+#define UI_MENU_BAR_ROLE_HIDE_OTHERS 0xFFFF0003u
+#define UI_MENU_BAR_ROLE_SHOW_ALL    0xFFFF0004u
+#define UI_MENU_BAR_ROLE_QUIT        0xFFFF0005u
+#define UI_MENU_BAR_ROLE_MINIMIZE    0xFFFF0006u
+#define UI_MENU_BAR_ROLE_ZOOM        0xFFFF0007u
+#define UI_MENU_BAR_ROLE_FULLSCREEN  0xFFFF0008u
+#define UI_MENU_BAR_ROLE_FRONT       0xFFFF0009u
+
 // ── Menu ─────────────────────────────────────────────────────────────────
 
 // Create a (sub)menu with the given title. Pass NULL or "" for the root

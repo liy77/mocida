@@ -79,7 +79,8 @@ float  UICanvas_GetHeight     (const UICanvas* canvas);
 void   UICanvas_GetMousePos   (const UICanvas* canvas, float* x, float* y);
 int    UICanvas_IsMouseInside (const UICanvas* canvas);
 
-/* Interno: usado por app.c / window_render.inc */
+/* Interno: usado por app.c / window_render.inc / window_widgets.inc */
+void UICanvas_SetOrigin(UICanvas* canvas, float x, float y);
 void UICanvas_DispatchMouseMove(UIChildren* children, float x, float y);
 void UICanvas_DispatchMouseDown(UIChildren* children, float x, float y, int button);
 void UICanvas_DispatchMouseUp  (UIChildren* children, float x, float y, int button);

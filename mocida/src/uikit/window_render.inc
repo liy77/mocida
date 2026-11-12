@@ -107,10 +107,22 @@ static void RenderScroll(UIWindow* window, UIWidget* el, UIScroll* s) {
     // they may be rendered against the wrong scissor.
     FlushRenderBatch(window->sdlRenderer);
 
+    // Save the caller's clip and INTERSECT the viewport with it, so a Scroll
+    // nested inside another Scroll (or a clipping panel) stays inside its
+    // parent's region; restore the caller's clip afterwards (not NULL, which
+    // would let widgets following this Scroll overflow the outer viewport).
+    const bool __scHadClip = SDL_RenderClipEnabled(window->sdlRenderer);
+    SDL_Rect __scPrevClip = {0,0,0,0};
+    if (__scHadClip) SDL_GetRenderClipRect(window->sdlRenderer, &__scPrevClip);
     SDL_Rect clip = {
         (int)viewport.x, (int)viewport.y,
         (int)ceilf(viewport.w), (int)ceilf(viewport.h)
     };
+    if (__scHadClip) {
+        SDL_Rect isect;
+        if (SDL_GetRectIntersection(&clip, &__scPrevClip, &isect)) clip = isect;
+        else clip = (SDL_Rect){ __scPrevClip.x, __scPrevClip.y, 0, 0 };
+    }
     SDL_SetRenderClipRect(window->sdlRenderer, &clip);
 
     if (s->content) {
@@ -121,7 +133,7 @@ static void RenderScroll(UIWindow* window, UIWidget* el, UIScroll* s) {
     }
 
     FlushRenderBatch(window->sdlRenderer);
-    SDL_SetRenderClipRect(window->sdlRenderer, NULL);
+    SDL_SetRenderClipRect(window->sdlRenderer, __scHadClip ? &__scPrevClip : NULL);
 
     // Scrollbar(s) drawn over the content (not clipped), on the trailing edges.
     // Shown only when content overflows on that axis and showScrollbar is set.
@@ -196,8 +208,10 @@ static int WidgetCulled(UIWindow* window, UIWidget* el) {
             return 0;
         }
     }
-    int rw = 0, rh = 0;
-    SDL_GetWindowSize(window->sdlWindow, &rw, &rh);
+    // window->width/height are already in logical points and updated on resize.
+    // Querying SDL here ran once per widget per frame.
+    const int rw = window->width;
+    const int rh = window->height;
     if (el->x + w < 0 || el->y + h < 0 ||
         el->x > (float)rw || el->y > (float)rh) {
         return 1;
@@ -248,12 +262,20 @@ static void RenderSingleWidget(UIWindow* window, UIWidget* el) {
     SDL_Rect prevClip = {0, 0, 0, 0};
     if (hadClip) SDL_GetRenderClipRect(window->sdlRenderer, &prevClip);
 
-    const SDL_Rect cr = {
+    SDL_Rect cr = {
         (int)clipAnc->x,
         (int)clipAnc->y,
         (int)*clipAnc->width,
         (int)*clipAnc->height
     };
+    // Intersect with the parent's clip (a clipping child of a clipping parent, e.g.
+    // a rounded panel inside a Scroll) — replacing it would let this widget paint
+    // outside the parent's region.
+    if (hadClip) {
+        SDL_Rect isect;
+        if (SDL_GetRectIntersection(&cr, &prevClip, &isect)) cr = isect;
+        else cr = (SDL_Rect){ prevClip.x, prevClip.y, 0, 0 };
+    }
     SDL_SetRenderClipRect(window->sdlRenderer, &cr);
 
     RenderSingleWidget_Inner(window, el);
@@ -265,6 +287,8 @@ static void RenderSingleWidget(UIWindow* window, UIWidget* el) {
 #include "window_widgets.inc"
 
 static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
+    // A hidden widget hides its whole subtree, so an off-screen screen kept
+    // built for an instant phase switch costs nothing per frame.
     if (UI_UNLIKELY(!el || !el->visible || !el->data)) return;
     // Skip widgets fully outside the window. Big win for scrolls /
     // lists with off-screen content; cheap when the widget has bounds.

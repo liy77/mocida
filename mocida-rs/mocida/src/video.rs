@@ -1,4 +1,10 @@
-//! `UIVideo` — Media-Foundation-backed video widget (Windows-only).
+//! `UIVideo` — video playback widget.
+//!
+//! The current C implementation uses **Media Foundation** and is fully
+//! functional on **Windows**. On macOS and Linux the C layer compiles and
+//! links (the symbols are present), but `UIVideo_Create` returns `null`,
+//! so [`Video::new`] yields `Err(Error::Null)` at runtime — no crash, but
+//! no playback either until a platform backend is wired into the C library.
 
 use std::ffi::{c_void, CString};
 
@@ -146,7 +152,7 @@ impl Drop for Video {
             return;
         }
         if let Some(state) = self.on_ended.take() {
-            std::mem::forget(state);
+            crate::widget::attach_owned(self.ptr as *const std::ffi::c_void, state);
         }
     }
 }

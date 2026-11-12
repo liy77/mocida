@@ -18,6 +18,7 @@
 #include <uikit/container.h>
 #include <uikit/window.h>
 #include <SDL3/SDL.h>
+#include <stdint.h>
 
 UIWidget* widgc(UIWidgetData data) {
     return UIWidget_Create(data);
@@ -260,7 +261,105 @@ void UIWidget_Destroy(UIWidget* widget) {
     free(widget->height);
     free(widget->id);
     free(widget->alignment);
+    // Binding-side state (closures behind callback userdata) dies with the
+    // widget. Released after the C object is gone so nothing can call into it.
+    UIWidget__ReleaseOwned(widget->data);
+    UIWidget__ReleaseOwned(widget);
     free(widget);
+}
+
+// ---------------------------------------------------------------------
+// Owned userdata registry (language bindings)
+// ---------------------------------------------------------------------
+// Open hash of owner pointer -> chain of (userdata, freeFn). Owners are widget
+// data pointers / UIWidget pointers; only the address is used as the key.
+
+typedef struct UIOwnedNode {
+    const void* owner;
+    void* userdata;
+    UIOwnedFreeFn freeFn;
+    struct UIOwnedNode* next;
+} UIOwnedNode;
+
+static UIOwnedNode** s_owned = NULL;
+static size_t s_ownedCap = 0;     // bucket count (power of two)
+static size_t s_ownedCount = 0;
+
+static size_t OwnedSlot(const void* p, size_t cap) {
+    uintptr_t h = (uintptr_t)p;
+    h ^= h >> 17;
+    h *= (uintptr_t)0xed5ad4bbu;
+    h ^= h >> 11;
+    return (size_t)h & (cap - 1);
+}
+
+static void OwnedRehash(size_t newCap) {
+    UIOwnedNode** nb = (UIOwnedNode**)calloc(newCap, sizeof(UIOwnedNode*));
+    if (!nb) return;
+    for (size_t i = 0; i < s_ownedCap; i++) {
+        UIOwnedNode* n = s_owned[i];
+        while (n) {
+            UIOwnedNode* next = n->next;
+            const size_t k = OwnedSlot(n->owner, newCap);
+            n->next = nb[k];
+            nb[k] = n;
+            n = next;
+        }
+    }
+    free(s_owned);
+    s_owned = nb;
+    s_ownedCap = newCap;
+}
+
+void UIWidget_AttachOwned(const void* owner, void* userdata, UIOwnedFreeFn freeFn) {
+    if (!owner || !freeFn) return;
+    if (s_ownedCount + 1 > s_ownedCap) OwnedRehash(s_ownedCap ? s_ownedCap * 2 : 256);
+    if (!s_owned) { freeFn(userdata); return; }   // OOM: free now, not leak
+    UIOwnedNode* n = (UIOwnedNode*)malloc(sizeof(UIOwnedNode));
+    if (!n) { freeFn(userdata); return; }
+    n->owner = owner;
+    n->userdata = userdata;
+    n->freeFn = freeFn;
+    const size_t k = OwnedSlot(owner, s_ownedCap);
+    n->next = s_owned[k];
+    s_owned[k] = n;
+    s_ownedCount++;
+}
+
+// Released state is parked here and freed by UIWidget_FlushOwned at the top of
+// the next frame: a callback may destroy its own widget (e.g. a click handler
+// that swaps the tree), so freeing its closure on the spot would pull the code
+// out from under the running call.
+static UIOwnedNode* s_retired = NULL;
+
+void UIWidget__ReleaseOwned(const void* owner) {
+    if (!owner || !s_ownedCount) return;
+    UIOwnedNode** link = &s_owned[OwnedSlot(owner, s_ownedCap)];
+    while (*link) {
+        UIOwnedNode* n = *link;
+        if (n->owner != owner) { link = &n->next; continue; }
+        *link = n->next;
+        s_ownedCount--;
+        n->next = s_retired;
+        s_retired = n;
+    }
+}
+
+void UIWidget_FlushOwned(void) {
+    // freeFn runs binding code that may destroy more widgets (retiring more
+    // nodes) or attach new state; pop one node at a time until empty.
+    static int flushing = 0;
+    if (flushing) return;
+    flushing = 1;
+    while (s_retired) {
+        UIOwnedNode* n = s_retired;
+        s_retired = n->next;
+        UIOwnedFreeFn fn = n->freeFn;
+        void* ud = n->userdata;
+        free(n);
+        fn(ud);
+    }
+    flushing = 0;
 }
 
 // ---------------------------------------------------------------------

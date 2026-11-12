@@ -6,6 +6,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#define strcasecmp _stricmp
 #else
 #include <sys/stat.h>
 #include <dirent.h>
@@ -13,6 +14,114 @@
 #endif
 
 #include <SDL3_ttf/SDL_ttf.h>
+
+#if defined(__APPLE__) && !defined(MOCIDA_IOS)
+#include <CoreText/CoreText.h>
+#define MOCIDA_FONT_CORETEXT 1
+#endif
+
+// Resolved family -> path, including misses (path = default), so repeated
+// lookups of the same family are a short string compare instead of a scan.
+typedef struct { char* family; const char* path; } FontLookup;
+static FontLookup* s_lookups = NULL;
+static int s_lookupCount = 0;
+
+static const char* LookupCached(const char* family) {
+    for (int i = 0; i < s_lookupCount; i++) {
+        if (strcmp(s_lookups[i].family, family) == 0) return s_lookups[i].path;
+    }
+    return NULL;
+}
+
+static const char* RememberLookup(const char* family, const char* path) {
+    FontLookup* grown = realloc(s_lookups, sizeof(FontLookup) * (size_t)(s_lookupCount + 1));
+    if (!grown) return path;
+    s_lookups = grown;
+    s_lookups[s_lookupCount].family = strdup(family);
+    s_lookups[s_lookupCount].path = path;
+    if (s_lookups[s_lookupCount].family) s_lookupCount++;
+    return path;
+}
+
+// Cross-platform stand-ins for families that only exist on one OS, so a UI
+// authored on Windows ("Consolas", "Segoe UI") gets the native look elsewhere.
+static const char* FamilyAlias(const char* family) {
+    static const char* const map[][2] = {
+#if defined(__APPLE__)
+        {"Consolas", "SF Mono"},      {"Cascadia Code", "SF Mono"},
+        {"Cascadia Mono", "SF Mono"}, {"Lucida Console", "SF Mono"},
+        {"Courier New", "SF Mono"},
+        {"Segoe UI", "SF Pro"},       {"Segoe UI Variable", "SF Pro"},
+        {"Tahoma", "SF Pro"},         {"Verdana", "SF Pro"},
+#else
+        {"Menlo", "Consolas"},        {"SF Mono", "Consolas"},
+        {"Helvetica Neue", "Segoe UI"}, {"Helvetica", "Arial"},
+        {"San Francisco", "Segoe UI"},  {"SF Pro", "Segoe UI"},
+        {"SF Pro Text", "Segoe UI"},    {"SF Pro Display", "Segoe UI"},
+        {"system-ui", "Segoe UI"},
+#endif
+    };
+    for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
+        if (strcasecmp(map[i][0], family) == 0) return map[i][1];
+    }
+    return NULL;
+}
+
+#ifdef MOCIDA_FONT_CORETEXT
+// Ask CoreText for the regular face of `family` (exact family match, no
+// substitution). Returns a malloc'd file path or NULL. ~1 ms, versus opening
+// every installed font file to read its family name.
+static char* CoreTextFamilyPath(const char* family) {
+    CFStringRef name = CFStringCreateWithCString(NULL, family, kCFStringEncodingUTF8);
+    if (!name) return NULL;
+    const void* keys[] = { kCTFontFamilyNameAttribute };
+    const void* vals[] = { name };
+    CFDictionaryRef attrs = CFDictionaryCreate(NULL, keys, vals, 1,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CTFontDescriptorRef desc = attrs ? CTFontDescriptorCreateWithAttributes(attrs) : NULL;
+    CFSetRef mandatory = CFSetCreate(NULL, keys, 1, &kCFTypeSetCallBacks);
+    CFArrayRef faces = (desc && mandatory)
+        ? CTFontDescriptorCreateMatchingFontDescriptors(desc, mandatory) : NULL;
+
+    char* path = NULL;
+    if (faces && CFArrayGetCount(faces) > 0) {
+        CFIndex best = 0;
+        double bestScore = 1e9;
+        for (CFIndex i = 0; i < CFArrayGetCount(faces); i++) {
+            CTFontDescriptorRef f = (CTFontDescriptorRef)CFArrayGetValueAtIndex(faces, i);
+            double score = 0;
+            CFDictionaryRef traits = CTFontDescriptorCopyAttribute(f, kCTFontTraitsAttribute);
+            if (traits) {
+                CFNumberRef w = CFDictionaryGetValue(traits, kCTFontWeightTrait);
+                CFNumberRef sym = CFDictionaryGetValue(traits, kCTFontSymbolicTrait);
+                double wv = 0;
+                uint32_t sv = 0;
+                if (w) CFNumberGetValue(w, kCFNumberDoubleType, &wv);
+                if (sym) CFNumberGetValue(sym, kCFNumberSInt32Type, &sv);
+                score = (wv < 0 ? -wv : wv) + ((sv & kCTFontItalicTrait) ? 10 : 0)
+                      + ((sv & kCTFontCondensedTrait) ? 5 : 0);
+                CFRelease(traits);
+            }
+            if (score < bestScore) { bestScore = score; best = i; }
+        }
+        CTFontDescriptorRef f = (CTFontDescriptorRef)CFArrayGetValueAtIndex(faces, best);
+        CFURLRef url = CTFontDescriptorCopyAttribute(f, kCTFontURLAttribute);
+        if (url) {
+            char buf[1024];
+            if (CFURLGetFileSystemRepresentation(url, true, (UInt8*)buf, sizeof(buf))) {
+                path = strdup(buf);
+            }
+            CFRelease(url);
+        }
+    }
+    if (faces) CFRelease(faces);
+    if (mandatory) CFRelease(mandatory);
+    if (desc) CFRelease(desc);
+    if (attrs) CFRelease(attrs);
+    CFRelease(name);
+    return path;
+}
+#endif
 
 #ifndef _WIN32
 // Recursive walker for UISearchFonts on Linux/BSD/macOS. Returns
@@ -63,7 +172,11 @@ static void WalkFontsDir(const char* dirPath, int* count) {
 
         TTF_Font* font = TTF_OpenFont(child, 12);
         if (!font) {
-            UI_WARN(UI_CAT_FONT, "failed to load font '%s': %s", child, SDL_GetError());
+            // A single unloadable face in the user's font dir (a broken file, an
+            // unsupported variable-font axis table, etc.) is expected and not
+            // actionable — the family simply won't be available. Log at DEBUG so
+            // it doesn't flood the console at every launch.
+            UI_DEBUG(UI_CAT_FONT, "skipping unloadable font '%s': %s", child, SDL_GetError());
             continue;
         }
 
@@ -279,48 +392,85 @@ const char* UIGetDefaultFontPath(void) {
     if (UIFonts && UIFonts[0]) return UIFonts[0]->file_path;
     return NULL;
 #else
-    return DEFAULT_FONT_PATH;
+    // DEFAULT_FONT_PATH probes candidate files with fopen on macOS/Linux; it
+    // is asked for per text widget, so resolve it once.
+    static const char* cached = NULL;
+    if (!cached) cached = DEFAULT_FONT_PATH;
+    return cached;
+#endif
+}
+
+#ifndef MOCIDA_FONT_CORETEXT
+// Look `family` up in the scanned registry (UISearchFonts). NULL if absent.
+static const char* RegistryFamilyPath(const char* family) {
+    // Lazily build the registry: hosts driving mocida directly (mui-runtime)
+    // never call UISearchFonts() themselves.
+    if (UIFonts == NULL) UISearchFonts();
+    if (UIFonts == NULL) return NULL;
+    for (int i = 0; UIFonts[i] != NULL; i++) {
+        FontEntry* e = UIFonts[i];
+        if (e && e->family_name && e->file_path && strcmp(e->family_name, family) == 0) {
+            return e->file_path;
+        }
+    }
+    return NULL;
+}
+#endif
+
+#ifdef MOCIDA_FONT_CORETEXT
+// macOS system families live in hidden (dot-prefixed) CoreText families, so a
+// lookup by their public names fails; map those names to the files directly.
+static const char* AppleSystemFontFile(const char* family) {
+    static const char* const map[][2] = {
+        {"SF Pro", "/System/Library/Fonts/SFNS.ttf"},
+        {"SF Pro Text", "/System/Library/Fonts/SFNS.ttf"},
+        {"SF Pro Display", "/System/Library/Fonts/SFNS.ttf"},
+        {"San Francisco", "/System/Library/Fonts/SFNS.ttf"},
+        {"system-ui", "/System/Library/Fonts/SFNS.ttf"},
+        {"-apple-system", "/System/Library/Fonts/SFNS.ttf"},
+        {"SF Mono", "/System/Library/Fonts/SFNSMono.ttf"},
+        {"SF Pro Rounded", "/System/Library/Fonts/SFNSRounded.ttf"},
+    };
+    for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
+        if (strcasecmp(map[i][0], family) == 0) {
+            struct stat st;
+            return stat(map[i][1], &st) == 0 ? map[i][1] : NULL;
+        }
+    }
+    return NULL;
+}
+#endif
+
+static const char* ResolveFamily(const char* family) {
+#ifdef MOCIDA_FONT_CORETEXT
+    const char* sys = AppleSystemFontFile(family);
+    if (sys) return sys;
+    // Owned by the lookup cache for the rest of the run.
+    return CoreTextFamilyPath(family);
+#else
+    return RegistryFamilyPath(family);
 #endif
 }
 
 char* UIGetFont(const char* family_name) {
-    // Lazily build the font registry on first use. Hosts that drive mocida
-    // directly (e.g. onda-launcher / mui-runtime) never call UISearchFonts(),
-    // so UIFonts stayed NULL and every font-family lookup returned NULL — which
-    // left those widgets' text undrawn, rendering buttons/labels as empty boxes.
-    // Populating here (idempotent: UISearchFonts no-ops once filled) makes real
-    // families resolve and the registry persists for the rest of the run, so the
-    // glitch can't recur. (The old `sizeof(UIFonts) == 0` check was dead code —
-    // sizeof a pointer is never 0.)
-    if (UIFonts == NULL) {
-        UISearchFonts();
-    }
-    if (UIFonts == NULL) {
-        // No fonts found at all (TTF_Init failed / empty system dir) — draw with
-        // the platform default path so text never disappears.
-        UI_WARN(UI_CAT_FONT, "fonts unavailable — using default font path");
+    if (family_name == NULL || family_name[0] == '\0') {
         return (char*)UIGetDefaultFontPath();
     }
+    const char* hit = LookupCached(family_name);
+    if (hit) return (char*)hit;
 
-    if (family_name == NULL) {
-        return (char*)UIGetDefaultFontPath();
+    const char* path = ResolveFamily(family_name);
+    if (!path) {
+        const char* alias = FamilyAlias(family_name);
+        if (alias) path = ResolveFamily(alias);
     }
-
-    for (int i = 0; UIFonts[i] != NULL; i++) {
-        FontEntry* fontEntry = UIFonts[i];
-        if (fontEntry == NULL || fontEntry->family_name == NULL || fontEntry->file_path == NULL) {
-            UI_WARN(UI_CAT_FONT, "invalid font entry at index %d", i);
-            continue;
-        }
-
-        if (strcmp(fontEntry->family_name, family_name) == 0) {
-            return fontEntry->file_path;
-        }
+    if (!path) {
+        // Unknown family: draw with the default font rather than dropping the
+        // text. Logged once per family (the miss is cached).
+        UI_WARN(UI_CAT_FONT, "font family '%s' not found — falling back to default font", family_name);
+        path = UIGetDefaultFontPath();
     }
-
-    // Unknown family: draw with the default font rather than dropping the text.
-    UI_WARN(UI_CAT_FONT, "font family '%s' not found — falling back to default font", family_name);
-    return (char*)UIGetDefaultFontPath();
+    return (char*)RememberLookup(family_name, path);
 }
 
 void UIFont_Destroy(FontEntry* font) {

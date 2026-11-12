@@ -15,36 +15,55 @@ use crate::widget::Widget;
 /// `Mica` / `MicaAlt` / `KdeBlurWindow` are *window-wide* (use them with
 /// [`Window::set_backdrop`](crate::window::Window::set_backdrop)); the rest are
 /// *region* materials usable on a [`Glass`] widget.
+///
+/// Passing a material that the current platform does not support results in a
+/// **silent no-op** — the C layer ignores unsupported variants at runtime. Use
+/// [`Auto`](Self::Auto) to let mocida pick the best available effect, or check
+/// `cfg!(target_os = …)` before passing a platform-specific variant.
+///
+/// # Platform availability
+///
+/// | Material | Windows | macOS | Linux |
+/// |---|:---:|:---:|:---:|
+/// | `None` / `Auto` | ✓ | ✓ | ✓ |
+/// | `Mica`, `MicaAlt` | Win 11+ | — | — |
+/// | `Acrylic`, `AcrylicLegacy` | Win 10+ | — | — |
+/// | `LiquidGlass` | — | macOS/iOS 26+ | — |
+/// | `Vibrancy*` | — | ✓ | — |
+/// | `KdeBlurWindow`, `KdeBlurRegion` | — | — | KWin |
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 pub enum BackdropMaterial {
     /// No effect.
     None = 0,
-    /// Platform default, resolved at runtime.
+    /// Platform default, resolved at runtime (`Mica` on Win11, `LiquidGlass` on
+    /// macOS 26+, `KdeBlurWindow` on KWin, `None` elsewhere).
     Auto = 1,
-    /// Win11 Mica (window-wide).
+    /// Windows 11 Mica — translucent tinted blur drawing from the desktop
+    /// wallpaper. Window-wide; use with [`Window::set_backdrop`](crate::window::Window::set_backdrop).
     Mica = 2,
-    /// Win11 Mica Alt (window-wide).
+    /// Windows 11 Mica Alt — stronger tint variant of Mica. Window-wide.
     MicaAlt = 3,
-    /// KWin whole-window blur (window-wide).
+    /// KWin whole-window blur (Linux/KDE). Window-wide.
     KdeBlurWindow = 4,
-    /// Win11 Acrylic.
+    /// Windows 11 Acrylic — frosted-glass blur of content behind the window.
     Acrylic = 5,
-    /// Win10 acrylic blur-behind.
+    /// Windows 10 acrylic blur-behind (legacy API, less smooth than Win11 Acrylic).
     AcrylicLegacy = 6,
-    /// macOS/iOS 26 Liquid Glass.
+    /// macOS / iOS 26+ Liquid Glass — adaptive material with refraction and
+    /// specular highlights. Falls back to the closest vibrancy on older OSes.
     LiquidGlass = 7,
-    /// macOS sidebar vibrancy.
+    /// macOS sidebar vibrancy (`NSVisualEffectMaterialSidebar`).
     VibrancySidebar = 8,
-    /// macOS header vibrancy.
+    /// macOS header / title-bar vibrancy (`NSVisualEffectMaterialHeaderView`).
     VibrancyHeader = 9,
-    /// macOS menu vibrancy.
+    /// macOS menu vibrancy (`NSVisualEffectMaterialMenu`).
     VibrancyMenu = 10,
-    /// macOS popover vibrancy.
+    /// macOS popover vibrancy (`NSVisualEffectMaterialPopover`).
     VibrancyPopover = 11,
-    /// macOS HUD vibrancy.
+    /// macOS HUD panel vibrancy (`NSVisualEffectMaterialHUDWindow`).
     VibrancyHud = 12,
-    /// KWin per-region blur.
+    /// KWin per-region blur (Linux/KDE). Use on a [`Glass`] widget.
     KdeBlurRegion = 13,
 }
 

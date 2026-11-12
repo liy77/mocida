@@ -127,7 +127,7 @@ impl Drop for Checkbox {
             return;
         }
         if let Some(state) = self.on_change.take() {
-            std::mem::forget(state);
+            crate::widget::attach_owned(self.ptr as *const std::ffi::c_void, state);
         }
     }
 }
@@ -264,7 +264,7 @@ impl Drop for Slider {
             return;
         }
         if let Some(state) = self.on_change.take() {
-            std::mem::forget(state);
+            crate::widget::attach_owned(self.ptr as *const std::ffi::c_void, state);
         }
     }
 }
@@ -547,7 +547,7 @@ impl Drop for Switch {
             return;
         }
         if let Some(state) = self.on_change.take() {
-            std::mem::forget(state);
+            crate::widget::attach_owned(self.ptr as *const std::ffi::c_void, state);
         }
     }
 }
@@ -696,7 +696,7 @@ impl Drop for RadioButton {
             return;
         }
         if let Some(state) = self.on_change.take() {
-            std::mem::forget(state);
+            crate::widget::attach_owned(self.ptr as *const std::ffi::c_void, state);
         }
     }
 }

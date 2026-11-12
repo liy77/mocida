@@ -1,6 +1,6 @@
 //! `UIMouseArea` wrapper — invisible interaction surface.
 
-use std::ffi::c_void;
+use std::ffi::{c_void, CStr, CString};
 
 use mocida_sys as sys;
 
@@ -72,10 +72,17 @@ pub struct MouseArea {
     /// One slot per [`MouseAreaEvent`]; ten boxes alive for the life
     /// of the wrapper. Boxed for stable addresses.
     callbacks: [Option<Box<TrampolineState>>; 9],
+    /// Internal drag-and-drop drop handler state (separate signature).
+    drop_cb: Option<Box<DropState>>,
 }
 
 struct TrampolineState {
     handler: Box<dyn FnMut(MouseEvent) + 'static>,
+}
+
+struct DropState {
+    /// Receives (payload, drop_data) when a source is dropped on this target.
+    handler: Box<dyn FnMut(&str, &str) + 'static>,
 }
 
 impl MouseArea {
@@ -89,7 +96,41 @@ impl MouseArea {
             ptr,
             moved: false,
             callbacks: Default::default(),
+            drop_cb: None,
         })
+    }
+
+    /// Marks this area as an internal drag SOURCE carrying `payload`. While
+    /// dragging, the area does NOT move its own widget — it drives a global drag
+    /// resolved against drop targets on release.
+    pub fn drag_data(self, payload: &str) -> Self {
+        if let Ok(c) = CString::new(payload) {
+            unsafe { sys::UIMouseArea_SetDragData(self.ptr, c.as_ptr()) };
+        }
+        self
+    }
+
+    /// Marks this area as an internal drop TARGET with id `drop_data`.
+    pub fn drop_data(self, drop_data: &str) -> Self {
+        if let Ok(c) = CString::new(drop_data) {
+            unsafe { sys::UIMouseArea_SetDropData(self.ptr, c.as_ptr()) };
+        }
+        self
+    }
+
+    /// Registers the drop handler, fired with `(payload, drop_data)` when an
+    /// internal drag source is released over this target.
+    pub fn on_drop<F>(mut self, handler: F) -> Self
+    where
+        F: FnMut(&str, &str) + 'static,
+    {
+        let state = Box::new(DropState {
+            handler: Box::new(handler),
+        });
+        let userdata = Box::as_ref(&state) as *const DropState as *mut c_void;
+        unsafe { sys::UIMouseArea_OnDrop(self.ptr, Some(drop_trampoline), userdata) };
+        self.drop_cb = Some(state);
+        self
     }
 
     /// Enables / disables drag-to-move behaviour.
@@ -202,8 +243,11 @@ impl Drop for MouseArea {
         // slot states so subsequent events don't deref freed memory.
         for slot in self.callbacks.iter_mut() {
             if let Some(state) = slot.take() {
-                std::mem::forget(state);
+                crate::widget::attach_owned(self.ptr as *const std::ffi::c_void, state);
             }
+        }
+        if let Some(state) = self.drop_cb.take() {
+            crate::widget::attach_owned(self.ptr as *const std::ffi::c_void, state);
         }
     }
 }
@@ -231,4 +275,27 @@ extern "C" fn trampoline(
     }
     let state = unsafe { &mut *(userdata as *mut TrampolineState) };
     (state.handler)(ev.into());
+}
+
+extern "C" fn drop_trampoline(
+    _target: *mut sys::UIMouseArea,
+    payload: *const std::os::raw::c_char,
+    drop_data: *const std::os::raw::c_char,
+    userdata: *mut c_void,
+) {
+    if userdata.is_null() {
+        return;
+    }
+    let payload = if payload.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(payload) }.to_string_lossy().into_owned()
+    };
+    let drop_data = if drop_data.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(drop_data) }.to_string_lossy().into_owned()
+    };
+    let state = unsafe { &mut *(userdata as *mut DropState) };
+    (state.handler)(&payload, &drop_data);
 }

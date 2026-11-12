@@ -254,6 +254,19 @@ static SDL_Texture* RasterizeCoverageCircle(SDL_Renderer* renderer,
                 alpha = 255;          // pixel fully inside
             } else if (minDist2 >= r2) {
                 alpha = 0;            // pixel fully outside
+            } else if (samplesPerSide <= 1) {
+                // Analytic 1 px feather (signed distance of the pixel centre).
+                // Same edge a GPU SDF shader produces — smooth on every
+                // backend, one sqrtf instead of an N*N sample grid. This is
+                // what samples-per-side 1 means: smooth, not jagged.
+                const float pcx = (float)px + 0.5f - cx;
+                const float pcy = (float)py + 0.5f - cy;
+                const float sdf = sqrtf(pcx * pcx + pcy * pcy) - r;
+                float cov;
+                if      (sdf <= -0.5f) cov = 1.0f;
+                else if (sdf >=  0.5f) cov = 0.0f;
+                else                   cov = 0.5f - sdf;
+                alpha = (Uint8)(cov * 255.0f + 0.5f);
             } else {
                 // Edge: take NxN subsamples for coverage.
                 int inside = 0;
@@ -1287,37 +1300,33 @@ void DrawGlassBackdropBlur(SDL_Renderer* r, SDL_FRect rect, float blurPx) {
         dw = nw; dh = nh;
     }
 
-    // Restore target + scale. Up-sample back through each mip level with
-    // additive blending so the wider blur contributes a soft "glow" trail
-    // while the finer levels keep edge detail. This is much closer to a
-    // real gaussian / macOS vibrancy look than a single final up-sample.
+    // Reconstruct the blur by walking the mip chain back UP one level at a time,
+    // each step a bilinear 2× up-sample (dual-filter / Kawase style). This is the
+    // key to a smooth result: stretching the smallest level straight to full size
+    // in a single blit produces visible blocky facets (a piecewise-linear "tent"),
+    // which is exactly the pixelation seen at high blur. Doubling step-by-step lets
+    // each interpolation smooth the previous one, approximating a Gaussian. All
+    // blits use NORMAL (never additive) blending, so the result is an average of
+    // the source and can only darken — bright wallpapers no longer blow out.
+    for (int i = nLevels - 2; i >= 0; i--) {
+        SDL_SetRenderTarget(r, levels[i]);
+        SDL_SetRenderScale(r, 1.0f, 1.0f);
+        SDL_SetTextureAlphaMod(cur, 255);
+        SDL_SetTextureScaleMode(cur, SDL_SCALEMODE_LINEAR);
+        SDL_SetTextureBlendMode(cur, SDL_BLENDMODE_NONE);
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+        SDL_RenderTexture(r, cur, NULL, NULL); // up-sample the smaller level into the larger
+        cur = levels[i];
+    }
+
+    // Final blit of the (now smoothly up-sampled) largest mip to the screen rect.
     SDL_SetRenderTarget(r, target);
     SDL_SetRenderScale(r, sx, sy);
+    SDL_SetTextureAlphaMod(cur, 255);
+    SDL_SetTextureScaleMode(cur, SDL_SCALEMODE_LINEAR);
     SDL_SetTextureBlendMode(cur, SDL_BLENDMODE_NONE);
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
     SDL_RenderTexture(r, cur, NULL, &rect);
-
-    if (nLevels > 0) {
-        SDL_SetTextureBlendMode(cur, SDL_BLENDMODE_ADD);
-        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_ADD);
-        SDL_FRect levelRect = rect;
-        for (int i = nLevels - 1; i >= 0; i--) {
-            SDL_Texture* level = levels[i];
-            SDL_SetTextureScaleMode(level, SDL_SCALEMODE_LINEAR);
-            SDL_SetTextureBlendMode(level, SDL_BLENDMODE_ADD);
-            // Each coarser level contributes progressively less so the center
-            // stays sharp and the falloff stays smooth.
-            Uint8 alpha = (Uint8)(255.0f / (float)(nLevels - i + 1));
-            SDL_SetTextureAlphaMod(level, alpha);
-            SDL_RenderTexture(r, level, NULL, &levelRect);
-        }
-        // Also blend the original capture at very low opacity to restore
-        // some high-frequency detail lost in the downsample chain.
-        SDL_SetTextureScaleMode(cap, SDL_SCALEMODE_LINEAR);
-        SDL_SetTextureBlendMode(cap, SDL_BLENDMODE_ADD);
-        SDL_SetTextureAlphaMod(cap, 32);
-        SDL_RenderTexture(r, cap, NULL, &rect);
-    }
 
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND); // restore for widget draws
     for (int i = 0; i < nLevels; i++) SDL_DestroyTexture(levels[i]);

@@ -325,12 +325,18 @@ static void Cocoa_DispatchEvent(NSEvent *theEvent)
             [i activateWithOptions:NSApplicationActivateIgnoringOtherApps];
             break;
         }
-        SDL_Delay(300); // !!! FIXME: this isn't right.
-        [NSApp activateIgnoringOtherApps:YES];
+        // mocida: this was a blocking SDL_Delay(300), which held back the first
+        // frame of every app by 300 ms. Re-activate asynchronously instead so the
+        // event loop (and rendering) keeps running during the Dock round-trip.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+            [NSApp activateIgnoringOtherApps:YES];
+            /* If we call this before NSApp activation, macOS might print a
+             * complaint about ApplePersistenceIgnoreState. */
+            [SDL3Application registerUserDefaults];
+        });
+        return;
     }
 
-    /* If we call this before NSApp activation, macOS might print a complaint
-     * about ApplePersistenceIgnoreState. */
     [SDL3Application registerUserDefaults];
 }
 

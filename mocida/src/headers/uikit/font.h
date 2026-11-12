@@ -18,10 +18,10 @@
 
 static const char* find_default_macos_font() {
     const char* candidates[] = {
+        "/System/Library/Fonts/SFNS.ttf",               // San Francisco (system UI font)
+        "/System/Library/Fonts/Helvetica.ttc",          // always present
         "/System/Library/Fonts/Supplemental/Arial.ttf", // family "Arial"
         "/Library/Fonts/Arial Unicode.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",          // always present
-        "/System/Library/Fonts/SFNS.ttf",               // San Francisco
         NULL
     };
     for (int i = 0; candidates[i] != NULL; i++) {

@@ -19,8 +19,18 @@ const ATTR: Color = Color::rgb(0xC5, 0x86, 0xC0); // purple (annotations / props
 pub fn is_supported(lang: &str) -> bool {
     matches!(
         lang,
-        "rs" | "crs" | "crm" | "mui" | "json"
-            | "toml" | "kson" | "sh" | "bash" | "zsh" | "ps1" | "md" | "markdown"
+        "rs" | "crs"
+            | "crm"
+            | "mui"
+            | "json"
+            | "toml"
+            | "kson"
+            | "sh"
+            | "bash"
+            | "zsh"
+            | "ps1"
+            | "md"
+            | "markdown"
     )
 }
 
@@ -29,19 +39,18 @@ fn keywords(lang: &str) -> &'static [&'static str] {
         "rs" => &[
             // keywords (uppercase std types like Vec/Option are coloured as
             // Type by the Type-case rule, so they're intentionally not listed)
-            "fn", "let", "mut", "const", "static", "async", "await", "unsafe", "extern",
-            "struct", "enum", "union", "impl", "trait", "type", "pub", "use", "mod", "crate",
-            "super", "self", "if", "else", "match", "for", "while", "loop", "in", "continue",
-            "break", "return", "where", "as", "ref", "move", "dyn", "box", "macro", "yield", "try",
+            "fn", "let", "mut", "const", "static", "async", "await", "unsafe", "extern", "struct",
+            "enum", "union", "impl", "trait", "type", "pub", "use", "mod", "crate", "super",
+            "self", "if", "else", "match", "for", "while", "loop", "in", "continue", "break",
+            "return", "where", "as", "ref", "move", "dyn", "box", "macro", "yield", "try",
             // primitive types (lowercase → need to be listed to get a colour)
-            "bool", "char", "str", "i8", "i16", "i32", "i64", "i128", "isize",
-            "u8", "u16", "u32", "u64", "u128", "usize", "f32", "f64",
-            "true", "false",
+            "bool", "char", "str", "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32",
+            "u64", "u128", "usize", "f32", "f64", "true", "false",
         ],
         "crs" | "crm" => &[
-            "func", "let", "mut", "struct", "enum", "trait", "impl", "import", "from", "if", "else",
-            "match", "for", "while", "loop", "return", "break", "continue", "as", "in", "pub",
-            "const", "unsafe", "self", "true", "false", "vec",
+            "func", "let", "mut", "struct", "enum", "trait", "impl", "import", "from", "if",
+            "else", "match", "for", "while", "loop", "return", "break", "continue", "as", "in",
+            "pub", "const", "unsafe", "self", "true", "false", "vec",
         ],
         "mui" => &[
             "view", "App", "signal", "mut", "if", "else", "for", "in", "import", "from", "true",
@@ -55,18 +64,18 @@ fn keywords(lang: &str) -> &'static [&'static str] {
         "toml" => &["true", "false", "inf", "nan"],
         // POSIX shell.
         "sh" | "bash" | "zsh" => &[
-            "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done",
-            "case", "esac", "in", "function", "return", "local", "export", "readonly",
-            "declare", "echo", "cd", "source", "exit", "break", "continue", "set", "unset",
-            "alias", "shift", "trap", "eval", "exec", "test", "then", "select",
+            "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case",
+            "esac", "in", "function", "return", "local", "export", "readonly", "declare", "echo",
+            "cd", "source", "exit", "break", "continue", "set", "unset", "alias", "shift", "trap",
+            "eval", "exec", "test", "then", "select",
         ],
         // PowerShell (hyphenated cmdlets like Write-Host don't tokenise as one
         // identifier, so only the bare-word control keywords are listed).
         "ps1" => &[
-            "if", "else", "elseif", "function", "param", "foreach", "for", "while", "do",
-            "switch", "try", "catch", "finally", "throw", "break", "continue", "return",
-            "begin", "process", "end", "filter", "in", "trap", "until", "class", "enum",
-            "using", "Write", "Get", "Set", "New", "Remove",
+            "if", "else", "elseif", "function", "param", "foreach", "for", "while", "do", "switch",
+            "try", "catch", "finally", "throw", "break", "continue", "return", "begin", "process",
+            "end", "filter", "in", "trap", "until", "class", "enum", "using", "Write", "Get",
+            "Set", "New", "Remove",
         ],
         // Markdown has no keywords — headers/code are handled structurally below.
         "md" | "markdown" => &[],

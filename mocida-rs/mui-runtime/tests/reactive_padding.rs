@@ -28,8 +28,7 @@ use mui_syntax::ast::Node;
 use mui_syntax::style::box_spacing_reactive;
 
 const FIXTURE_STATIC: &str = "view V() { Stack(paddingLeft: 14) {} }";
-const FIXTURE_REACTIVE: &str =
-    "view V() { Stack(paddingLeft: ${is_macos == \"1\" ? 80 : 14}) {} }";
+const FIXTURE_REACTIVE: &str = "view V() { Stack(paddingLeft: ${is_macos == \"1\" ? 80 : 14}) {} }";
 
 /// Parse `src`, return the first Element in the first view's body.
 fn first_element(src: &str) -> mui_syntax::ast::Element {
@@ -62,8 +61,8 @@ fn static_padding_left_resolves_to_14() {
     let reactive = Reactive::new();
     let env = build_reactive_env(&reactive);
     let el = first_element(FIXTURE_STATIC);
-    let (pl, _pt, _pr, _pb) = box_spacing_reactive(&el, "padding", Some(&env))
-        .expect("padding is set on the Stack");
+    let (pl, _pt, _pr, _pb) =
+        box_spacing_reactive(&el, "padding", Some(&env)).expect("padding is set on the Stack");
     assert_eq!(pl, 14.0, "static paddingLeft: 14 should resolve to 14.0");
 }
 
@@ -81,8 +80,8 @@ fn reactive_padding_left_is_14_on_non_macos() {
         "env must mirror the live signal"
     );
     let el = first_element(FIXTURE_REACTIVE);
-    let (pl, _pt, _pr, _pb) = box_spacing_reactive(&el, "padding", Some(&env))
-        .expect("padding is set on the Stack");
+    let (pl, _pt, _pr, _pb) =
+        box_spacing_reactive(&el, "padding", Some(&env)).expect("padding is set on the Stack");
     assert_eq!(
         pl, 14.0,
         "reactive paddingLeft with is_macos=0 should resolve to 14.0"
@@ -99,8 +98,8 @@ fn reactive_padding_left_is_80_on_macos() {
     reactive.set_str("is_macos", "1");
     let env = build_reactive_env(&reactive);
     let el = first_element(FIXTURE_REACTIVE);
-    let (pl, _pt, _pr, _pb) = box_spacing_reactive(&el, "padding", Some(&env))
-        .expect("padding is set on the Stack");
+    let (pl, _pt, _pr, _pb) =
+        box_spacing_reactive(&el, "padding", Some(&env)).expect("padding is set on the Stack");
     assert_eq!(
         pl, 80.0,
         "reactive paddingLeft with is_macos=1 should resolve to 80.0"

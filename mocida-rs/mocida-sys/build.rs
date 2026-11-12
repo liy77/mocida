@@ -526,6 +526,7 @@ typedef struct SDL_AudioStream  SDL_AudioStream;
 typedef struct SDL_FRect        SDL_FRect;
 typedef int SDL_Scancode;
 typedef Uint32 SDL_Keycode;
+typedef Uint32 SDL_BlendMode;
 
 /* A few function prototypes referenced by `static inline` helpers in
  * the public headers. Only the signatures matter — bindgen records

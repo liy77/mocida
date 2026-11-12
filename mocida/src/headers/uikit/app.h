@@ -612,6 +612,16 @@ void UIApp_SetStatusBarHidden(UIApp* app, int hidden);
  */
 void UIApp_Run(UIApp* app);
 
+/**
+ * Delivers an editing shortcut (Ctrl + `scancode`, plus Shift when `shift`)
+ * to the focused TextField / TextArea, exactly as if typed. Lets a native
+ * menu (Edit ▸ Copy, whose ⌘C the OS menu consumes) drive whichever text
+ * widget has focus.
+ */
+void UIApp_SendEditKey(UIApp* app, int scancode, int shift);
+/** UIApp_SendEditKey on the current app. */
+void UIApp_SendEditKeyG(int scancode, int shift);
+
 #ifdef MOCIDA_WEB
 void UIApp_RunOneFrame(UIApp* app, Uint32 dtMs);
 void UIApp_RunWeb(UIApp* app);

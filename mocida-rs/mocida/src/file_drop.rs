@@ -111,7 +111,7 @@ impl Drop for FileDrop {
             return;
         }
         if let Some(state) = self.on_drop.take() {
-            std::mem::forget(state);
+            crate::widget::attach_owned(self.ptr as *const std::ffi::c_void, state);
         }
     }
 }

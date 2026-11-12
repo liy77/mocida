@@ -504,7 +504,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut s = aa_state.borrow_mut();
             s.aa_idx = (s.aa_idx + 1) % AA_MODES.len();
             let (mode, label) = AA_MODES[s.aa_idx];
-            unsafe { mocida::sys::UIApp_SetAAMode(aa_app_ptr, mocida::sys::UIAAMode(mode as i32)) };
+            unsafe { mocida::sys::UIApp_SetAAMode(aa_app_ptr, mocida::sys::UIAAMode(mode as _)) };
             set_label_text(s.aa_label, &format!("AA: {}", label));
             let _ = btn.set_text(&format!("AA Mode: {}", label));
         },

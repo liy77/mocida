@@ -253,10 +253,10 @@ impl Drop for TextField {
             return;
         }
         if let Some(state) = self.on_change.take() {
-            std::mem::forget(state);
+            crate::widget::attach_owned(self.ptr as *const std::ffi::c_void, state);
         }
         if let Some(state) = self.on_submit.take() {
-            std::mem::forget(state);
+            crate::widget::attach_owned(self.ptr as *const std::ffi::c_void, state);
         }
     }
 }

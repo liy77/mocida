@@ -47,6 +47,7 @@ pub mod asset;
 pub mod bind;
 pub mod bundle;
 pub mod button;
+pub mod canvas;
 pub mod children;
 pub mod clipboard;
 pub mod color;
@@ -61,12 +62,12 @@ pub mod event;
 pub mod extra;
 pub mod file_dialog;
 pub mod file_drop;
+pub mod glass;
 pub mod image;
+pub mod menu_bar;
 pub mod mouse_area;
 pub mod overlay;
-pub mod glass;
 pub mod popup;
-pub mod menu_bar;
 pub mod profile;
 pub mod reactive;
 pub mod rect;
@@ -103,6 +104,9 @@ pub use dialog::Dialog;
 pub use error::{Error, Result};
 pub use event::Event;
 pub use file_drop::FileDrop;
+pub use glass::{
+    set_glass_blur_scale, set_glass_enabled, BackdropMaterial, Glass, GlassThickness, VibrancyState,
+};
 pub use image::{FillMode, Image, ImageLoadState};
 pub use mouse_area::{MouseArea, MouseAreaEvent, MouseEvent};
 pub use overlay::OverlayFlag;
@@ -113,10 +117,6 @@ pub use rect::Rectangle;
 pub use screen::{Insets, Screen};
 pub use shadow::Shadow;
 pub use sound::Sound;
-pub use glass::{
-    set_glass_blur_scale, set_glass_enabled, BackdropMaterial, Glass, GlassThickness,
-    VibrancyState,
-};
 pub use stack::{Stack, StackAlign, StackJustify, StackOrientation};
 pub use tab::TabView;
 pub use text::{FontStyle, Text, TextHAlign, TextVAlign, WrapMode};

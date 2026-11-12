@@ -1017,16 +1017,28 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
         // src.a multiply and over-brightens the glyph edges into a white
         // ring.) Also guards the fresh-surface BLENDMODE_NONE default.
         SDL_SetTextureBlendMode(twid->__SDL_textTexture, SDL_BLENDMODE_BLEND);
-        float txw, txh;
-        SDL_GetTextureSize(twid->__SDL_textTexture, &txw, &txh);
-        // The texture is rasterized at g_textSS×; bring it back to logical
-        // units so all layout below (and the dst rect) work in points.
-        txw /= g_textSS;
-        txh /= g_textSS;
-        // Strip the transparent border back off so all layout below works in
-        // glyph (logical) units; the full padded texture is drawn at the end.
-        txw -= 2 * TEXT_TEX_PAD;
-        txh -= 2 * TEXT_TEX_PAD;
+        // Save raw texture dimensions before dividing — needed for the
+        // src-rect clipping below and for gradient UV remapping.
+        float raw_w, raw_h;
+        SDL_GetTextureSize(twid->__SDL_textTexture, &raw_w, &raw_h);
+        // Bring to logical units: round to the nearest integer so the dst
+        // rect is always integer-sized (SDL_ttf can return odd-pixel widths
+        // that would make the division fractional, which LINEAR blurs).
+        float txw = roundf(raw_w / (float)g_textSS) - 2 * TEXT_TEX_PAD;
+        float txh = roundf(raw_h / (float)g_textSS) - 2 * TEXT_TEX_PAD;
+        // The texture was rasterized with TEXT_TEX_PAD*g_textSS px of
+        // transparent padding on each side (so the LINEAR AA sampler has
+        // bleed room). Drawing that FULL padded texture into a dst that
+        // doesn't include the pad produces a scale > g_textSS (e.g. 2.15×
+        // instead of 2×), which LINEAR-blurs every glyph. Fix: clip the
+        // src rect to the glyph-only region, giving exactly g_textSS:1
+        // on non-Retina and 1:1 on Retina — both render crisp.
+        const float pad_px = (float)(TEXT_TEX_PAD * g_textSS);
+        const SDL_FRect srcGlyph = {
+            pad_px, pad_px,
+            raw_w - 2.0f * pad_px,
+            raw_h - 2.0f * pad_px
+        };
 
         // FIT: shrink the glyph block uniformly so it fits the
         // available width on a single line. Texture is rendered at the
@@ -1141,6 +1153,10 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
             // whose vertex colors carry the 2-stop gradient. SDL multiplies the
             // per-vertex color by the sampled texel, so white glyphs take the
             // interpolated gradient color and the glyph alpha masks it.
+            // UV coords map to the glyph-only region of the padded texture
+            // (same as srcGlyph above), so the sampler stays inside the ink.
+            const float u0 = pad_px / raw_w, u1 = 1.0f - u0;
+            const float v0 = pad_px / raw_h, v1 = 1.0f - v0;
             const float gx0 = g_tempRect2.x,            gy0 = g_tempRect2.y;
             const float gx1 = g_tempRect2.x + g_tempRect2.w;
             const float gy1 = g_tempRect2.y + g_tempRect2.h;
@@ -1159,21 +1175,21 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
             const SDL_FColor cBR = c2;
             const SDL_FColor cBL = twid->gradHorizontal ? c1 : c2;
             SDL_Vertex gv[4];
-            gv[0].position = (SDL_FPoint){ gx0, gy0 }; gv[0].tex_coord = (SDL_FPoint){ 0.0f, 0.0f }; gv[0].color = cTL;
-            gv[1].position = (SDL_FPoint){ gx1, gy0 }; gv[1].tex_coord = (SDL_FPoint){ 1.0f, 0.0f }; gv[1].color = cTR;
-            gv[2].position = (SDL_FPoint){ gx1, gy1 }; gv[2].tex_coord = (SDL_FPoint){ 1.0f, 1.0f }; gv[2].color = cBR;
-            gv[3].position = (SDL_FPoint){ gx0, gy1 }; gv[3].tex_coord = (SDL_FPoint){ 0.0f, 1.0f }; gv[3].color = cBL;
+            gv[0].position = (SDL_FPoint){ gx0, gy0 }; gv[0].tex_coord = (SDL_FPoint){ u0, v0 }; gv[0].color = cTL;
+            gv[1].position = (SDL_FPoint){ gx1, gy0 }; gv[1].tex_coord = (SDL_FPoint){ u1, v0 }; gv[1].color = cTR;
+            gv[2].position = (SDL_FPoint){ gx1, gy1 }; gv[2].tex_coord = (SDL_FPoint){ u1, v1 }; gv[2].color = cBR;
+            gv[3].position = (SDL_FPoint){ gx0, gy1 }; gv[3].tex_coord = (SDL_FPoint){ u0, v1 }; gv[3].color = cBL;
             const int gi[6] = { 0, 1, 2, 0, 2, 3 };
             SDL_RenderGeometry(window->sdlRenderer, twid->__SDL_textTexture,
                                gv, 4, gi, 6);
         } else if (el->rotation != 0.0f) {
             SDL_FPoint pivot = { g_tempRect2.w * 0.5f, g_tempRect2.h * 0.5f };
             SDL_RenderTextureRotated(window->sdlRenderer, twid->__SDL_textTexture,
-                                     NULL, &g_tempRect2,
+                                     &srcGlyph, &g_tempRect2,
                                      (double)el->rotation, &pivot, SDL_FLIP_NONE);
         } else {
             SDL_RenderTexture(window->sdlRenderer, twid->__SDL_textTexture,
-                              NULL, &g_tempRect2);
+                              &srcGlyph, &g_tempRect2);
         }
         // Reset alpha mod so subsequent users of the same texture aren't
         // affected by our opacity.
@@ -1239,8 +1255,11 @@ static void RenderWidget_Button(UIWindow* window, UIWidget* el,
                                        (Uint8)SDL_clamp((int)(textC.a * 255.0f), 0, 255));
                 float txw = 0.0f, txh = 0.0f;
                 SDL_GetTextureSize(btn->label->__SDL_textTexture, &txw, &txh);
-                txw /= g_textSS;   // texture is g_textSS× — lay out in logical px
-                txh /= g_textSS;
+                // Round to integer before dividing — same rationale as
+                // RenderWidget_Text: odd SDL_ttf texture widths cause a
+                // fractional dst rect which blurs glyphs under LINEAR mode.
+                txw = roundf(txw / (float)g_textSS);
+                txh = roundf(txh / (float)g_textSS);
                 const float pressOffset = (btn->state == UI_BUTTON_STATE_PRESSED) ? 1.0f : 0.0f;
 
                 // Optical centring: SDL_ttf surfaces are ascent + descent
@@ -1321,6 +1340,27 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
                               img->marginRight, img->marginBottom);
         if (bounds.w <= 0 || bounds.h <= 0) return;
 
+        // Remember the caller's clip (e.g. a parent Scroll viewport): the overflow/
+        // tile/rounded paths below set their own clip and must restore THIS one, not
+        // NULL — otherwise everything drawn after this image (sibling widgets further
+        // down a Scroll) renders unclipped and spills outside the viewport.
+        const bool __imgHadClip = SDL_RenderClipEnabled(window->sdlRenderer);
+        SDL_Rect __imgPrevClip = {0,0,0,0};
+        if (__imgHadClip) SDL_GetRenderClipRect(window->sdlRenderer, &__imgPrevClip);
+        #define IMG_RESTORE_CLIP() SDL_SetRenderClipRect(window->sdlRenderer, __imgHadClip ? &__imgPrevClip : NULL)
+        // Clip to rect R, but INTERSECTED with the caller's clip (a parent Scroll
+        // viewport) — replacing it outright lets an image scrolled partway out of
+        // the viewport still paint at its own (off-viewport) bounds and escape.
+        #define IMG_CLIP_TO(R) do { \
+            if (__imgHadClip) { \
+                SDL_Rect __isect; \
+                if (SDL_GetRectIntersection(&(R), &__imgPrevClip, &__isect)) \
+                    SDL_SetRenderClipRect(window->sdlRenderer, &__isect); \
+                else { SDL_Rect __e = { __imgPrevClip.x, __imgPrevClip.y, 0, 0 }; \
+                       SDL_SetRenderClipRect(window->sdlRenderer, &__e); } \
+            } else { SDL_SetRenderClipRect(window->sdlRenderer, &(R)); } \
+        } while (0)
+
         // Tint colour combined with widget opacity. When the tint alpha
         // is 0 we treat it as "no tint" but still apply opacity.
         if (img->tintColor.a > 0.0f) {
@@ -1385,7 +1425,7 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
             case FILL_TILE: {
                 SDL_Rect clip2 = { (int)bounds.x, (int)bounds.y,
                                    (int)ceilf(bounds.w), (int)ceilf(bounds.h) };
-                SDL_SetRenderClipRect(window->sdlRenderer, &clip2);
+                IMG_CLIP_TO(clip2);
                 for (float y = bounds.y; y < bounds.y + bounds.h; y += texH) {
                     for (float x = bounds.x; x < bounds.x + bounds.w; x += texW) {
                         SDL_FRect tile = { x, y, texW, texH };
@@ -1393,7 +1433,7 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
                                           img->__SDL_texture, NULL, &tile);
                     }
                 }
-                SDL_SetRenderClipRect(window->sdlRenderer, NULL);
+                IMG_RESTORE_CLIP();
                 return;
             }
             default: dst = bounds; break;
@@ -1570,14 +1610,19 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
             img->__rcFillMode = (int)img->fillMode;
             img->__rcOp       = op;
             img->__rcSrc      = (void*)img->__SDL_texture;
+            // The scratch composite cleared the clip; restore the caller's before
+            // blitting back so the rounded image is itself clipped to the viewport.
+            IMG_RESTORE_CLIP();
             SDL_RenderTexture(window->sdlRenderer, img->__roundedCache, NULL, &bounds);
         } else {
             // No rounded clip needed. Render image directly.
-            if (useClipForOverflow) {
-                SDL_Rect clip2 = { (int)bounds.x, (int)bounds.y,
-                                   (int)ceilf(bounds.w), (int)ceilf(bounds.h) };
-                SDL_SetRenderClipRect(window->sdlRenderer, &clip2);
-            }
+            // Always intersect with the caller's clip — even without
+            // `useClipForOverflow` a STRETCH/SCALE image scrolled out of a Scroll
+            // viewport would otherwise paint outside it (the dst rect is the image's
+            // own bounds, which the renderer happily draws beyond the viewport).
+            SDL_Rect clip2 = { (int)bounds.x, (int)bounds.y,
+                               (int)ceilf(bounds.w), (int)ceilf(bounds.h) };
+            IMG_CLIP_TO(clip2);
             if (el->rotation != 0.0f) {
                 SDL_FPoint pivot = { dst.w * 0.5f, dst.h * 0.5f };
                 SDL_RenderTextureRotated(window->sdlRenderer, img->__SDL_texture,
@@ -1586,9 +1631,8 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
             } else {
                 SDL_RenderTexture(window->sdlRenderer, img->__SDL_texture, NULL, &dst);
             }
-            if (useClipForOverflow) {
-                SDL_SetRenderClipRect(window->sdlRenderer, NULL);
-            }
+            // The clip is always set above now, so always restore the caller's.
+            IMG_RESTORE_CLIP();
 
             // Square (non-rounded) border drawn as four edge strips.
             if (wantBorder) {
@@ -1612,6 +1656,7 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
                 }
             }
         }
+        #undef IMG_RESTORE_CLIP
 }
 
 static void RenderWidget_Video(UIWindow* window, UIWidget* el,
@@ -3040,6 +3085,19 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
             ta->__builtHi = visHi;
         }
 
+        // Preserve the caller's clip (e.g. a parent Scroll viewport) across the
+        // gutter/text clips below: intersect with it (so a TextArea scrolled out
+        // of a Scroll stays inside the viewport) and restore it — not NULL — at the
+        // end (so widgets following the TextArea keep the outer clip).
+        const bool __taHadClip = SDL_RenderClipEnabled(window->sdlRenderer);
+        SDL_Rect __taPrevClip = {0,0,0,0};
+        if (__taHadClip) SDL_GetRenderClipRect(window->sdlRenderer, &__taPrevClip);
+        #define TA_CLIP_TO(R) do { SDL_Rect __r=(R); \
+            if (__taHadClip) { SDL_Rect __i; \
+                if (SDL_GetRectIntersection(&__r, &__taPrevClip, &__i)) __r=__i; \
+                else __r=(SDL_Rect){__taPrevClip.x,__taPrevClip.y,0,0}; } \
+            SDL_SetRenderClipRect(window->sdlRenderer, &__r); } while (0)
+
         // Line-number gutter — drawn before the text clip so the numbers sit in
         // the left margin. They scroll with the text and only mark hard line
         // starts; soft-wrapped continuation rows get no number, like a code
@@ -3057,7 +3115,7 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
             // draws resolve inside the gutter region for one frame (a white flash
             // over the rest on rebuild).
             FlushRenderBatch(window->sdlRenderer);
-            SDL_SetRenderClipRect(window->sdlRenderer, &gclip);
+            TA_CLIP_TO(gclip);
 
             // Bake the digit colour WITHOUT the per-frame `op` (opacity is
             // applied via SetTextureAlphaMod at draw time) so the cached
@@ -3107,7 +3165,7 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
         // to flush above) under the CURRENT clip before narrowing to the text box
         // — otherwise those draws resolve inside clipR for a frame (a flash).
         FlushRenderBatch(window->sdlRenderer);
-        SDL_SetRenderClipRect(window->sdlRenderer, &clipR);
+        TA_CLIP_TO(clipR);
 
         // Selection highlight - emit one rect per affected line.
         if (!showPlaceholder && ta->selAnchor >= 0 &&
@@ -3339,7 +3397,8 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
         // for a frame, flashing the editor's contents past its own bounds. This
         // is the residual editor glitch (the gutter got the same treatment above).
         FlushRenderBatch(window->sdlRenderer);
-        SDL_SetRenderClipRect(window->sdlRenderer, NULL);
+        SDL_SetRenderClipRect(window->sdlRenderer, __taHadClip ? &__taPrevClip : NULL);
+        #undef TA_CLIP_TO
 }
 
 static void RenderWidget_Spinner(UIWindow* window, UIWidget* el,
@@ -3679,22 +3738,36 @@ static void RenderWidget_Canvas(UIWindow* window, UIWidget* el,
                                 UIWidgetBase* base, float op) {
     UICanvas* canvas = (UICanvas*)base;
     if (!el->width || !el->height) return;
-    (void)op; /* widget opacity requires offscreen target; deferred to future milestone */
+    if (op <= 0.0f) return;
 
     FlushRenderBatch(window->sdlRenderer);
 
+    // Intersect the canvas region with the caller's clip (e.g. a parent Scroll)
+    // and restore that clip afterwards — not NULL — so a canvas inside a scroll
+    // stays inside the viewport and following siblings keep the outer clip.
+    const bool __cvHadClip = SDL_RenderClipEnabled(window->sdlRenderer);
+    SDL_Rect __cvPrevClip = {0,0,0,0};
+    if (__cvHadClip) SDL_GetRenderClipRect(window->sdlRenderer, &__cvPrevClip);
     SDL_Rect clip = {
         (int)el->x, (int)el->y,
         (int)ceilf(*el->width), (int)ceilf(*el->height)
     };
+    if (__cvHadClip) {
+        SDL_Rect isect;
+        if (SDL_GetRectIntersection(&clip, &__cvPrevClip, &isect)) clip = isect;
+        else clip = (SDL_Rect){ __cvPrevClip.x, __cvPrevClip.y, 0, 0 };
+    }
     SDL_SetRenderClipRect(window->sdlRenderer, &clip);
 
-    canvas->currentRenderer = window->sdlRenderer;
+    // Local-coordinate canvas: draw commands use (0,0) = the widget's top-left.
+    // Widget opacity is folded into every fill/stroke/text alpha (per shape,
+    // not a flattened layer — overlapping translucent shapes still blend).
+    UICanvas_BeginFrame(canvas, window->sdlRenderer, el->x, el->y, op);
     if (canvas->onFrame) {
         canvas->onFrame(canvas, window->sdlRenderer, canvas->onFrameUd);
     }
-    canvas->currentRenderer = NULL;
+    UICanvas_EndFrame(canvas);
 
     FlushRenderBatch(window->sdlRenderer);
-    SDL_SetRenderClipRect(window->sdlRenderer, NULL);
+    SDL_SetRenderClipRect(window->sdlRenderer, __cvHadClip ? &__cvPrevClip : NULL);
 }

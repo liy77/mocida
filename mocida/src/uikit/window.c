@@ -22,6 +22,7 @@
 #include <uikit/perf.h>
 #include <uikit/bundle.h>
 #include <uikit/screen.h>
+#include <SDL3_image/SDL_image.h>
 #if !defined(MOCIDA_IOS) && !defined(MOCIDA_WEB)
 #include <curl/curl.h>   /* vestigial; not linked on iOS or Emscripten */
 #endif
@@ -59,7 +60,7 @@ static UIWindow* g_activeWindow = NULL;
 // MSAA / quality. g_aaSamplesPerSide is samples-per-side: 1 = no AA,
 // 4 = 4x4 = 16 SPP (default), 8 = 64 SPP (ultra). Public setter below.
 // g_aaHintsApplied prevents re-applying OpenGL hints at the wrong time.
-static int g_aaSamplesPerSide = 4;
+static int g_aaSamplesPerSide = 1;
 static int g_aaHintsApplied   = 0;
 
 // Custom (client-side) window decorations. When set BEFORE UIWindow_Create
@@ -281,11 +282,14 @@ void OptimizeSDLForHighPerformance(SDL_Renderer* renderer) {
     // syscalls per click and avoids an OS-level grab we never wanted.
     SDL_SetHint(SDL_HINT_MOUSE_AUTO_CAPTURE, "0");
 
-    // VSync OFF by default - frame pacing is owned by UIApp_Run
-    // (UIApp_SetTargetFPS controls the cap). Users that prefer matching
-    // the monitor refresh rate can call SDL_SetRenderVSync directly.
+    // VSync ON. The frame pacer (UIApp_SetTargetFPS) used to busy-spin the
+    // last 0.5 ms of every frame with vsync off, which pegs a core even when
+    // the UI is idle. Presenting on the display refresh lets the GPU wait in
+    // the driver instead. The pacer still caps below the refresh rate.
+    // MOCIDA_VSYNC=0 turns it off (benchmarks measuring raw frame cost).
     if (renderer) {
-        SDL_SetRenderVSync(renderer, 0);
+        const char* vs = SDL_getenv("MOCIDA_VSYNC");
+        SDL_SetRenderVSync(renderer, (vs && vs[0] == '0') ? 0 : 1);
     }
 
     // Renderer diagnostic. Logs the active driver, vsync state, and —
@@ -423,6 +427,20 @@ int UIWindow_Render(UIWindow* window) {
     g_glassBlurSeen = 0;
     const int needsOffscreen = (g_aaMode >= 2) || glassWantsOffscreen;
 
+    // The offscreen target is sized in LOGICAL units (rw×rh). On a HiDPI / Retina
+    // display the real drawable is `density`× larger, so rendering glass offscreen
+    // at logical size and then letting the logical-presentation blit upscale it
+    // throws away half the resolution — the whole frame, and especially the frosted
+    // wallpaper, looks soft / pixelated. When the offscreen is used only for glass
+    // (no explicit SSAA), bump the scale to the device pixel density so it renders
+    // at native resolution. (Real SSAA modes already over-sample, so leave them.)
+    if (needsOffscreen && g_aaMode < 2) {
+        int pw = rw, ph = rh;
+        SDL_GetWindowSizeInPixels(window->sdlWindow, &pw, &ph);
+        const int density = (rw > 0) ? (pw + rw / 2) / rw : 1;
+        if (density > aaScale) aaScale = density;
+    }
+
     SDL_Texture* simTarget = sim ? UIWindow_DeviceSimulatorGetRenderTarget(window) : NULL;
 
     if (needsOffscreen) {
@@ -548,6 +566,23 @@ int UIWindow_Render(UIWindow* window) {
     // an immediate return inside UIDebugOverlay_Draw. When debug is on
     // but no flag is set, it is a single int test.
     UIDebugOverlay_Draw(window);
+
+    // MOCIDA_SHOT_FRAME=N + MOCIDA_SHOT_PATH=file.png: save frame N as a PNG
+    // (verifying a hidden-window run without putting anything on screen).
+    {
+        static long shotAt = -2, shotFrame = 0;
+        if (shotAt == -2) {
+            const char* v = SDL_getenv("MOCIDA_SHOT_FRAME");
+            shotAt = (v && SDL_getenv("MOCIDA_SHOT_PATH")) ? SDL_atoi(v) : -1;
+        }
+        if (shotAt >= 0 && shotFrame++ == shotAt) {
+            SDL_Surface* shot = SDL_RenderReadPixels(window->sdlRenderer, NULL);
+            if (shot) {
+                IMG_SavePNG(shot, SDL_getenv("MOCIDA_SHOT_PATH"));
+                SDL_DestroySurface(shot);
+            }
+        }
+    }
 
     // Present final frame
     SDL_RenderPresent(window->sdlRenderer);
@@ -771,6 +806,16 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
     // Create window with simpler flags to avoid compatibility issues
     uint32_t window_flags = SDL_WINDOW_RESIZABLE;
 
+    // HiDPI / Retina: request a pixel-dense drawable so the renderer draws at the
+    // display's native resolution instead of point size (which macOS then upscales,
+    // softening everything — most visibly the frosted wallpaper). The per-frame
+    // SDL_SetRenderLogicalPresentation(rw, rh) already maps our logical coordinate
+    // system onto that larger drawable, so widgets keep their point sizes while
+    // rendering crisply. iOS opts out on purpose (see below).
+#if !defined(MOCIDA_IOS)
+    window_flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#endif
+
     // Per-pixel-alpha window for OS backdrops (Mica/Acrylic). Must be a creation
     // flag — SDL wires up the composition swapchain at window-create time. The
     // app still clears opaque by default, so a transparent window looks identical
@@ -844,6 +889,22 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
         UI_DEBUG(UI_CAT_WINDOW, "using primary display: %u", displayID);
     }
     
+    // Tooling can keep the window off the user's primary display, or start it
+    // minimized, so it doesn't take over the main screen during a dev run:
+    //   MOCIDA_WINDOW_DISPLAY=<1-based index>  → center the window on that display
+    //   MOCIDA_WINDOW_MINIMIZED=1              → start the window minimized
+    //   MOCIDA_WINDOW_HIDDEN=1                 → never show it (headless benches)
+    // When a target display is set we create the window HIDDEN, position it, then
+    // show it below — so it never flashes on the primary display before the move.
+    const char* __envDisplay = SDL_getenv("MOCIDA_WINDOW_DISPLAY");
+    const char* __envMin     = SDL_getenv("MOCIDA_WINDOW_MINIMIZED");
+    const char* __envHidden  = SDL_getenv("MOCIDA_WINDOW_HIDDEN");
+    const int   __wantDisplay = __envDisplay ? SDL_atoi(__envDisplay) : 0;
+    const int   __wantMin     = (__envMin && __envMin[0] == '1');
+    const int   __wantHidden  = (__envHidden && __envHidden[0] == '1');
+    if (__wantDisplay > 0 || __wantHidden) window_flags |= SDL_WINDOW_HIDDEN;
+    if (__wantMin)         window_flags |= SDL_WINDOW_MINIMIZED;
+
     SDL_Window* sdlWindow = SDL_CreateWindow(title, width, height, window_flags);
     if (!sdlWindow) {
         UI_ERROR(UI_CAT_WINDOW, "SDL_CreateWindow error: %s", SDL_GetError());
@@ -851,6 +912,23 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
         free(window->__ui_props.props);
         free(window);
         return NULL;
+    }
+
+    // Apply the requested off-primary placement (see the env vars above): center
+    // on the target display, then show it (unless it should stay minimized).
+    if (__wantDisplay > 0) {
+        int __dcount = 0;
+        SDL_DisplayID* __disps = SDL_GetDisplays(&__dcount);
+        if (__disps && __wantDisplay <= __dcount) {
+            SDL_Rect __db;
+            if (SDL_GetDisplayBounds(__disps[__wantDisplay - 1], &__db)) {
+                SDL_SetWindowPosition(sdlWindow,
+                    __db.x + (__db.w - width) / 2,
+                    __db.y + (__db.h - height) / 2);
+            }
+        }
+        if (__disps) SDL_free(__disps);
+        if (!__wantMin && !__wantHidden) SDL_ShowWindow(sdlWindow);
     }
 
 #if defined(MOCIDA_IOS)

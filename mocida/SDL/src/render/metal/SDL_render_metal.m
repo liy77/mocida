@@ -132,6 +132,21 @@ typedef struct METAL_ShaderPipelines
     METAL_PipelineCache caches[SDL_METAL_FRAGMENT_COUNT];
 } METAL_ShaderPipelines;
 
+// A pooled vertex buffer. `pending` counts the command buffers that bound it
+// and haven't completed yet; it is reusable once it is no longer the current
+// queue's buffer and nothing on the GPU still reads it.
+@interface SDL3METAL_VertexBuffer : NSObject
+{
+  @public
+    SDL_AtomicInt pending;
+}
+@property(nonatomic, retain) id<MTLBuffer> buffer;
+@property(nonatomic, assign) BOOL inuse;
+@end
+
+@implementation SDL3METAL_VertexBuffer
+@end
+
 @interface SDL3METAL_RenderData : NSObject
 @property(nonatomic, retain) id<MTLDevice> mtldevice;
 @property(nonatomic, retain) id<MTLCommandQueue> mtlcmdqueue;
@@ -148,10 +163,62 @@ typedef struct METAL_ShaderPipelines
 @property(nonatomic, assign) METAL_ShaderPipelines *activepipelines;
 @property(nonatomic, assign) METAL_ShaderPipelines *allpipelines;
 @property(nonatomic, assign) int pipelinescount;
+@property(nonatomic, retain) NSMutableArray<SDL3METAL_VertexBuffer *> *vertexpool;
+@property(nonatomic, retain) SDL3METAL_VertexBuffer *curvertex;
 @end
 
 @implementation SDL3METAL_RenderData
 @end
+
+#define SDL_METAL_VERTEX_POOL_MAX 16
+
+static SDL3METAL_VertexBuffer *METAL_AcquireVertexBuffer(SDL3METAL_RenderData *data, size_t size)
+{
+    SDL3METAL_VertexBuffer *fit = nil, *grow = nil;
+    for (SDL3METAL_VertexBuffer *vb in data.vertexpool) {
+        if (vb.inuse || SDL_GetAtomicInt(&vb->pending) != 0) {
+            continue;
+        }
+        if (vb.buffer.length >= size) {
+            fit = vb;
+            break;
+        }
+        if (!grow) {
+            grow = vb;
+        }
+    }
+    if (!fit) {
+        size_t cap = 64 * 1024;
+        while (cap < size) {
+            cap *= 2;
+        }
+        id<MTLBuffer> buffer = [data.mtldevice newBufferWithLength:cap options:MTLResourceStorageModeShared];
+        if (buffer == nil) {
+            return nil;
+        }
+        buffer.label = @"SDL vertex data";
+        if (grow) {
+            fit = grow;
+        } else {
+            if (!data.vertexpool) {
+                data.vertexpool = [NSMutableArray array];
+            }
+            if (data.vertexpool.count >= SDL_METAL_VERTEX_POOL_MAX) {
+                // Everything is in flight: hand out an unpooled one-shot buffer.
+                fit = [[SDL3METAL_VertexBuffer alloc] init];
+                fit.buffer = buffer;
+                fit.inuse = YES;
+                return fit;
+            }
+            fit = [[SDL3METAL_VertexBuffer alloc] init];
+            [data.vertexpool addObject:fit];
+        }
+        fit.buffer = buffer;
+    }
+    fit.inuse = YES;
+    return fit;
+}
+
 
 @interface SDL3METAL_TextureData : NSObject
 @property(nonatomic, retain) id<MTLTexture> mtltexture;
@@ -495,6 +562,15 @@ static bool METAL_ActivateRenderCommandEncoder(SDL_Renderer *renderer, MTLLoadAc
         if (vertex_buffer != nil) {
             [data.mtlcmdencoder setVertexBuffer:vertex_buffer offset:0 atIndex:0];
             [data.mtlcmdencoder setFragmentBuffer:vertex_buffer offset:0 atIndex:0];
+
+            // Keep the pooled buffer out of reuse until this command buffer is done.
+            SDL3METAL_VertexBuffer *vb = data.curvertex;
+            if (vb != nil && vb.buffer == vertex_buffer) {
+                SDL_AddAtomicInt(&vb->pending, 1);
+                [data.mtlcmdbuffer addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+                    SDL_AddAtomicInt(&vb->pending, -1);
+                }];
+            }
         }
 
         data.activepipelines = ChooseShaderPipelines(data, mtltexture.pixelFormat);
@@ -1440,10 +1516,7 @@ static bool SetDrawState(SDL_Renderer *renderer, const SDL_RenderCommand *cmd, c
 
     if (statecache->shader_constants_dirty ||
         SDL_memcmp(shader_constants, &statecache->shader_constants, sizeof(*shader_constants)) != 0) {
-        id<MTLBuffer> mtlbufconstants = [data.mtldevice newBufferWithLength:sizeof(*shader_constants) options:MTLResourceStorageModeShared];
-        mtlbufconstants.label = @"SDL shader constants data";
-        SDL_memcpy([mtlbufconstants contents], shader_constants, sizeof(*shader_constants));
-        [data.mtlcmdencoder setFragmentBuffer:mtlbufconstants offset:0 atIndex:0];
+        [data.mtlcmdencoder setFragmentBytes:shader_constants length:sizeof(*shader_constants) atIndex:0];
 
         SDL_memcpy(&statecache->shader_constants, shader_constants, sizeof(*shader_constants));
         statecache->shader_constants_dirty = false;
@@ -1536,16 +1609,24 @@ static bool METAL_RunCommandQueue(SDL_Renderer *renderer, SDL_RenderCommand *cmd
         statecache.viewport_dirty = true;
         statecache.projection_offset = 0;
 
-        // !!! FIXME: have a ring of pre-made MTLBuffers we cycle through? How expensive is creation?
+        if (data.curvertex != nil) {
+            data.curvertex.inuse = NO;
+            data.curvertex = nil;
+        }
         if (vertsize > 0) {
             /* We can memcpy to a shared buffer from the CPU and read it from the GPU
              * without any extra copying. It's a bit slower on macOS to read shared
              * data from the GPU than to read managed/private data, but we avoid the
              * cost of copying the data and the code's simpler. Apple's best
              * practices guide recommends this approach for streamed vertex data.
+             * Buffers come from a pool so steady-state frames allocate nothing.
              */
-            mtlbufvertex = [data.mtldevice newBufferWithLength:vertsize options:MTLResourceStorageModeShared];
-            mtlbufvertex.label = @"SDL vertex data";
+            SDL3METAL_VertexBuffer *vb = METAL_AcquireVertexBuffer(data, vertsize);
+            if (vb == nil) {
+                return SDL_SetError("Failed to allocate Metal vertex buffer");
+            }
+            data.curvertex = vb;
+            mtlbufvertex = vb.buffer;
             SDL_memcpy([mtlbufvertex contents], vertices, vertsize);
 
             statecache.vertex_buffer = mtlbufvertex;

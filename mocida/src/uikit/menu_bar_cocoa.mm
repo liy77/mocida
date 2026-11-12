@@ -57,6 +57,28 @@ static const void* kUIMenuItemPtrKey = "UIMenuItemPtr";
 }
 @end
 
+// ── Standard roles ───────────────────────────────────────────────────────
+// Ids in the UI_MENU_BAR_ROLE_* range (menu_bar.h) bypass the host callback
+// and map to the stock AppKit action, so Hide / Quit / Minimize / Full Screen
+// behave exactly like every other Mac app (and work with the native window).
+// Returns NULL for a normal (host-routed) id. `toApp` = target NSApp, else the
+// action goes up the responder chain (nil target → key window).
+static SEL RoleSelector(uint32_t id, BOOL* toApp) {
+    *toApp = YES;
+    switch (id) {
+        case UI_MENU_BAR_ROLE_ABOUT:       return @selector(orderFrontStandardAboutPanel:);
+        case UI_MENU_BAR_ROLE_HIDE:        return @selector(hide:);
+        case UI_MENU_BAR_ROLE_HIDE_OTHERS: return @selector(hideOtherApplications:);
+        case UI_MENU_BAR_ROLE_SHOW_ALL:    return @selector(unhideAllApplications:);
+        case UI_MENU_BAR_ROLE_QUIT:        return @selector(terminate:);
+        case UI_MENU_BAR_ROLE_FRONT:       return @selector(arrangeInFront:);
+        case UI_MENU_BAR_ROLE_MINIMIZE:    *toApp = NO; return @selector(performMiniaturize:);
+        case UI_MENU_BAR_ROLE_ZOOM:        *toApp = NO; return @selector(performZoom:);
+        case UI_MENU_BAR_ROLE_FULLSCREEN:  *toApp = NO; return @selector(toggleFullScreen:);
+        default: return NULL;
+    }
+}
+
 // ── Weak hooks (called by menu_bar.c) ────────────────────────────────────
 // `extern "C"` is required: menu_bar.c declares the matching prototypes
 // as `__attribute__((weak))` and references them via the C ABI. Without
@@ -93,10 +115,16 @@ void ui_menu_bar__hook_attach_nsitem(UIMenuBarItem* it, UIMenuBar* parent) {
         NSString* title = it->label
             ? [NSString stringWithUTF8String:it->label]
             : @"";
+        BOOL roleToApp = YES;
+        SEL role = RoleSelector(it->id, &roleToApp);
         nsItem = [[NSMenuItem alloc] initWithTitle:title
-                                            action:@selector(menuItemFired:)
+                                            action:role ? role : @selector(menuItemFired:)
                                      keyEquivalent:@""];
-        [nsItem setTarget:[UIMenuActionHandler class]];
+        if (role) {
+            [nsItem setTarget:roleToApp ? NSApp : nil];
+        } else {
+            [nsItem setTarget:[UIMenuActionHandler class]];
+        }
         // Stash the host's opaque id on the NSMenuItem via `setTag:`.
         // (We previously used `objc_setAssociatedObject(nsItem, key, (id)it, ASSIGN)`
         // to attach the C `UIMenuBarItem*` pointer, but that crashes
@@ -127,6 +155,9 @@ void ui_menu_bar__hook_attach_nsitem(UIMenuBarItem* it, UIMenuBar* parent) {
                     [mod isEqualToString:@"Cmd"]       ||
                     [mod isEqualToString:@"Ctrl"]) {
                     mask |= NSEventModifierFlagCommand;
+                } else if ([mod isEqualToString:@"Control"]) {
+                    // The physical ⌃ key ("Ctrl" stays ⌘ for cross-platform specs).
+                    mask |= NSEventModifierFlagControl;
                 } else if ([mod isEqualToString:@"Shift"]) {
                     mask |= NSEventModifierFlagShift;
                 } else if ([mod isEqualToString:@"Alt"] ||

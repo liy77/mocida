@@ -48,4 +48,3 @@ pub use bindings::*;
 /// root via the `pub use bindings::*` above; the wrappers add `Drop`
 /// and builder ergonomics.
 pub mod menu_bar;
-

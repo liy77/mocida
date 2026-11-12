@@ -539,6 +539,39 @@ pub fn request_transparent(on: bool) {
     unsafe { sys::UIWindow_RequestTransparent(on as c_int) };
 }
 
+/// A text-editing command (the Edit menu set).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditCommand {
+    /// Undo the last edit.
+    Undo,
+    /// Redo the last undone edit.
+    Redo,
+    /// Cut the selection to the clipboard.
+    Cut,
+    /// Copy the selection to the clipboard.
+    Copy,
+    /// Paste the clipboard at the caret.
+    Paste,
+    /// Select all text.
+    SelectAll,
+}
+
+/// Run `cmd` on whichever TextField / TextArea has focus in the current app,
+/// exactly as its keyboard shortcut would. For native menus: on macOS the menu
+/// bar consumes ⌘C/⌘V/…, so Edit ▸ Copy has to drive the widget explicitly.
+pub fn send_edit_command(cmd: EditCommand) {
+    // SDL scancodes: A=4, C=6, V=25, X=27, Z=29.
+    let (scancode, shift) = match cmd {
+        EditCommand::Undo => (29, 0),
+        EditCommand::Redo => (29, 1),
+        EditCommand::Cut => (27, 0),
+        EditCommand::Copy => (6, 0),
+        EditCommand::Paste => (25, 0),
+        EditCommand::SelectAll => (4, 0),
+    };
+    unsafe { sys::UIApp_SendEditKeyG(scancode, shift) };
+}
+
 /// Minimizes the current app's window to the taskbar.
 pub fn window_minimize() {
     unsafe { sys::UIApp_MinimizeG() };

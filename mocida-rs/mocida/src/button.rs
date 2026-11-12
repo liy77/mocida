@@ -239,14 +239,11 @@ impl Drop for Button {
             return;
         }
         // Ownership of the underlying UIButton was transferred to a
-        // parent (typically a Children collection or App). The C side
-        // still holds our trampoline `userdata` pointer, so dropping
-        // the Box now would dangle that pointer — the next click
-        // would deref freed memory. Leak the closure on purpose; the
-        // parent's destructor will tear the button down without
-        // touching userdata.
+        // parent. The C side still holds our trampoline `userdata`, so the
+        // closure must outlive this wrapper: hand it to mocida, which drops
+        // it when the button itself is destroyed.
         if let Some(state) = self.callback.take() {
-            std::mem::forget(state);
+            crate::widget::attach_owned(self.ptr as *const std::ffi::c_void, state);
         }
     }
 }

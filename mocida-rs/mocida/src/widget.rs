@@ -18,6 +18,22 @@ use mocida_sys as sys;
 
 use crate::error::{Error, Result};
 
+/// Hand callback state to mocida once its widget has been given to a parent:
+/// the C side drops it (via `UIWidget_AttachOwned`) when the widget identified
+/// by `owner` — its data pointer, or the `UIWidget*` — is destroyed. The
+/// state's heap address doesn't move, so the userdata pointer already
+/// registered with the C callback stays valid until then.
+pub(crate) fn attach_owned<T: 'static>(owner: *const std::ffi::c_void, state: T) {
+    unsafe extern "C" fn drop_state<T>(p: *mut std::ffi::c_void) {
+        // Never unwind into C.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            drop(Box::from_raw(p as *mut T));
+        }));
+    }
+    let raw = Box::into_raw(Box::new(state)) as *mut std::ffi::c_void;
+    unsafe { sys::UIWidget_AttachOwned(owner, raw, Some(drop_state::<T>)) };
+}
+
 /// A widget node in mocida's scene graph.
 ///
 /// Constructed via [`Widget::new`] (auto-size) or [`Widget::with_size`]
@@ -162,9 +178,7 @@ impl Widget {
     /// `"Escape"`, `"Space"`, …) and the SDL keymod bitmask — the handler itself
     /// decides which keys matter. Mirrors `UIWidget_SetOnKeyDown`.
     ///
-    /// The closure is boxed and intentionally leaked so its address stays valid
-    /// for the C side for the rest of the program (one per `onKeyInput` widget —
-    /// the same trade-off the other callback setters make).
+    /// The closure lives until the widget is destroyed (UIWidget_AttachOwned).
     pub fn on_key_down<F>(self, handler: F) -> Self
     where
         F: FnMut(&str, i32) + 'static,
@@ -192,10 +206,11 @@ impl Widget {
         let state = Box::new(KeyState {
             handler: Box::new(handler),
         });
-        let userdata = Box::into_raw(state) as *mut std::ffi::c_void;
+        let userdata = Box::as_ref(&state) as *const KeyState as *mut std::ffi::c_void;
         unsafe {
             sys::UIWidget_SetOnKeyDown(self.ptr, Some(trampoline), userdata);
         }
+        attach_owned(self.ptr as *const std::ffi::c_void, state);
         self
     }
 

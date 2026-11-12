@@ -1,4 +1,11 @@
-//! `UIWebView` — embedded WebView2 widget (Windows).
+//! `UIWebView` — embedded web content widget.
+//!
+//! The current C implementation uses **WebView2** and is fully functional on
+//! **Windows**. On macOS and Linux the symbols compile and link (the C headers
+//! are cross-platform), but [`WebView::new`] will return `Err(Error::Null)` at
+//! runtime — no crash. A platform backend for macOS (`WKWebView`) or Linux
+//! (WebKitGTK) would be wired into the C library; until then non-Windows
+//! callers get a graceful error.
 
 use std::ffi::{c_void, CStr, CString};
 
@@ -336,33 +343,14 @@ impl Drop for WebView {
             unsafe { sys::UIWebView_Destroy(self.ptr) };
             return;
         }
-        for slot in [
-            self.ready_cb
-                .take()
-                .map(Box::into_raw)
-                .map(|p| p as *mut ()),
-            self.url_change_cb
-                .take()
-                .map(Box::into_raw)
-                .map(|p| p as *mut ()),
-            self.loading_cb
-                .take()
-                .map(Box::into_raw)
-                .map(|p| p as *mut ()),
-            self.process_failed_cb
-                .take()
-                .map(Box::into_raw)
-                .map(|p| p as *mut ()),
-            self.request_cb
-                .take()
-                .map(Box::into_raw)
-                .map(|p| p as *mut ()),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            let _ = slot; // intentional leak
-        }
+        // The C side still holds the trampoline userdata: hand each closure to
+        // mocida, which drops it when the webview widget is destroyed.
+        let owner = self.ptr as *const std::ffi::c_void;
+        if let Some(s) = self.ready_cb.take() { crate::widget::attach_owned(owner, s); }
+        if let Some(s) = self.url_change_cb.take() { crate::widget::attach_owned(owner, s); }
+        if let Some(s) = self.loading_cb.take() { crate::widget::attach_owned(owner, s); }
+        if let Some(s) = self.process_failed_cb.take() { crate::widget::attach_owned(owner, s); }
+        if let Some(s) = self.request_cb.take() { crate::widget::attach_owned(owner, s); }
     }
 }
 

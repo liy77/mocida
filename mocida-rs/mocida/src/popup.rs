@@ -167,7 +167,7 @@ impl Drop for Menu {
             return;
         }
         if let Some(state) = self.on_item.take() {
-            std::mem::forget(state);
+            crate::widget::attach_owned(self.ptr as *const std::ffi::c_void, state);
         }
     }
 }
@@ -290,7 +290,7 @@ impl Drop for Dropdown {
             return;
         }
         if let Some(state) = self.on_change.take() {
-            std::mem::forget(state);
+            crate::widget::attach_owned(self.ptr as *const std::ffi::c_void, state);
         }
     }
 }

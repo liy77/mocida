@@ -96,7 +96,7 @@ impl Drop for TabView {
             return;
         }
         if let Some(state) = self.on_change.take() {
-            std::mem::forget(state);
+            crate::widget::attach_owned(self.ptr as *const std::ffi::c_void, state);
         }
     }
 }

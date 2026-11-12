@@ -119,6 +119,73 @@ UIMouseArea* UIMouseArea_SetDragBounds(UIMouseArea* area, float x, float y, floa
     return area;
 }
 
+// ---------------------------------------------------------------------
+// Internal drag-and-drop
+// ---------------------------------------------------------------------
+// A source carries `dragData` (the payload). The active drag payload is held in
+// `g_activeDrag` (a strdup'd copy) for the lifetime of the gesture so the drop
+// target found at mouse-up can receive it even after the source's own state is
+// reset.
+
+static char* g_activeDrag = NULL;
+
+static char* dup_or_null(const char* s) {
+    if (!s) return NULL;
+    size_t n = strlen(s);
+    char* d = (char*)malloc(n + 1);
+    if (d) memcpy(d, s, n + 1);
+    return d;
+}
+
+UIMouseArea* UIMouseArea_SetDragData(UIMouseArea* area, const char* payload) {
+    if (!area) return area;
+    free(area->dragData);
+    area->dragData = dup_or_null(payload);
+    if (area->dragData) area->draggable = 1; // a drag source must emit drag events
+    return area;
+}
+
+UIMouseArea* UIMouseArea_SetDropData(UIMouseArea* area, const char* dropData) {
+    if (!area) return area;
+    free(area->dropData);
+    area->dropData = dup_or_null(dropData);
+    return area;
+}
+
+UIMouseArea* UIMouseArea_OnDrop(UIMouseArea* area, UIMouseAreaDropCallback cb, void* userdata) {
+    if (!area) return area;
+    area->onDrop = cb;
+    area->onDropUd = userdata;
+    return area;
+}
+
+int UIMouseArea_DragActive(void) { return g_activeDrag != NULL; }
+
+void UIMouseArea_ClearDrag(void) {
+    free(g_activeDrag);
+    g_activeDrag = NULL;
+}
+
+// Recurse front-to-back; fire onDrop on the topmost drop target containing (x,y).
+int UIMouseArea_DispatchDrop(UIChildren* children, float x, float y) {
+    if (!children || !g_activeDrag) return 0;
+    for (int i = children->count - 1; i >= 0; i--) {
+        UIWidget* w = children->children[i];
+        UIMouseArea* area = AsArea(w);
+        if (!area) {
+            UIChildren* kids = ContainerChildren(w);
+            if (kids && UIMouseArea_DispatchDrop(kids, x, y)) return 1;
+            continue;
+        }
+        if (!area->enabled || !area->dropData || !area->onDrop) continue;
+        if (InsideWidget(w, x, y)) {
+            area->onDrop(area, g_activeDrag, area->dropData, area->onDropUd);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 #define MOCIDA_DEFINE_CB_SETTER(name, field) \
     UIMouseArea* UIMouseArea_##name(UIMouseArea* area, UIMouseAreaCallback cb, void* userdata) { \
         if (!area) return area; \
@@ -143,6 +210,8 @@ MOCIDA_DEFINE_CB_SETTER(OnDragEnd,    onDragEnd)
 void UIMouseArea_Destroy(UIMouseArea* area) {
     if (!area) return;
     // dragTarget is a borrowed pointer - do not free it.
+    free(area->dragData);
+    free(area->dropData);
     free(area);
 }
 
@@ -211,19 +280,26 @@ void UIMouseArea_DispatchMouseMotion(UIChildren* children, float x, float y) {
             }
 
             if (area->dragging) {
-                // Move the area widget by delta, then clamp.
-                if (w->width && w->height) {
-                    w->x += dx;
-                    w->y += dy;
-                    ApplyClamp(area, *w->width, *w->height, &w->x, &w->y);
-                }
-                // Move the drag target by the same delta, then clamp.
-                if (area->dragTarget) {
-                    UIWidget* t = area->dragTarget;
-                    t->x += dx;
-                    t->y += dy;
-                    if (t->width && t->height) {
-                        ApplyClamp(area, *t->width, *t->height, &t->x, &t->y);
+                if (area->dragData) {
+                    // Internal DnD source: do NOT move its own widget — it just
+                    // drives the global drag (a ghost rendered elsewhere follows
+                    // the cursor; the drop target is resolved at mouse-up).
+                    if (!g_activeDrag) g_activeDrag = dup_or_null(area->dragData);
+                } else {
+                    // Move the area widget by delta, then clamp.
+                    if (w->width && w->height) {
+                        w->x += dx;
+                        w->y += dy;
+                        ApplyClamp(area, *w->width, *w->height, &w->x, &w->y);
+                    }
+                    // Move the drag target by the same delta, then clamp.
+                    if (area->dragTarget) {
+                        UIWidget* t = area->dragTarget;
+                        t->x += dx;
+                        t->y += dy;
+                        if (t->width && t->height) {
+                            ApplyClamp(area, *t->width, *t->height, &t->x, &t->y);
+                        }
                     }
                 }
                 FireCallback(area, area->onDrag, area->onDragUd,
@@ -246,6 +322,14 @@ void UIMouseArea_DispatchMouseMotion(UIChildren* children, float x, float y) {
     }
 }
 
+// MOCIDA_TRACE_INPUT=1: log mouse-down arbitration (which areas contain the
+// point, and whether z-order occlusion let them have it).
+static int TraceInput(void) {
+    static int on = -1;
+    if (on < 0) on = SDL_getenv("MOCIDA_TRACE_INPUT") != NULL;
+    return on;
+}
+
 void UIMouseArea_DispatchMouseDown(UIChildren* children, float x, float y, int button) {
     if (!children) return;
 
@@ -257,6 +341,12 @@ void UIMouseArea_DispatchMouseDown(UIChildren* children, float x, float y, int b
             UIChildren* kids = ContainerChildren(w);
             if (kids) UIMouseArea_DispatchMouseDown(kids, x, y, button);
             continue;
+        }
+        if (TraceInput()) {
+            fprintf(stderr, "[mocida.input] down (%.0f,%.0f) area %p box=(%.0f,%.0f %.0fx%.0f) vis=%d enabled=%d inside=%d occlusion=%d\n",
+                    x, y, (void*)area, w->x, w->y, w->width ? *w->width : -1.0f,
+                    w->height ? *w->height : -1.0f, w->visible, area->enabled,
+                    InsideWidget(w, x, y), UIWidget_EventOcclusionAllows(w));
         }
         if (!area->enabled) continue;
 
@@ -308,8 +398,13 @@ void UIMouseArea_DispatchMouseUp(UIChildren* children, float x, float y, int but
             FireCallback(area, area->onDragEnd, area->onDragEndUd,
                          MakeEvent(x, y, 0, 0, 0, 0, button));
         }
-        FireCallback(area, area->onMouseUp, area->onMouseUpUd,
-                     MakeEvent(x, y, 0, 0, 0, 0, button));
+        // A drag on an internal DnD source is NOT a click — suppress onMouseUp
+        // (which the runtime maps to onClick) so dragging a file row to move it
+        // doesn't also "open" it. Plain draggable areas keep firing onMouseUp.
+        if (!(area->dragging && area->dragData)) {
+            FireCallback(area, area->onMouseUp, area->onMouseUpUd,
+                         MakeEvent(x, y, 0, 0, 0, 0, button));
+        }
 
         area->pressed = 0;
         area->dragging = 0;

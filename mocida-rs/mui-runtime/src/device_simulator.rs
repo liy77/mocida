@@ -63,7 +63,9 @@ pub fn enable(
 
 /// Disable the device simulator for `app`.
 pub fn disable(app: &mut crate::Runtime) {
-    unsafe { msys::UIApp_DisableDeviceSimulator(app.app.as_ptr()); }
+    unsafe {
+        msys::UIApp_DisableDeviceSimulator(app.app.as_ptr());
+    }
 }
 
 /// Returns whether the device simulator is currently enabled for `app`.
@@ -85,7 +87,9 @@ pub fn orientation(app: &crate::Runtime) -> DeviceOrientation {
 
 /// Set the simulator orientation for `app`.
 pub fn set_orientation(app: &mut crate::Runtime, orientation: DeviceOrientation) {
-    unsafe { msys::UIApp_SetDeviceOrientation(app.app.as_ptr(), orientation_to_c(orientation)); }
+    unsafe {
+        msys::UIApp_SetDeviceOrientation(app.app.as_ptr(), orientation_to_c(orientation));
+    }
 }
 
 /// Toggle the simulator orientation for `app`.
@@ -97,7 +101,9 @@ pub fn toggle_orientation(app: &mut crate::Runtime) {
 pub fn window_to_device(app: &crate::Runtime, wx: f32, wy: f32) -> (f32, f32) {
     let mut dx = 0.0f32;
     let mut dy = 0.0f32;
-    unsafe { msys::UIApp_DeviceSimulatorWindowToDevice(app.app.as_ptr(), wx, wy, &mut dx, &mut dy); }
+    unsafe {
+        msys::UIApp_DeviceSimulatorWindowToDevice(app.app.as_ptr(), wx, wy, &mut dx, &mut dy);
+    }
     (dx, dy)
 }
 
@@ -105,7 +111,9 @@ pub fn window_to_device(app: &crate::Runtime, wx: f32, wy: f32) -> (f32, f32) {
 pub fn device_to_window(app: &crate::Runtime, dx: f32, dy: f32) -> (f32, f32) {
     let mut wx = 0.0f32;
     let mut wy = 0.0f32;
-    unsafe { msys::UIApp_DeviceSimulatorDeviceToWindow(app.app.as_ptr(), dx, dy, &mut wx, &mut wy); }
+    unsafe {
+        msys::UIApp_DeviceSimulatorDeviceToWindow(app.app.as_ptr(), dx, dy, &mut wx, &mut wy);
+    }
     (wx, wy)
 }
 

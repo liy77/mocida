@@ -40,6 +40,7 @@ use crate::device_simulator::DeviceOrientation;
 use copper_syntax::expr::{BinOp, Expr, ExprKind, Literal, StrPart, StrTemplate};
 use mocida::sys as msys;
 use mocida::text::by_ptr;
+use mocida::canvas::Canvas;
 use mocida::{
     BackdropMaterial, Button, Checkbox, Children, Color, Cursor, Dialog, FillMode, FontStyle,
     Glass, GlassThickness, Grid, GridView, HorizontalAlign, Image, ListView, MouseArea,
@@ -322,15 +323,23 @@ impl Reactive {
     pub fn push_list(&self, name: &str, value: &str) {
         if let Some(list) = self.lists.get(name) {
             list.borrow_mut().push(value.to_string());
+            trace_dirty(&format!("push_list {name}"));
             self.dirty.set(true);
         }
     }
 
-    /// Replace a list signal's contents (e.g. reset the log). Flags dirty.
+    /// Replace a list signal's contents. Only marks the tree dirty when the
+    /// content actually changes — avoids spurious every-frame rebuilds when the
+    /// host writes the same list repeatedly (e.g. an empty canvas_nodes list
+    /// during a game tick with no physics objects in the scene).
     pub fn set_list(&self, name: &str, values: Vec<String>) {
         if let Some(list) = self.lists.get(name) {
-            *list.borrow_mut() = values;
-            self.dirty.set(true);
+            let mut l = list.borrow_mut();
+            if *l != values {
+                *l = values;
+                trace_dirty(&format!("set_list {name}"));
+                self.dirty.set(true);
+            }
         }
     }
 }
@@ -674,6 +683,10 @@ pub fn build_view_seeded(
 ) -> Result<(Children, Reactive)> {
     let mut ctx = Ctx::new(components);
     ctx.env = Env::from_view(view);
+    // Clear the game-canvas pointer: it is re-set during this build only if a
+    // `game-host` rect is actually present, so a tree without the Game tab leaves
+    // it null (the host won't inject into a freed canvas).
+    GAME_HOST.with(|c| c.set(0));
     // Seed the static env first so `signal(name)` initialisers and any
     // env-resolved defaults see the preserved value.
     for (k, v) in seed {
@@ -731,6 +744,20 @@ pub fn build_view_seeded(
 /// the live signal values (read via raw ptr, re-entrancy-safe) and sets dirty
 /// iff the boolean result changed. `for` iterators (rare; no list-signal type
 /// yet) fall back to flagging dirty on any change.
+/// `MUI_TRACE_HANDLERS=1`: log each `onClick`-style handler as it runs.
+fn trace_handlers_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("MUI_TRACE_HANDLERS").is_some())
+}
+
+/// `MUI_TRACE_DIRTY=1`: log which `if` condition / `for` list forced a rebuild.
+fn trace_dirty(what: &str) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("MUI_TRACE_DIRTY").is_some()) {
+        eprintln!("[mui] structural change: {what}");
+    }
+}
+
 fn subscribe_structural(ctx: &mut Ctx, nodes: &[Node]) {
     let mut conds: Vec<String> = Vec::new();
     let mut for_names: Vec<String> = Vec::new();
@@ -752,18 +779,20 @@ fn subscribe_structural(ctx: &mut Ctx, nodes: &[Node]) {
     for name in for_names {
         if let Some(sig) = ctx.reactive.signals.get(&name) {
             let dirty = ctx.reactive.dirty.clone();
-            if let Ok(sub) = sig
-                .borrow_mut()
-                .subscribe(move |_: &Signal<i32>| dirty.set(true))
-            {
+            let n = name.clone();
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_: &Signal<i32>| {
+                trace_dirty(&format!("for {n}"));
+                dirty.set(true)
+            }) {
                 ctx.reactive._subs.push(sub);
             }
         } else if let Some(sig) = ctx.reactive.strings.get(&name) {
             let dirty = ctx.reactive.dirty.clone();
-            if let Ok(sub) = sig
-                .borrow_mut()
-                .subscribe(move |_: &Signal<String>| dirty.set(true))
-            {
+            let n = name.clone();
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_: &Signal<String>| {
+                trace_dirty(&format!("for {n}"));
+                dirty.set(true)
+            }) {
                 ctx.reactive._subs.push(sub);
             }
         }
@@ -813,6 +842,7 @@ fn subscribe_condition(ctx: &mut Ctx, cond_raw: &str) {
         let now = eval_condition_env(&cond, &live);
         if now != last.get() {
             last.set(now);
+            trace_dirty(&format!("if {cond} -> {now}"));
             dirty.set(true);
         }
     });
@@ -1086,9 +1116,9 @@ fn build_node(ctx: &mut Ctx, node: &Node, layout: &mut Layout) -> Result<Option<
             ..
         } => {
             if eval_condition(ctx, cond_raw) {
-                build_first(ctx, then, layout)
+                build_group(ctx, then, layout)
             } else if let Some(els) = els {
-                build_first(ctx, els, layout)
+                build_group(ctx, els, layout)
             } else {
                 Ok(None)
             }
@@ -1113,10 +1143,116 @@ fn build_first(ctx: &mut Ctx, nodes: &[Node], layout: &mut Layout) -> Result<Opt
     Ok(None)
 }
 
+/// Build a group of sibling nodes (an `if`/`else` branch or a `for`-body) into a
+/// SINGLE widget. One renderable child is returned as-is; several are wrapped in a
+/// content-sized Stack that flows the same way as the enclosing container. This is
+/// what lets an `if`/`for` body hold more than one widget without the author
+/// hand-wrapping them in a Stack — historically only the first child rendered,
+/// which silently dropped the rest (a frequent foot-gun).
+fn build_group(ctx: &mut Ctx, nodes: &[Node], layout: &mut Layout) -> Result<Option<Widget>> {
+    // Absolute children (element root with both x and y) want free layout so the
+    // wrapper keeps each child's own coordinates instead of flowing them.
+    let absolute = nodes.iter().any(|n| matches!(n,
+        Node::Element(el) if find_prop(el, "x").is_some() && find_prop(el, "y").is_some()));
+    let horizontal = ctx.parent_horizontal == Some(true);
+
+    // Build each child into its own layout so we can measure it independently,
+    // then size the wrapper to the accumulated content (mirrors build_for).
+    let mut built: Vec<Widget> = Vec::new();
+    let mut content_w: f32 = 0.0;
+    let mut content_h: f32 = 0.0;
+    // Largest hidden child, reserved only if nothing is visible: siblings that
+    // swap via `visible: <signal>` (scene preview / code editor) share one slot
+    // instead of adding up — the C stack skips hidden items when laying out, so
+    // counting them made the wrapper twice as wide as what it shows.
+    let (mut hidden_w, mut hidden_h) = (0.0f32, 0.0f32);
+    let mut any_visible = false;
+    for n in nodes {
+        let mut child_layout = Layout::root();
+        if let Some(w) = build_node(ctx, n, &mut child_layout)? {
+            let cw = child_layout.content_width().max(0.0);
+            let ch = child_layout.content_height().max(0.0);
+            let shown = unsafe { (*w.as_ptr()).visible } != 0;
+            if !shown {
+                hidden_w = hidden_w.max(cw);
+                hidden_h = hidden_h.max(ch);
+            } else if horizontal {
+                any_visible = true;
+                content_w += cw;
+                content_h = content_h.max(ch);
+            } else {
+                any_visible = true;
+                content_w = content_w.max(cw);
+                content_h += ch;
+            }
+            built.push(w);
+        }
+    }
+    if !any_visible {
+        content_w = content_w.max(hidden_w);
+        content_h = content_h.max(hidden_h);
+    } else if horizontal {
+        content_h = content_h.max(hidden_h);
+    } else {
+        content_w = content_w.max(hidden_w);
+    }
+
+    match built.len() {
+        0 => Ok(None),
+        // A single child needs no wrapper — return it and advance the caller's
+        // layout exactly as before (keeps existing one-child if/for unchanged).
+        1 => {
+            let w = built.pop().unwrap();
+            layout.next_sized(content_w, content_h);
+            Ok(Some(w))
+        }
+        _ => {
+            let mut stack = Stack::new(if horizontal {
+                StackOrientation::Horizontal
+            } else {
+                StackOrientation::Vertical
+            })?
+            .spacing(0.0);
+            if absolute {
+                stack = stack.free_layout(true);
+            }
+            for w in built {
+                stack.add(w)?;
+            }
+            let (gw, gh) = (content_w.max(1.0), content_h.max(1.0));
+            layout.next_sized(gw, gh);
+            Ok(Some(stack.into_widget_sized(gw, gh)?))
+        }
+    }
+}
+
 /// `for item in list { body }` — iterate a list signal, binding `item` to each
 /// value (as a string in the env) and rendering the body's first node per item
 /// into a vertical Stack. Reactivity comes from `push_list`/`set_list` flagging
 /// the tree dirty (the host rebuilds with the new item count).
+/// Bind one `for`-loop item's fields into the env: the loop var = key, and the
+/// eight aux vars (`_label`/`_kind`/`_depth`/`_icon`/`_data1`..`_data4`) = the
+/// ␁-separated remainder. A plain string (no ␁) binds only the loop var.
+fn bind_loop_item(ctx: &mut Ctx, pattern: &str, aux: &[String], item: &str) {
+    match item.split_once('\u{1}') {
+        Some((key, rest)) => {
+            let mut f = rest.split('\u{1}');
+            ctx.env.vars.insert(pattern.to_string(), key.to_string());
+            ctx.env.vars.insert(aux[0].clone(), f.next().unwrap_or("").to_string());
+            ctx.env.vars.insert(aux[1].clone(), f.next().unwrap_or("").to_string());
+            ctx.env.vars.insert(aux[2].clone(), f.next().unwrap_or("0").to_string());
+            ctx.env.vars.insert(aux[3].clone(), f.next().unwrap_or("").to_string());
+            ctx.env.vars.insert(aux[4].clone(), f.next().unwrap_or("").to_string());
+            ctx.env.vars.insert(aux[5].clone(), f.next().unwrap_or("").to_string());
+            ctx.env.vars.insert(aux[6].clone(), f.next().unwrap_or("").to_string());
+            ctx.env.vars.insert(aux[7].clone(), f.next().unwrap_or("").to_string());
+        }
+        None => {
+            ctx.env.vars.insert(pattern.to_string(), item.to_string());
+        }
+    }
+}
+
 fn build_for(
     ctx: &mut Ctx,
     pattern: &str,
@@ -1189,7 +1325,56 @@ fn build_for(
         format!("{pattern}_kind"),
         format!("{pattern}_depth"),
         format!("{pattern}_icon"),
+        // Fields 6-9: generic data slots for dense per-row payloads (canvas nodes,
+        // shape lists, etc.) without requiring a separate signal per property.
+        format!("{pattern}_data1"),
+        format!("{pattern}_data2"),
+        format!("{pattern}_data3"),
+        format!("{pattern}_data4"),
     ];
+
+    // `flow: grid` — lay items in a wrapping grid (GridView) instead of a stack.
+    // `columns:` (default 4), `cellWidth:`/`cellHeight:` (default 120) come from
+    // the loop body's root element. Each item becomes one fixed-size cell.
+    let grid = body_root
+        .and_then(|el| style::enum_member(el, "flow"))
+        .map(|o| o == "grid")
+        .unwrap_or(false);
+    if grid {
+        let cols = body_root
+            .and_then(|el| style::f32_prop(el, "columns"))
+            .map(|c| (c as i32).max(1))
+            .unwrap_or(4);
+        let cell_w = body_root.and_then(|el| style::f32_prop(el, "cellWidth")).unwrap_or(120.0);
+        let cell_h = body_root.and_then(|el| style::f32_prop(el, "cellHeight")).unwrap_or(120.0);
+        let mut gv = GridView::new(cols, cell_w, cell_h)?;
+        let mut n: i32 = 0;
+        for item in &items {
+            bind_loop_item(ctx, pattern, &aux, item);
+            let mut il = Layout::root();
+            if let Some(w) = build_group(ctx, body, &mut il)? {
+                gv.add(w)?;
+                n += 1;
+            }
+        }
+        match saved {
+            Some(v) => { ctx.env.vars.insert(pattern.to_string(), v); }
+            None => { ctx.env.vars.remove(pattern); }
+        }
+        for a in &aux { ctx.env.vars.remove(a); }
+        ctx.parent_horizontal = saved_orient;
+        let gap = 8.0;
+        let rows = ((n + cols - 1) / cols).max(1);
+        // Size to the ITEMS, not the full column count, so a half-empty last
+        // row (or a grid with fewer items than columns) doesn't reserve a wide
+        // band of empty cells — keeps the grid compact + centerable.
+        let eff_cols = cols.min(n.max(1));
+        let w = cell_w * eff_cols as f32 + gap * eff_cols as f32;
+        let h = cell_h * rows as f32 + gap * rows as f32;
+        let (x, y) = layout.next_sized(w, h);
+        return Ok(Some(gv.into_widget_sized(w, h)?.position(x, y)));
+    }
+
     let mut content_w: f32 = 0.0;
     let mut content_h: f32 = 0.0;
     let mut count: usize = 0;
@@ -1202,30 +1387,9 @@ fn build_for(
         // (`width: row_depth * 14`) and click target per item. A plain string
         // (no U+0001) binds only the loop var, exactly as before — fully
         // back-compatible with existing `for x in list` loops.
-        match item.split_once('\u{1}') {
-            Some((key, rest)) => {
-                let mut f = rest.split('\u{1}');
-                ctx.env.vars.insert(pattern.to_string(), key.to_string());
-                ctx.env
-                    .vars
-                    .insert(aux[0].clone(), f.next().unwrap_or("").to_string());
-                ctx.env
-                    .vars
-                    .insert(aux[1].clone(), f.next().unwrap_or("").to_string());
-                ctx.env
-                    .vars
-                    .insert(aux[2].clone(), f.next().unwrap_or("0").to_string());
-                // Optional 5th field: a per-row icon asset (e.g. `mocida://rust.svg`).
-                ctx.env
-                    .vars
-                    .insert(aux[3].clone(), f.next().unwrap_or("").to_string());
-            }
-            None => {
-                ctx.env.vars.insert(pattern.to_string(), item.clone());
-            }
-        }
+        bind_loop_item(ctx, pattern, &aux, item);
         let mut item_layout = Layout::root();
-        if let Some(w) = build_first(ctx, body, &mut item_layout)? {
+        if let Some(w) = build_group(ctx, body, &mut item_layout)? {
             if horizontal {
                 // Horizontal flow: let the horizontal Stack flow the item after
                 // the previous one (its own width/height come from `place`). Widths
@@ -1359,10 +1523,12 @@ fn build_element(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wid
             "Spinner" => build_spinner(ctx, el, layout)?,
             "Image" => build_image(ctx, el, layout)?,
             "Video" => build_video(ctx, el, layout)?,
+            "Canvas" | "TabBarCanvas" => build_canvas(ctx, el, layout)?,
             "WebView" | "Webview" => build_webview(ctx, el, layout)?,
             "Dialog" => build_dialog(ctx, el, layout)?,
             "Popup" => build_popup(ctx, el, layout)?,
             "MouseArea" => build_mouse_area(ctx, el, layout)?,
+            "FileDrop" => build_filedrop(ctx, el, layout)?,
             _ if !el.children.is_empty() => build_stack(ctx, el, layout)?,
             other => build_placeholder(ctx, other, el, layout)?,
         }
@@ -1435,6 +1601,8 @@ fn is_builtin(name: &str) -> bool {
             | "Spinner"
             | "Image"
             | "Video"
+            | "Canvas"
+            | "TabBarCanvas"
             | "WebView"
             | "Webview"
             | "Dialog"
@@ -1504,6 +1672,10 @@ fn call_arg_string(el: &Element, param: &str, index: usize, outer: &Env) -> Opti
         if let Some(e) = &el.positional {
             return Some(render_text_expr_env(e, outer));
         }
+    } else if let Some(v) = el.positionals_rest.get(index - 1) {
+        // A later positional arg (`Row("a", "b", #fff, "c")`) binds to the
+        // param at this index. Resolved through the caller's env like a prop.
+        return prop_value_string(v, outer);
     }
     None
 }
@@ -1521,7 +1693,15 @@ fn prop_value_string(value: &PropValue, outer: &Env) -> Option<String> {
             Some(eval_bool_expr_env(e, outer).unwrap_or(false).to_string())
         }
         PropValue::Expr(e) => Some(render_text_expr_env(e, outer)),
-        PropValue::Mui(_) | PropValue::Handler(_) => None,
+        // A color / enum literal passed as a component arg (`badge_color: #a5b4fc`,
+        // or positionally). Stringify so it lands in the component env as a usable
+        // value — `#rrggbbaa` for a color, the bare member for an enum — instead of
+        // being dropped (which left e.g. an unbound `badge_color` rendering blank).
+        PropValue::Mui(MuiValue::Color { r, g, b, a }) => {
+            Some(format!("#{r:02x}{g:02x}{b:02x}{a:02x}"))
+        }
+        PropValue::Mui(MuiValue::Enum { member, .. }) => Some(member.clone()),
+        PropValue::Handler(_) => None,
     }
 }
 
@@ -1683,6 +1863,11 @@ fn build_rectangle(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
         y = py;
     }
     let rect_ptr = rect.as_ptr();
+    // Expose the game canvas host so OndaEngine's Play mode can inject the live
+    // `main.mui` tree into it (see [`game_host_ptr`]).
+    if id_name(el).as_deref() == Some("game-host") {
+        GAME_HOST.with(|c| c.set(rect_ptr as usize));
+    }
     let mut widget = rect.into_widget_sized(w, h)?.position(x, y);
     if let Some(op) = style::f32_prop(el, "opacity") {
         widget = widget.opacity(op);
@@ -2004,9 +2189,27 @@ fn build_stack(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
         if let Ok(sub) = sig.borrow_mut().subscribe(move |_| upd()) {
             ctx.reactive._subs.push(sub);
         }
+        // The catcher is a click SENSOR, not an occluder. It must still receive its
+        // own outside-click (to close the popup) but must NOT blanket-occlude every
+        // other widget behind it. Without `propagatingEvents`, this full-window
+        // MouseArea — always rendered as the LAST sibling of the editor root, so it
+        // sits in front of EVERY earlier sibling — would block hover+click to ALL of
+        // them whenever its popup is open. That meant a picker left open (e.g. a color
+        // swatch picker) silently killed hover/click on the Settings modal, the
+        // Agents/Git panels and the toolbar, because their buttons all live in earlier
+        // siblings (proven: with picker_open=1 + settings_open=1, every Settings button
+        // reported occAllows=0). The genuine modal dim/backdrop (a separate sized
+        // Stack/Rectangle inside the popup) still occludes the editor body it overlays;
+        // the catcher only needs to detect the outside click. Marking it propagating
+        // makes the click/hover occluder (BranchCovers / PickHoverCursorImpl) see
+        // straight through it to the real UI, while the dispatcher still delivers the
+        // catcher its own MouseDown — so dismiss keeps working and nothing else gets
+        // blanket-blocked. This generalizes the earlier disabled-catcher fix to the
+        // ENABLED case.
         let catcher = catcher_ma
             .into_widget_sized(100000.0, 100000.0)?
-            .position(0.0, 0.0);
+            .position(0.0, 0.0)
+            .propagating_events(true);
         stack.add(catcher)?;
     }
 
@@ -2450,7 +2653,10 @@ fn build_button(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
         .as_ref()
         .map(|e| render_text_expr(e, ctx))
         .unwrap_or_else(|| "Button".to_string());
-    let size = style::f32_prop(el, "size").unwrap_or(16.0);
+    // 13 pt = the macOS control label size.
+    let size = style::f32_prop(el, "size")
+        .or_else(|| style::f32_prop(el, "fontSize"))
+        .unwrap_or(13.0);
 
     let mut button = Button::new(&label, size)?;
 
@@ -2469,6 +2675,19 @@ fn build_button(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
         a: 255,
     });
     button = button.colors(to_color(bg), to_color(text_col));
+    // `hoverBackground:` overrides the derived hover/pressed fills (otherwise a
+    // 15% white blend of `background`), e.g. a flat menu item that only lights
+    // up under the pointer.
+    if let Some(hv) = style::color_prop(el, "hoverBackground") {
+        let st = mocida::button::ButtonStyle {
+            background: to_color(hv),
+            border: mocida::Color::TRANSPARENT,
+            text: to_color(text_col),
+        };
+        button = button
+            .state_style(mocida::button::ButtonState::Hover, st)
+            .state_style(mocida::button::ButtonState::Pressed, st);
+    }
 
     button = button.radius(style::f32_prop(el, "radius").unwrap_or(8.0));
     if let Some(bw) = style::f32_prop(el, "borderWidth") {
@@ -2699,6 +2918,13 @@ thread_local! {
     /// TextArea — OndaEngine has exactly one (the code editor), so "last built"
     /// is unambiguous.
     static EDITOR_TA: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+
+    /// Raw pointer to the most-recently-built `Rectangle` carrying `id: "game-host"`.
+    /// OndaEngine's Play mode reads this via [`game_host_ptr`] to inject the live
+    /// `main.mui` game tree into the Game tab's canvas with `UIRectangle_AddChild`.
+    /// Reset to 0 on every rebuild that does NOT build the host, so the host can
+    /// tell when the canvas was recreated and re-inject.
+    static GAME_HOST: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The most-recently-built `UITextArea` (null until one is built). Hosts that
@@ -2706,6 +2932,14 @@ thread_local! {
 /// the `UITextArea_GetCaretByte` / `_InsertText` / `_GetCaretScreenPos` C API.
 pub fn editor_textarea_ptr() -> *mut mocida::sys::UITextArea {
     EDITOR_TA.with(|c| c.get() as *mut mocida::sys::UITextArea)
+}
+
+/// The most-recently-built `Rectangle` marked `id: "game-host"` (null until one
+/// is built). OndaEngine injects the running `main.mui` tree here while playing.
+/// The pointer is refreshed on every build: it is set when a `game-host` rect is
+/// built and cleared (0) otherwise, so a changed value means "canvas recreated".
+pub fn game_host_ptr() -> *mut mocida::sys::UIRectangle {
+    GAME_HOST.with(|c| c.get() as *mut mocida::sys::UIRectangle)
 }
 
 /// `TextArea` — multi-line editable input (Enter inserts a newline). Uses the
@@ -3165,8 +3399,34 @@ fn build_switch(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
 fn build_slider(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
     let min = style::f32_prop(el, "min").unwrap_or(0.0);
     let max = style::f32_prop(el, "max").unwrap_or(100.0);
-    let val = style::f32_prop(el, "value").unwrap_or(min);
+    // `value:` may be a literal OR a signal ident (`value: bg_blur`) — dim_prop
+    // resolves both, so the knob opens at the live value and a rebuild preserves it.
+    let val = dim_prop(ctx, el, "value").unwrap_or(min);
     let mut sl = Slider::new(min, max, val)?;
+
+    // Two-way binding: `onChange: { |v| bg_blur = v }` writes the dragged value
+    // into the bound signal (int preferred, else string) so the host can read it.
+    if let Some(PropValue::Handler(h)) = find_prop(el, "onChange").map(|p| &p.value) {
+        let two_way = parse_str_actions(h).into_iter().find_map(|a| match a {
+            StrAction::TwoWay { name } => Some(name),
+            _ => None,
+        });
+        if let Some(name) = two_way {
+            if let Some(sig) = ctx.signal(&name).cloned() {
+                sl = sl.on_change(move |v| {
+                    if let Ok(mut g) = sig.try_borrow_mut() {
+                        let _ = g.set(v.round() as i32);
+                    }
+                });
+            } else if let Some(sig) = ctx.string_signal(&name).cloned() {
+                sl = sl.on_change(move |v| {
+                    if let Ok(mut g) = sig.try_borrow_mut() {
+                        let _ = g.set((v.round() as i32).to_string());
+                    }
+                });
+            }
+        }
+    }
 
     let track = style::color_prop(el, "trackColor");
     let fill = style::color_prop(el, "fillColor").or_else(|| style::color_prop(el, "color"));
@@ -3391,6 +3651,226 @@ fn build_video(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     Ok(apply_anchor(widget, style::anchor(el)))
 }
 
+/// `Canvas`/`TabBarCanvas` — a vector canvas (mocida `UICanvas`) that paints
+/// browser-style curved tab silhouettes from a live string signal. It draws ONLY
+/// the curved tab backgrounds + the baseline strip; the interactive icon/label/
+/// close affordances are normal MUI widgets layered ON TOP (so all the proven
+/// click/hover/close/scroll wiring is preserved and the canvas never handles
+/// input). Each frame it re-reads the signal, so the active tab and tab count
+/// update in place with no structural rebuild (no editor flicker / lost focus).
+///
+/// Props:
+///   tabs: <strSignal>   newline-separated, one row per tab, `a`=active `i`=inactive
+///   scrollX: <intSig>   horizontal scroll offset (kept in sync with the Scroll)
+///   width:/height:      canvas size
+///   tabWidth: 150       per-tab slot width (must match the host TAB_W)
+///   tabHeight: 33       tab body height
+///   overlap: 11         curve flare width at each bottom corner
+///   radius: 9           top corner radius
+///   leadingPad: 0       extra x offset of the first tab (e.g. a leading ▶ Game tab);
+///                       the canvas also adds `overlap` so the first tab's left ear isn't
+///                       clipped by the canvas edge.
+///   activeColor / inactiveColor / barColor / dividerColor: hex colors
+fn build_canvas(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
+    let w = dim_prop(ctx, el, "width").unwrap_or(400.0);
+    let h = dim_prop(ctx, el, "height").unwrap_or(35.0);
+
+    let tab_w = style::f32_prop(el, "tabWidth").unwrap_or(150.0);
+    let tab_h = style::f32_prop(el, "tabHeight").unwrap_or(33.0);
+    let overlap = style::f32_prop(el, "overlap").unwrap_or(11.0);
+    let radius = style::f32_prop(el, "radius").unwrap_or(9.0);
+    let leading = style::f32_prop(el, "leadingPad").unwrap_or(0.0) + overlap + 4.0;
+
+    let active_c = style::color_prop(el, "activeColor")
+        .map(to_color)
+        .unwrap_or_else(|| Color::rgb(0x1e, 0x1f, 0x22));
+    let inactive_c = style::color_prop(el, "inactiveColor")
+        .map(to_color)
+        .unwrap_or_else(|| Color::rgb(0x2b, 0x2d, 0x30));
+    let bar_c = style::color_prop(el, "barColor")
+        .map(to_color)
+        .unwrap_or_else(|| Color::rgb(0x2b, 0x2d, 0x30));
+    let divider_c = style::color_prop(el, "dividerColor")
+        .map(to_color)
+        .unwrap_or_else(|| Color::rgb(0x3a, 0x3c, 0x41));
+    let accent_c = style::color_prop(el, "accentColor")
+        .map(to_color)
+        .unwrap_or_else(|| Color::rgb(0x35, 0x74, 0xf0));
+
+    // Resolve the `tabs:` string signal (live source of per-tab active flags).
+    let tabs_sig = find_prop(el, "tabs")
+        .and_then(|p| match &p.value {
+            PropValue::Expr(e) => Some(names_read(e)),
+            _ => None,
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .find(|n| ctx.string_signal(n).is_some())
+        .and_then(|n| ctx.string_signal(&n))
+        .map(|s| s.borrow().as_ptr());
+
+    // Resolve the `scrollX:` int signal so the canvas tracks the horizontal Scroll.
+    let scroll_sig = find_prop(el, "scrollX")
+        .and_then(|p| match &p.value {
+            PropValue::Expr(e) => Some(names_read(e)),
+            _ => None,
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .find(|n| ctx.signal(n).is_some())
+        .and_then(|n| ctx.signal(&n))
+        .map(|s| s.borrow().as_ptr());
+
+    let label_c = style::color_prop(el, "labelColor")
+        .map(to_color)
+        .unwrap_or_else(|| Color::rgb(0x9d, 0xa0, 0xa8));
+    let label_active_c = style::color_prop(el, "labelActiveColor")
+        .map(to_color)
+        .unwrap_or_else(|| Color::rgb(0xff, 0xff, 0xff));
+    let close_c = style::color_prop(el, "closeColor")
+        .map(to_color)
+        .unwrap_or_else(|| Color::rgb(0x6f, 0x73, 0x7a));
+    let font_family = prop_string_value(ctx, el, "fontFamily")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Helvetica Neue".to_string());
+    let font_size = style::f32_prop(el, "fontSize").unwrap_or(11.5);
+
+
+    // Parsed per-tab (active, dirty) flags + the raw signal bytes they came from.
+    let mut tabs_raw: Vec<u8> = Vec::new();
+    let mut tabs: Vec<(bool, bool)> = Vec::new();
+
+    let canvas = Canvas::new(w, h)?.on_frame(move |d| {
+        let cw = d.width();
+        let ch = d.height();
+        // Baseline = bottom of the strip: tabs stand on it (Chrome-style, with
+        // the spare strip height as a gap above) and fuse into the content below.
+        let base_y = ch;
+        let top_y = (base_y - tab_h).max(0.0);
+
+        // Background bar (whole strip).
+        d.set_fill(bar_c);
+        d.fill_rect(0.0, 0.0, cw, ch);
+
+        // Re-parse the `tabs` rows only when the signal's text changed: compare
+        // the live C string with the cached bytes (no per-frame allocation).
+        let raw: &[u8] = match tabs_sig {
+            Some(p) => unsafe {
+                let cs = mocida::sys::UISignal_GetString(p);
+                if cs.is_null() { &[] } else { std::ffi::CStr::from_ptr(cs).to_bytes() }
+            },
+            None => &[],
+        };
+        if raw != tabs_raw.as_slice() {
+            tabs_raw.clear();
+            tabs_raw.extend_from_slice(raw);
+            tabs.clear();
+            // Each row: `flag\x1Flabel\x1Fdirty\x1F#rrggbb\x1Fmocida://icon`
+            // (flag a|i, dirty d|""); only the flags drive the drawing.
+            if !raw.is_empty() {
+                for row in raw.split(|&c| c == b'\n') {
+                    let mut it = row.split(|&c| c == 0x1f);
+                    let active = it.next().is_some_and(|f| f.first() == Some(&b'a'));
+                    let _label = it.next();
+                    let dirty = it.next().is_some_and(|f| f.first() == Some(&b'd'));
+                    tabs.push((active, dirty));
+                }
+            }
+        }
+        let scroll_x = match scroll_sig {
+            Some(p) => unsafe { mocida::sys::UISignal_GetInt(p) as f32 },
+            None => 0.0,
+        };
+        let n = tabs.len();
+        let active_idx = tabs.iter().position(|t| t.0);
+
+        // Chrome tab silhouette: rounded top corners, straight sides, and a
+        // concave quarter-circle "ear" at each bottom corner that fuses the tab
+        // into the content surface below. Only the ACTIVE tab is filled; inactive
+        // tabs are just their label on the bar, split by short dividers.
+        const K: f32 = 0.5523; // cubic-bezier circle constant
+        let tab_path = |d: &mut mocida::canvas::CanvasDraw, tab_x: f32| {
+            let r = radius.min(tab_h * 0.5); // top corner radius
+            let f = overlap.min(tab_h * 0.5); // ear radius
+            let x0 = tab_x;
+            let x1 = tab_x + tab_w;
+            d.begin_path();
+            d.move_to(x0 - f, base_y);
+            // Left ear: quarter circle centred at (x0 - f, base_y - f).
+            d.bezier_to(x0 - f + f * K, base_y, x0, base_y - f + f * K, x0, base_y - f);
+            d.line_to(x0, top_y + r);
+            d.bezier_to(x0, top_y + r - r * K, x0 + r - r * K, top_y, x0 + r, top_y);
+            d.line_to(x1 - r, top_y);
+            d.bezier_to(x1 - r + r * K, top_y, x1, top_y + r - r * K, x1, top_y + r);
+            d.line_to(x1, base_y - f);
+            // Right ear, mirrored.
+            d.bezier_to(x1, base_y - f + f * K, x1 + f - f * K, base_y, x1 + f, base_y);
+            d.close_path();
+        };
+        let _ = inactive_c;
+
+        // Pass 1: short dividers between neighbouring inactive tabs (none next to
+        // the active tab, whose ears already separate it).
+        d.set_fill(divider_c);
+        let div_h = (tab_h * 0.5).round();
+        for i in 1..n {
+            if active_idx == Some(i - 1) || active_idx == Some(i) {
+                continue;
+            }
+            let x = leading + (i as f32) * tab_w - scroll_x;
+            if x < -2.0 || x > cw {
+                continue;
+            }
+            d.fill_rect(x - 0.5, top_y + (tab_h - div_h) * 0.5, 1.0, div_h);
+        }
+        // Pass 2: the active tab — the page surface itself (no accent bar).
+        if let Some(ai) = active_idx {
+            let x = leading + (ai as f32) * tab_w - scroll_x;
+            tab_path(d, x);
+            d.set_fill(active_c);
+            d.fill();
+            let _ = accent_c;
+        }
+
+        // Pass 3: close mark (or the unsaved dot). Icon and filename are real
+        // widgets in the hit strip — canvas text rebuilt a texture every frame.
+        let close_box = 16.0_f32;
+        let pad_right = 8.0_f32;
+        let _ = (font_size, &font_family, label_c);
+        for (i, &(_, dirty)) in tabs.iter().enumerate() {
+            let x = leading + (i as f32) * tab_w - scroll_x;
+            if x + tab_w < -2.0 || x > cw + 2.0 {
+                continue;
+            }
+            let cx = x + tab_w - pad_right - close_box * 0.5;
+            let cy = top_y + tab_h * 0.5;
+            if dirty {
+                d.set_fill(label_active_c);
+                d.begin_path();
+                d.arc(cx, cy, 3.5, 0.0, std::f32::consts::TAU);
+                d.fill();
+                continue;
+            }
+            // Two strokes, so it never depends on the font having a × glyph.
+            let s = 3.5_f32;
+            d.set_stroke(close_c);
+            d.set_line_width(1.4);
+            d.begin_path();
+            d.move_to(cx - s, cy - s);
+            d.line_to(cx + s, cy + s);
+            d.stroke();
+            d.begin_path();
+            d.move_to(cx + s, cy - s);
+            d.line_to(cx - s, cy + s);
+            d.stroke();
+        }
+    });
+
+    let (x, y) = place(el, layout, w, h);
+    let widget = canvas.into_widget_sized(w, h)?.position(x, y);
+    Ok(apply_anchor(widget, style::anchor(el)))
+}
+
 /// `WebView("https://…", width:, height:, radius:, borderColor:, borderWidth:)`
 /// — an embedded browser surface (mocida's `UIWebView`, WebView2 on Windows).
 /// The positional arg (or `url:`/`src:`) is the initial URL. `radius:` rounds
@@ -3517,6 +3997,63 @@ fn build_popup(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
 /// `onEnter`/`onHover`, `onLeave`/`onExit`, `onMove`, `onDoubleClick`, and the
 /// drag trio `onDragStart`/`onDrag`/`onDragEnd` (with `draggable: true`). Also
 /// `cursor:`, `enabled:`, `background:`/`radius:`/`border*`, `width`/`height`.
+/// `FileDrop(prompt:, onDrop:, background:, activeBackground:, borderColor:,
+/// activeBorderColor:, textColor:, fontSize:, width:, height:, x:, y:)` →
+/// a `UIFileDrop` drop target. On a dropped file it writes the absolute path
+/// into the `onDrop` string signal; a host watches that signal, imports the
+/// file, then clears the signal (so re-dropping the same path fires again).
+fn build_filedrop(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
+    let prompt = prop_string_value(ctx, el, "prompt")
+        .unwrap_or_else(|| "Drop files here".to_string());
+    let mut fd = mocida::file_drop::FileDrop::new(&prompt)?;
+    if let Some(fs) = style::f32_prop(el, "fontSize") {
+        fd = fd.font_size(fs);
+    }
+    // The C FileDrop only draws its prompt when a font family is set (Text has a
+    // built-in default; FileDrop doesn't). Resolve a UI font so the prompt shows.
+    let fam = prop_string_value(ctx, el, "fontFamily")
+        .and_then(|n| mocida::text::get_font(&n))
+        .or_else(|| mocida::text::get_font("Helvetica"))
+        .or_else(|| mocida::text::get_font("Arial"))
+        .or_else(|| mocida::text::get_font("DejaVu Sans"));
+    if let Some(path) = fam {
+        fd = fd.font_family(&path)?;
+    }
+    let transparent = Rgba { r: 0, g: 0, b: 0, a: 0 };
+    let bg = style::background(el).unwrap_or(transparent);
+    let active_bg = style::color_prop(el, "activeBackground").unwrap_or(bg);
+    let border = style::color_prop(el, "borderColor").unwrap_or(transparent);
+    let active_border = style::color_prop(el, "activeBorderColor").unwrap_or(border);
+    let text = style::color_prop(el, "textColor")
+        .or_else(|| style::color_prop(el, "color"))
+        .unwrap_or(Rgba { r: 0x9d, g: 0xa0, b: 0xa8, a: 0xff });
+    fd = fd.colors(
+        to_color(bg),
+        to_color(active_bg),
+        to_color(border),
+        to_color(active_border),
+        to_color(text),
+    );
+    if let Some(sig) =
+        prop_string_value(ctx, el, "onDrop").and_then(|n| ctx.string_signal(&n).cloned())
+    {
+        fd = fd.on_drop(move |path| {
+            let _ = sig.borrow_mut().set(path.to_string());
+        });
+    }
+    let w = dim_prop(ctx, el, "width").unwrap_or(ctx.avail_w.max(100.0));
+    let h = dim_prop(ctx, el, "height").unwrap_or(120.0);
+    let (mut x, mut y) = place(el, layout, w, h);
+    if let Some(px) = dim_prop(ctx, el, "x") {
+        x = px;
+    }
+    if let Some(py) = dim_prop(ctx, el, "y") {
+        y = py;
+    }
+    let widget = fd.into_widget_sized(w, h)?.position(x, y);
+    Ok(apply_anchor(widget, style::anchor(el)))
+}
+
 fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
     // The visible container that renders the content (transparent by default,
     // but `background:` makes the area a clickable card).
@@ -3646,6 +4183,53 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
                 let _ = s.borrow_mut().set(ev.y.round() as i32);
             }
         });
+    }
+
+    // Internal drag-and-drop. `dragData: "<payload>"` marks a drag SOURCE: it
+    // doesn't move itself — it drives the well-known ghost signals
+    // (drag_ghost_active/label/x/y) so an always-rendered ghost widget can follow
+    // the cursor, and the payload is delivered to a drop target on release.
+    if let Some(payload) = prop_string_value(ctx, el, "dragData") {
+        if !payload.is_empty() {
+            area = area.drag_data(&payload);
+            let label = prop_string_value(ctx, el, "dragLabel").unwrap_or_else(|| payload.clone());
+            let active = ctx.string_signal("drag_ghost_active").cloned();
+            let lbl = ctx.string_signal("drag_ghost_label").cloned();
+            let gx = ctx.signal("drag_ghost_x").cloned();
+            let gy = ctx.signal("drag_ghost_y").cloned();
+            {
+                let (active, lbl, gx, gy, label) =
+                    (active.clone(), lbl.clone(), gx.clone(), gy.clone(), label);
+                area = area.on(MouseAreaEvent::DragStart, move |ev| {
+                    if let Some(s) = &active { let _ = s.borrow_mut().set("1".to_string()); }
+                    if let Some(s) = &lbl { let _ = s.borrow_mut().set(label.clone()); }
+                    if let Some(s) = &gx { let _ = s.borrow_mut().set(ev.x.round() as i32); }
+                    if let Some(s) = &gy { let _ = s.borrow_mut().set(ev.y.round() as i32); }
+                });
+            }
+            {
+                let (gx, gy) = (gx.clone(), gy.clone());
+                area = area.on(MouseAreaEvent::Drag, move |ev| {
+                    if let Some(s) = &gx { let _ = s.borrow_mut().set(ev.x.round() as i32); }
+                    if let Some(s) = &gy { let _ = s.borrow_mut().set(ev.y.round() as i32); }
+                });
+            }
+            area = area.on(MouseAreaEvent::DragEnd, move |_| {
+                if let Some(s) = &active { let _ = s.borrow_mut().set("0".to_string()); }
+            });
+        }
+    }
+    // `dropData` + `onDropSignal`: a drop TARGET. On drop it sets the named
+    // string signal to "payload␁dropData" so the host can route the drop.
+    if let Some(drop_id) = prop_string_value(ctx, el, "dropData") {
+        if let Some(sig) =
+            prop_string_value(ctx, el, "onDropSignal").and_then(|n| ctx.string_signal(&n).cloned())
+        {
+            area = area.drop_data(&drop_id);
+            area = area.on_drop(move |payload, dropdata| {
+                let _ = sig.borrow_mut().set(format!("{payload}\u{1}{dropdata}"));
+            });
+        }
     }
 
     const EVENTS: &[(&str, MouseAreaEvent)] = &[
@@ -4229,7 +4813,11 @@ fn sized_text(label: &str, size: f32, color: Color, layout: &mut Layout) -> Resu
 fn text_extent(label: &str, size: f32) -> (f32, f32) {
     let glyphs = label.chars().count().max(1) as f32;
     let w = (glyphs * size * 0.6).ceil().max(size);
-    let h = (size * 1.5).ceil() + 10.0;
+    // 1.35× matches SDL_ttf's actual line metrics (ascent+descent) for common
+    // fonts (SF Pro on macOS, Segoe UI on Windows). The old formula added +10
+    // which grossly over-estimated single-line heights and broke align:center
+    // vertical centering in parent containers.
+    let h = (size * 1.35).ceil();
     (w, h)
 }
 
@@ -4375,7 +4963,11 @@ fn handler_apply_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn 
     if int_pair.is_none() && str_sets.is_empty() && screen_raw.is_none() {
         return None;
     }
+    let trace_raw = trace_handlers_on().then(|| format!("{prop}: {}", handler.raw));
     Some(Box::new(move || {
+        if let Some(t) = &trace_raw {
+            eprintln!("[mui] handler {t}");
+        }
         if let Some(raw) = &screen_raw {
             apply_screen_actions(raw);
         }
@@ -6266,6 +6858,7 @@ mod tests {
         let kc = KeyEvalCtx {
             param: "event",
             key: "R",
+            mods: 0,
             ints: &ints,
             strs: &strs,
         };

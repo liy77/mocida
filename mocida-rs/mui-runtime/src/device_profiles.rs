@@ -19,54 +19,90 @@ pub struct DeviceProfile {
 }
 
 impl DeviceProfile {
-    /// Realistic thin-bezel frame geometry: 14 px uniform bezel.
-    #[allow(clippy::too_many_arguments)]
-    const fn framed(
+    /// iPhone frame geometry: 20 px bezel on left/right/top, 28 px on bottom.
+    /// Must match BEZELS["iphone"] in generate_placeholders.py.
+    const fn iphone(
         name: &'static str,
         width: i32,
         height: i32,
         safe_top: i32,
         safe_bottom: i32,
-        safe_left: i32,
-        safe_right: i32,
         scale: f32,
     ) -> Self {
-        let bezel = 14; // realistic thin bezel, ~1.5 mm at phone scale
-        let frame_w = width + 2 * bezel;
-        let frame_h = height + 2 * bezel;
+        let left = 20;
+        let right = 20;
+        let top = 20;
+        let bottom = 28;
         Self {
             name,
             width,
             height,
             safe_top,
             safe_bottom,
-            safe_left,
-            safe_right,
+            safe_left: 0,
+            safe_right: 0,
             scale,
-            frame_screen_x: bezel,
-            frame_screen_y: bezel,
+            frame_screen_x: left,
+            frame_screen_y: top,
             frame_screen_w: width,
             frame_screen_h: height,
-            frame_w,
-            frame_h,
+            frame_w: width + left + right,
+            frame_h: height + top + bottom,
+        }
+    }
+
+    /// Galaxy frame geometry: 14 px bezel on left/right/top, 18 px on bottom.
+    /// Must match BEZELS["galaxy"] in generate_placeholders.py.
+    const fn galaxy(
+        name: &'static str,
+        width: i32,
+        height: i32,
+        safe_top: i32,
+        safe_bottom: i32,
+        scale: f32,
+    ) -> Self {
+        let left = 14;
+        let right = 14;
+        let top = 14;
+        let bottom = 18;
+        Self {
+            name,
+            width,
+            height,
+            safe_top,
+            safe_bottom,
+            safe_left: 0,
+            safe_right: 0,
+            scale,
+            frame_screen_x: left,
+            frame_screen_y: top,
+            frame_screen_w: width,
+            frame_screen_h: height,
+            frame_w: width + left + right,
+            frame_h: height + top + bottom,
         }
     }
 }
 
-pub const IPHONE_15: DeviceProfile = DeviceProfile::framed("iphone15", 393, 852, 59, 34, 0, 0, 3.0);
+// iPhone profiles — frame_w = screen_w + 40, frame_h = screen_h + 48
+pub const IPHONE_15: DeviceProfile =
+    DeviceProfile::iphone("iphone15", 393, 852, 59, 34, 3.0);
 pub const IPHONE_15_PRO: DeviceProfile =
-    DeviceProfile::framed("iphone15pro", 393, 852, 59, 34, 0, 0, 3.0);
+    DeviceProfile::iphone("iphone15pro", 393, 852, 59, 34, 3.0);
 pub const IPHONE_15_PRO_MAX: DeviceProfile =
-    DeviceProfile::framed("iphone15promax", 430, 932, 59, 34, 0, 0, 3.0);
-pub const IPHONE_16: DeviceProfile = DeviceProfile::framed("iphone16", 393, 852, 59, 34, 0, 0, 3.0);
+    DeviceProfile::iphone("iphone15promax", 430, 932, 59, 34, 3.0);
+pub const IPHONE_16: DeviceProfile =
+    DeviceProfile::iphone("iphone16", 393, 852, 59, 34, 3.0);
+
+// Galaxy profiles — frame_w = screen_w + 28, frame_h = screen_h + 32
 pub const GALAXY_S24: DeviceProfile =
-    DeviceProfile::framed("galaxy_s24", 360, 780, 24, 24, 0, 0, 3.0);
+    DeviceProfile::galaxy("galaxy_s24", 360, 780, 24, 24, 3.0);
 pub const GALAXY_S24_PLUS: DeviceProfile =
-    DeviceProfile::framed("galaxy_s24plus", 384, 832, 24, 24, 0, 0, 3.2);
+    DeviceProfile::galaxy("galaxy_s24plus", 384, 832, 24, 24, 3.2);
 pub const GALAXY_S25: DeviceProfile =
-    DeviceProfile::framed("galaxy_s25", 360, 780, 24, 24, 0, 0, 3.0);
+    DeviceProfile::galaxy("galaxy_s25", 360, 780, 24, 24, 3.0);
 pub const GALAXY_S25_ULTRA: DeviceProfile =
-    DeviceProfile::framed("galaxy_s25ultra", 384, 832, 24, 24, 0, 0, 3.2);
+    DeviceProfile::galaxy("galaxy_s25ultra", 384, 832, 24, 24, 3.2);
 
 pub const PROFILE_NAMES: &[&str] = &[
     "iphone15",

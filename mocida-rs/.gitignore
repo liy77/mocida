@@ -5,3 +5,10 @@ Cargo.lock
 *.dll
 *.lib
 .vscode/
+
+# Dev scratch / test artifacts at the crate root (e.g. _atest.mui, _t.mui, _impt.png)
+# — never commit these. Real assets live under assets/, not the root.
+/_*.mui
+/_*.png
+/_*.err
+/rust_out

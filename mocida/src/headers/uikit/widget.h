@@ -289,6 +289,24 @@ UIWidget* UIWidget_FindByData(void* data);
 void UIWidget_Destroy(UIWidget* widget);
 
 /**
+ * Binding ownership hook: `freeFn(userdata)` runs when the widget identified by
+ * `owner` (its data pointer, e.g. the UIButton*, or the UIWidget* itself) is
+ * destroyed by UIWidget_Destroy (deferred to the next UIWidget_FlushOwned).
+ * Language bindings attach the closure state behind a callback's userdata here
+ * once the widget is handed to a parent, so it lives as long as the widget
+ * instead of leaking. Main thread only.
+ */
+typedef void (*UIOwnedFreeFn)(void* userdata);
+void UIWidget_AttachOwned(const void* owner, void* userdata, UIOwnedFreeFn freeFn);
+/** Internal: retire every hook attached to `owner` (called by UIWidget_Destroy). */
+void UIWidget__ReleaseOwned(const void* owner);
+/**
+ * Runs the freeFn of every retired hook. Called by the app at the top of each
+ * frame and on shutdown — never while a widget callback is on the stack.
+ */
+void UIWidget_FlushOwned(void);
+
+/**
  * Sets the alignment of a widget within its parent.
  * @param widget Pointer to the UIWidget object.
  * @param alignment UIAlignment object specifying the alignment.

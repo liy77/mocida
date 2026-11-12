@@ -465,7 +465,9 @@ if(APPLE)
     else()
         # macOS: AppKit WKWebView backend.
         target_compile_definitions(mocida PRIVATE MOCIDA_HAS_WKWEBVIEW=1)
-        target_link_libraries(mocida PUBLIC "-framework WebKit" "-framework Cocoa")
+        # CoreText: direct font-family -> file resolution in font.c.
+        target_link_libraries(mocida PUBLIC "-framework WebKit" "-framework Cocoa"
+            "-framework CoreText")
         message(STATUS "Mocida: macOS UIWebView backend = WKWebView (webview_cocoa.mm)")
     endif()
 endif()

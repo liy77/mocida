@@ -17,6 +17,7 @@
 #define MOCIDA_SYS_WRAPPER_H
 
 #include <uikit/app.h>
+#include <uikit/canvas.h>
 #include <uikit/event.h>
 #include <uikit/reactive.h>
 #include <uikit/bind.h>

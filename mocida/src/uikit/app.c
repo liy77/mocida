@@ -563,8 +563,19 @@ static UICursor PickHoverCursorImpl(UIChildren* children, float x, float y, bool
         }
         if (!strcmp(type, UI_WIDGET_MOUSE_AREA)) {
             UIMouseArea* m = (UIMouseArea*)base;
+            // A DISABLED MouseArea is transparent to input — it neither catches
+            // events (see UIMouseArea_DispatchMouseDown / BranchCovers, which both
+            // skip a disabled area) nor occludes widgets behind it. So the hover
+            // pick must NOT mark the point blocked and must keep looking at lower-z
+            // widgets. The common case is an always-rendered `dismiss:` click-catcher
+            // (sized 100000², SetEnabled(0) while its popup is hidden): if it counted
+            // as a cover here, hover-cursor feedback would silently die for EVERY
+            // interactive widget behind it (e.g. the Settings modal's × close button,
+            // which sits under the editor's always-rendered NodePicker/KindPicker/
+            // ColorPicker catchers). This now matches BranchCovers' disabled-area
+            // handling on the click/occlusion path.
+            if (!m->enabled) continue;
             if (blocked) *blocked = true;
-            if (!m->enabled) return UI_CURSOR_DEFAULT;
             return m->cursor;
         }
         if (!strcmp(type, UI_WIDGET_CHECKBOX)) {
@@ -617,6 +628,35 @@ static UICursor PickHoverCursor(UIChildren* children, float x, float y) {
     return PickHoverCursorImpl(children, x, y, NULL);
 }
 
+// --- Hover-state re-derivation after a tree swap ---------------------------
+// Per-widget hover state (UIButton.state == HOVER, MouseArea.hovered, etc.) is
+// updated ONLY on SDL_EVENT_MOUSE_MOTION. A structural rebuild (UIApp_SetChildren)
+// destroys every widget and recreates it in its NORMAL/un-hovered state. If the
+// cursor is parked over a control while the rebuild happens, no motion event
+// follows, so the fresh widget stays un-hovered (stale highlight) and its
+// down→up click machine starts from isPressed=0 — the first click after a
+// rebuild is "wasted" recovering state, the second one acts. We fix this at the
+// source: remember the last cursor position and, after any tree swap, re-run the
+// motion→hover-state dispatch (and cursor pick) at that position so the new tree
+// reflects where the mouse actually is. g_lastMouseValid guards startup (before
+// any motion has been seen) and headless/touch where there is no cursor.
+static float g_lastMouseX = 0.0f, g_lastMouseY = 0.0f;
+static int   g_lastMouseValid = 0;
+// Set by UIApp_SetChildren; consumed after the next render so the freshly-built
+// (and now laid-out) tree gets its hover state re-derived at the cursor.
+static int   g_hoverRefreshPending = 0;
+
+static void DispatchHoverMotion(UIApp* app, float rx, float ry) {
+    OcclusionBegin(app->window->children, rx, ry);
+    UIMouseArea_DispatchMouseMotion(app->window->children, rx, ry);
+    UIButton_DispatchMouseMotion   (app->window->children, rx, ry);
+    UIControls_DispatchMouseMotion (app->window->children, rx, ry);
+    UIPopup_DispatchMouseMotion    (app->window->children, rx, ry);
+    UITextField_DispatchMouseMotion(app->window->children, rx, ry);
+    UITextArea_DispatchMouseMotion (app->window->children, rx, ry);
+    UIText_DispatchMouseMotion     (app->window->children, rx, ry);
+}
+
 static void ApplySimulatorMouseTransform(UIApp* app, float* rx, float* ry) {
     if (app && app->window && UIWindow_IsDeviceSimulatorEnabled(app->window)) {
         float dx = 0, dy = 0;
@@ -634,6 +674,10 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
             float rx, ry;
             WindowToRenderCoords(app, event->motion.x, event->motion.y, &rx, &ry);
             ApplySimulatorMouseTransform(app, &rx, &ry);
+            // Remember where the cursor is so a structural rebuild can re-derive
+            // hover state at this point (UIApp_SetChildren flags it; the refresh
+            // runs after the next render in UIApp_RunOneFrame).
+            g_lastMouseX = rx; g_lastMouseY = ry; g_lastMouseValid = 1;
             // A scrollbar-thumb drag in progress owns the motion: move it and
             // swallow the event so hover/selection logic doesn't also react.
             if (ScrollbarDragMove(app->window->children, ry)) break;
@@ -742,6 +786,12 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
             ScrollbarDragEnd(app->window->children);
             OcclusionBegin(app->window->children, rx, ry);
             UIMouseArea_DispatchMouseUp(app->window->children, rx, ry, event->button.button);
+            // Internal drag-and-drop: if a `dragData` source was being dragged,
+            // deliver it to the topmost drop target under the cursor, then clear.
+            if (UIMouseArea_DragActive()) {
+                UIMouseArea_DispatchDrop(app->window->children, rx, ry);
+                UIMouseArea_ClearDrag();
+            }
             UIWebView_DispatchMouseUp  (app->window->children, rx, ry, event->button.button);
             if (event->button.button == SDL_BUTTON_LEFT) {
                 UIButton_DispatchMouseUp    (app->window->children, rx, ry);
@@ -980,7 +1030,7 @@ UIApp* UIApp_Create(const char* title, int width, int height) {
     app->window = NULL;
     app->backgroundColor = UI_COLOR_WHITE;
     app->targetFps = 60;                       // 60 FPS by default; SetTargetFPS(app, 0) unlocks.
-    app->msaaSamples = UI_QUALITY_HIGH;        // 4x4 = 16 SPP by default.
+    app->msaaSamples = UI_QUALITY_LOW;         // analytic 1 px edge, smooth and cheap.
     app->aaMode = UI_AA_COVERAGE;              // No full-frame postfx by default.
     app->taaBlend = 0.5f;
     app->onResize = NULL;                      // User callback; opt-in via UIApp_SetResizeCallback.
@@ -1229,6 +1279,10 @@ void UIApp_SetDragRegion(float x, float y, float w, float h) {
 }
 
 // Window controls for the custom title bar's min/max/close buttons.
+void UIApp_SendEditKeyG(int scancode, int shift) {
+    UIApp_SendEditKey(g_currentApp, scancode, shift);
+}
+
 void UIApp_MinimizeG(void) {
     if (g_currentApp && g_currentApp->window && g_currentApp->window->sdlWindow)
         SDL_MinimizeWindow(g_currentApp->window->sdlWindow);
@@ -1313,6 +1367,14 @@ void UIApp_SetChildren(UIApp* app, UIChildren* children) {
     }
 
     app->window->children = children;
+
+    // The new tree's widgets carry their CREATE-time hover state (buttons NORMAL,
+    // mouse areas un-hovered), but the cursor may be parked over one of them. The
+    // child x/y aren't laid out until the next render, so defer the hover
+    // re-derivation to right after that render (UIApp_RunOneFrame). Without this,
+    // a control rebuilt under a static cursor stays un-highlighted and its click
+    // machine starts from isPressed=0 — the first click is wasted recovering state.
+    g_hoverRefreshPending = 1;
 }
 
 void UIApp_SetBackgroundColor(UIApp* app, UIColor color) {
@@ -1716,6 +1778,8 @@ void UIApp_Destroy(UIApp* app) {
         app->mainWidget = NULL;
     }
     
+    UIWidget_FlushOwned();
+
     // Tear down the system-font registry built by UISearchFonts.
     // Was previously orphaned (the function existed but no caller
     // invoked it) — under LSan/ASan that showed up as ~hundreds of
@@ -1848,25 +1912,42 @@ void UIApp_GetMemoryStats(UIApp* app, UIMemoryStats* out) {
 // the precise target counter is reached. The spin is short (under
 // 1% CPU at 60 Hz) and gives sub-millisecond pacing accuracy.
 static void PreciseDelay(Uint64 ns, Uint64 freq, Uint64 targetCounter) {
-    const Uint64 nsPerSec    = 1000000000ULL;
-    const Uint64 spinMarginNs = 500000ULL; // 0.5 ms safety margin
-
-    if (ns > spinMarginNs) {
-        SDL_DelayNS(ns - spinMarginNs);
-    }
-    // Busy-wait until we hit the exact target counter.
-    while (SDL_GetPerformanceCounter() < targetCounter) {
-        // tight loop; could yield with SDL_DelayNS(0) but on Windows
-        // that doesn't pay off and just adds overhead.
+    // Sleep the whole wait. The old 0.5 ms busy-spin ran on every frame and
+    // kept a core hot even when the window was idle. VSync owns the present
+    // cadence; a millisecond of scheduler jitter here is invisible.
+    if (ns > 0) {
+        SDL_DelayNS(ns);
     }
     (void)freq;
-    (void)nsPerSec;
+    (void)targetCounter;
+}
+
+void UIApp_SendEditKey(UIApp* app, int scancode, int shift) {
+    if (!app || !app->window || !app->window->children) return;
+    const Uint16 mod = (Uint16)(SDL_KMOD_CTRL | (shift ? SDL_KMOD_SHIFT : 0));
+    UITextField_DispatchKeyDown(app->window->children, app->window->sdlWindow,
+                                (SDL_Scancode)scancode, mod);
+    UITextArea_DispatchKeyDown(app->window->children, app->window->sdlWindow,
+                               (SDL_Scancode)scancode, mod);
 }
 
 void UIApp_RunOneFrame(UIApp* app, Uint32 dtMs) {
     if (!app || !app->window) return;
 
     UIProfile_FrameBegin();
+
+    // MOCIDA_DUMP_TREE_FRAME=N: print the widget tree (type, x/y/w/h) to stderr
+    // on frame N — for layout bugs ("panel not drawn", "wrong position").
+    {
+        static long dumpAt = -2, frameNo = 0;
+        if (dumpAt == -2) {
+            const char* v = SDL_getenv("MOCIDA_DUMP_TREE_FRAME");
+            dumpAt = v ? SDL_atoi(v) : -1;
+        }
+        if (dumpAt >= 0 && frameNo++ == dumpAt) mocida_crash_tree_dump(stderr, app);
+    }
+
+    UIWidget_FlushOwned();
 
     SDL_Event e;
     if (app->onTick) app->onTick(app->onTickUserdata);
@@ -1903,6 +1984,19 @@ void UIApp_RunOneFrame(UIApp* app, Uint32 dtMs) {
     if (app->window->visible) {
         UI_SCOPEC("render", UI_PROF_RENDER);
         UIWindow_Render(app->window);
+    }
+
+    // A structural rebuild this frame swapped the widget tree; now that the new
+    // tree has laid out (its child x/y are valid), re-derive hover state at the
+    // last known cursor position so a control parked under a static cursor
+    // re-highlights and its click machine isn't stale (see UIApp_SetChildren).
+    if (g_hoverRefreshPending) {
+        g_hoverRefreshPending = 0;
+        if (g_lastMouseValid && app->window->children) {
+            DispatchHoverMotion(app, g_lastMouseX, g_lastMouseY);
+            UICursor_Apply(PickHoverCursor(app->window->children,
+                                           g_lastMouseX, g_lastMouseY));
+        }
     }
 
     UIProfile_FrameEnd();

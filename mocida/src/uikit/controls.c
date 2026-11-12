@@ -566,17 +566,30 @@ void UIControls_DispatchMouseMotion(UIChildren* children, float x, float y) {
 
 void UIControls_DispatchMouseDown(UIChildren* children, float x, float y, int button) {
     if (!children || button != SDL_BUTTON_LEFT) return;
-    for (int i = children->count - 1; i >= 0; i--) {
+    // Recurse into containers UNCONDITIONALLY (not gated on the container's own
+    // bounds), bounds-testing only the leaf control widgets — exactly like
+    // UIButton_DispatchMouseDown and the Motion/Up control dispatchers above.
+    //
+    // Why unconditional: a container that free-layouts a child (a child with
+    // its own x:/y:, e.g. a modal's full-window dim layer at x:0,y:0) renders
+    // that child at an ABSOLUTE on-screen position that does NOT fall inside the
+    // container's own (flowed) bounds. Gating recursion on the container's bounds
+    // therefore skipped the whole subtree — so a Slider inside the Settings modal
+    // (or any free-layout overlay) never received the press. Iterate front-to-back
+    // and let the leaf hit-test (+ occlusion) decide; the first matching leaf
+    // consumes the press.
+    for (int i = 0; i < children->count; i++) {
         UIWidget* w = children->children[i];
         if (!w || !w->visible || !w->data || !w->width || !w->height) continue;
-        if (!InsideRect(x, y, w->x, w->y, *w->width, *w->height)) continue;
-        if (!UIWidget_EventOcclusionAllows(w)) continue; // hidden behind an overlay
         UIWidgetBase* base = (UIWidgetBase*)w->data;
 
-        // Containers: the click is inside this container's bounds, so the hit
-        // control (if any) is nested here — recurse and stop.
+        // Containers: descend regardless of the container's own bounds.
         UIChildren* kids = CtlContainerChildren(w);
-        if (kids) { UIControls_DispatchMouseDown(kids, x, y, button); return; }
+        if (kids) { UIControls_DispatchMouseDown(kids, x, y, button); continue; }
+
+        // Leaf controls: hit-test the widget itself, honoring z-order occlusion.
+        if (!InsideRect(x, y, w->x, w->y, *w->width, *w->height)) continue;
+        if (!UIWidget_EventOcclusionAllows(w)) continue; // hidden behind an overlay
 
         if (!strcmp(base->__widget_type, UI_WIDGET_CHECKBOX)) {
             UICheckbox* c = (UICheckbox*)base;

@@ -29,6 +29,14 @@ typedef struct {
 typedef void (*UIMouseAreaCallback)(UIMouseArea* area, UIMouseEvent ev, void* userdata);
 
 /**
+ * Fired on a drop TARGET when an internal drag (a source carrying `dragData`)
+ * is released over it. `payload` is the source's drag data; `dropData` is this
+ * target's own id. Both are borrowed for the duration of the call.
+ */
+typedef void (*UIMouseAreaDropCallback)(UIMouseArea* target, const char* payload,
+                                        const char* dropData, void* userdata);
+
+/**
  * Invisible interaction surface. Captures mouse hover, press, release
  * and drag events inside its bounds. When `draggable` is on, dragging
  * automatically updates the position of `dragTarget` (if set) AND of
@@ -85,6 +93,16 @@ struct UIMouseArea {
     UIMouseAreaCallback onDragStart;   /**< Fires once when a drag is initiated. */
     UIMouseAreaCallback onDrag;        /**< Fires repeatedly while dragging. */
     UIMouseAreaCallback onDragEnd;     /**< Fires once when the drag completes. */
+
+    /* Internal drag-and-drop. A source carries `dragData` (the payload): while
+     * dragging it does NOT move its own widget (unlike plain `draggable`) — it
+     * just drives the global drag. A target carries `dropData` (its id) + an
+     * `onDrop` callback fired when a drag is released over its bounds. */
+    char* dragData;                    /**< Non-NULL => this area is a drag source carrying this payload. */
+    char* dropData;                    /**< Non-NULL => this area is a drop target with this id. */
+    UIMouseAreaDropCallback onDrop;    /**< Fires on this target when a source is dropped over it. */
+    void* onDropUd;                    /**< Userdata for onDrop. */
+
     void* userdata;                    /**< Legacy shared userdata (last setter wins). */
     /* Per-callback userdata — each setter stores its own, so multiple callbacks
      * with different closures (e.g. onMouseDown + onDrag) work independently. */
@@ -132,6 +150,13 @@ UIMouseArea* UIMouseArea_OnDragStart  (UIMouseArea* area, UIMouseAreaCallback cb
 UIMouseArea* UIMouseArea_OnDrag       (UIMouseArea* area, UIMouseAreaCallback cb, void* userdata);
 UIMouseArea* UIMouseArea_OnDragEnd    (UIMouseArea* area, UIMouseAreaCallback cb, void* userdata);
 
+/* Internal drag-and-drop configuration. `SetDragData`/`SetDropData` copy the
+ * string (pass NULL to clear). `OnDrop` fires on a target when a source is
+ * released over it. */
+UIMouseArea* UIMouseArea_SetDragData(UIMouseArea* area, const char* payload);
+UIMouseArea* UIMouseArea_SetDropData(UIMouseArea* area, const char* dropData);
+UIMouseArea* UIMouseArea_OnDrop     (UIMouseArea* area, UIMouseAreaDropCallback cb, void* userdata);
+
 void UIMouseArea_Destroy(UIMouseArea* area);
 
 // ---------------------------------------------------------------------
@@ -140,5 +165,14 @@ void UIMouseArea_Destroy(UIMouseArea* area);
 void UIMouseArea_DispatchMouseMotion(UIChildren* children, float x, float y);
 void UIMouseArea_DispatchMouseDown  (UIChildren* children, float x, float y, int button);
 void UIMouseArea_DispatchMouseUp    (UIChildren* children, float x, float y, int button);
+
+/* On mouse-up: if an internal drag is active, find the topmost drop target whose
+ * bounds contain (x,y) and fire its onDrop with the active payload. Returns 1 if
+ * a target handled it. Always call UIMouseArea_ClearDrag() afterwards. */
+int  UIMouseArea_DispatchDrop(UIChildren* children, float x, float y);
+/* True while an internal drag (a `dragData` source) is in progress. */
+int  UIMouseArea_DragActive(void);
+/* Clears the active internal drag (frees the captured payload). */
+void UIMouseArea_ClearDrag(void);
 
 #endif // UIKIT_MOUSE_AREA_H
