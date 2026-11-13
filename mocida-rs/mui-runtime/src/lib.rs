@@ -5525,12 +5525,13 @@ fn key_eval_str(e: &Expr, kc: &KeyEvalCtx) -> String {
             if let ExprKind::Ident(b) = &base.kind {
                 if b == kc.param {
                     // `event.key` + the modifier flags (`event.ctrl`/`.shift`/
-                    // `.alt`) as "1"/"0" so a handler can gate on Ctrl/Shift.
+                    // `.alt`/`.cmd`) as "1"/"0" so a handler can gate on them.
                     match field.as_str() {
                         "key" => return kc.key.to_string(),
                         "ctrl" => return if kc.mods & 0x00C0 != 0 { "1" } else { "0" }.into(),
                         "shift" => return if kc.mods & 0x0003 != 0 { "1" } else { "0" }.into(),
                         "alt" => return if kc.mods & 0x0300 != 0 { "1" } else { "0" }.into(),
+                        "cmd" => return if kc.mods & 0x0C00 != 0 { "1" } else { "0" }.into(),
                         _ => {}
                     }
                 }
