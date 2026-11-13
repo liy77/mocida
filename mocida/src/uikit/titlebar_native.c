@@ -34,6 +34,11 @@
 // UIWindow_IsMacOS — compile-time platform query for the MUI/host (kept here,
 // for every platform, so there's a single definition site).
 // --------------------------------------------------------------------------
+#if !defined(__APPLE__)
+// Only macOS has native traffic lights to center (titlebar_cocoa.mm).
+void UIWindow_SetTitlebarHeight(int height) { (void)height; }
+#endif
+
 int UIWindow_IsMacOS(void) {
 #if defined(__APPLE__)
     return 1;

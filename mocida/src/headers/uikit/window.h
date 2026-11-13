@@ -220,6 +220,21 @@ void UIWindow_ApplyNativeDecorations(SDL_Window* window);
 #endif
 
 /**
+ * Height in points of the app's painted top bar on a custom-titlebar window.
+ * On macOS the native traffic lights are centered vertically in a bar that
+ * tall (and kept there through resizes and full screen); 0, the default,
+ * leaves them where AppKit puts them. No-op elsewhere. Call before the window
+ * is created.
+ */
+#ifdef __cplusplus
+extern "C" {
+#endif
+void UIWindow_SetTitlebarHeight(int height);
+#ifdef __cplusplus
+}
+#endif
+
+/**
  * 1 when running on macOS, 0 elsewhere. The MUI/host uses this to keep its own
  * min/max/close window-control buttons Windows/Linux-only (macOS keeps its
  * native traffic-lights) and to offset the top bar for the traffic-lights.

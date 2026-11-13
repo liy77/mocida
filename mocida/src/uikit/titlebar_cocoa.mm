@@ -36,6 +36,54 @@ static NSWindow* titlebar_nswindow(SDL_Window* w) {
         props, SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, NULL);
 }
 
+// Height of the app's painted top bar (UIWindow_SetTitlebarHeight); 0 keeps
+// the traffic lights where AppKit puts them (centered in its 28 pt bar).
+static int g_titlebarHeight = 0;
+
+// Centers the traffic lights in a `g_titlebarHeight` bar: the titlebar
+// container grows to that height and each button is centered in it. AppKit
+// lays the buttons out again on resize, key changes and full screen, so this
+// runs after each of those too.
+static void place_traffic_lights(NSWindow* win) {
+    if (g_titlebarHeight <= 0 || (win.styleMask & NSWindowStyleMaskFullScreen)) return;
+    NSButton* close = [win standardWindowButton:NSWindowCloseButton];
+    NSView* container = close.superview.superview;
+    if (!close || !container) return;
+    CGFloat height = (CGFloat)g_titlebarHeight;
+    NSRect frame = container.frame;
+    frame.size.height = height;
+    frame.origin.y = NSHeight(win.frame) - height;
+    [container setFrame:frame];
+    NSWindowButton kinds[] = { NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton };
+    for (NSWindowButton kind : kinds) {
+        NSButton* b = [win standardWindowButton:kind];
+        if (!b) continue;
+        NSRect bf = b.frame;
+        bf.origin.y = round((NSHeight(b.superview.frame) - NSHeight(bf)) / 2.0);
+        [b setFrameOrigin:bf.origin];
+    }
+}
+
+static void watch_traffic_lights(NSWindow* win) {
+    NSNotificationName names[] = {
+        NSWindowDidResizeNotification, NSWindowDidEndLiveResizeNotification,
+        NSWindowDidBecomeKeyNotification, NSWindowDidResignKeyNotification,
+        NSWindowDidExitFullScreenNotification, NSWindowDidChangeScreenNotification,
+    };
+    // Unretained (this file is MRC): only `win` posts these, so the block
+    // never runs after the window is gone.
+    void* raw = (void*)win;
+    for (NSNotificationName name : names) {
+        [[NSNotificationCenter defaultCenter] addObserverForName:name object:win queue:nil
+            usingBlock:^(NSNotification*) { place_traffic_lights((NSWindow*)raw); }];
+    }
+    place_traffic_lights(win);
+}
+
+extern "C" void UIWindow_SetTitlebarHeight(int height) {
+    g_titlebarHeight = height > 0 ? height : 0;
+}
+
 extern "C" void UIWindow_ApplyNativeDecorations(SDL_Window* window) {
     NSWindow* win = titlebar_nswindow(window);
     if (!win) return;
@@ -69,6 +117,7 @@ extern "C" void UIWindow_ApplyNativeDecorations(SDL_Window* window) {
         [[win standardWindowButton:NSWindowCloseButton]       setHidden:NO];
         [[win standardWindowButton:NSWindowMiniaturizeButton] setHidden:NO];
         [[win standardWindowButton:NSWindowZoomButton]        setHidden:NO];
+        watch_traffic_lights(win);
     };
 
     if ([NSThread isMainThread]) {

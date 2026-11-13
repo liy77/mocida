@@ -529,6 +529,13 @@ pub fn request_custom_titlebar(on: bool) {
     unsafe { sys::UIWindow_RequestCustomTitlebar(on as c_int) };
 }
 
+/// Height of the app's painted top bar: on macOS the native traffic lights
+/// are centered vertically in it. Call before [`App::new`]; 0 leaves them
+/// where AppKit puts them.
+pub fn set_titlebar_height(height: i32) {
+    unsafe { sys::UIWindow_SetTitlebarHeight(height as c_int) };
+}
+
 /// Requests a transparent (per-pixel alpha) window. Must be called **before**
 /// [`App::new`] — it adds the SDL transparent-window flag at creation time so an
 /// OS system backdrop (Mica/Acrylic, via [`Window::set_backdrop`]) can composite
