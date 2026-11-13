@@ -312,6 +312,12 @@ impl Reactive {
         m
     }
 
+    /// Ask the host to rebuild the tree on its next check (e.g. once a panel
+    /// resize settles, so `justify:` layouts are recomputed for the new size).
+    pub fn mark_dirty(&self) {
+        self.dirty.set(true);
+    }
+
     /// Take + clear the structural-dirty flag (a structural signal changed since
     /// the last check, so the host should rebuild the tree).
     pub fn take_dirty(&self) -> bool {
@@ -2580,7 +2586,7 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
     let wrap_mode = style::enum_member(el, "wrap").and_then(|s| wrap_from(&s));
     let w = dim_prop(ctx, el, "width").unwrap_or(natural_w);
     let h = dim_prop(ctx, el, "height").unwrap_or_else(|| {
-        if wrap_mode.is_some() && w > 0.0 && natural_w > w {
+        if matches!(wrap_mode, Some(WrapMode::Word | WrapMode::Char)) && w > 0.0 && natural_w > w {
             // Wrapping: each explicit line may wrap into several visual lines.
             let wrapped = (natural_w / w).ceil().max(1.0);
             line_h * (explicit_lines as f32) * wrapped
@@ -3227,6 +3233,7 @@ fn build_textarea(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
                     Some(WrapMode::Word) => 1,
                     Some(WrapMode::Char) => 2,
                     Some(WrapMode::Fit) => 3,
+                    Some(WrapMode::Ellipsis) => 4,
                     None => return,
                 };
                 unsafe {
@@ -4947,6 +4954,7 @@ fn wrap_from(name: &str) -> Option<WrapMode> {
         "word" | "true" => Some(WrapMode::Word),
         "char" | "character" => Some(WrapMode::Char),
         "fit" | "shrink" => Some(WrapMode::Fit),
+        "ellipsis" | "truncate" => Some(WrapMode::Ellipsis),
         _ => None,
     }
 }

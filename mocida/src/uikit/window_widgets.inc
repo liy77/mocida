@@ -589,7 +589,7 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
         // top. FIT does not compose with selection (scaling would skew
         // mouse picking) and is treated as NONE here.
         if (twid->selectable) {
-            UIWrapMode selMode = (effMode == UI_WRAP_FIT) ? UI_WRAP_NONE : effMode;
+            UIWrapMode selMode = (effMode == UI_WRAP_FIT || effMode == UI_WRAP_ELLIPSIS) ? UI_WRAP_NONE : effMode;
             int selWrapW = (selMode == UI_WRAP_NONE) ? -1 : effWrapW;
             if (selWrapW < 1) selWrapW = -1;
 
@@ -863,8 +863,14 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
         // Rebuild the cached texture when the width that drives wrap
         // changes (e.g. parent resized and we're following bounds). FIT
         // keeps the natural-size texture - scaling happens at draw time.
+        // ELLIPSIS cuts the text for one width: recut when it changes.
+        if (twid->__SDL_textTexture && effMode == UI_WRAP_ELLIPSIS &&
+            twid->__ellipsisW != effWrapW) {
+            SDL_DestroyTexture(twid->__SDL_textTexture);
+            twid->__SDL_textTexture = NULL;
+        }
         if (twid->__SDL_textTexture && effMode != UI_WRAP_NONE &&
-            effMode != UI_WRAP_FIT && effWrapW > 0) {
+            effMode != UI_WRAP_FIT && effMode != UI_WRAP_ELLIPSIS && effWrapW > 0) {
             float curW = 0.0f, curH = 0.0f;
             SDL_GetTextureSize(twid->__SDL_textTexture, &curW, &curH);
             // Texture is rasterized at g_textSS× (see g_textSS); compare in
@@ -904,6 +910,29 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
                     // step below shrinks the dest rect to fit effWrapW.
                     surf = TTF_RenderText_Blended(font, twid->text,
                                                   twid->textLength, sc);
+                } else if (effMode == UI_WRAP_ELLIPSIS && effWrapW > 0) {
+                    static const char kDots[] = "\xE2\x80\xA6";
+                    int fullW = 0, fullH = 0;
+                    TTF_GetStringSize(font, twid->text, (size_t)twid->textLength, &fullW, &fullH);
+                    if (fullW <= effWrapWss) {
+                        surf = TTF_RenderText_Blended(font, twid->text,
+                                                      twid->textLength, sc);
+                    } else {
+                        int dotsW = 0, dotsH = 0, fitW = 0;
+                        size_t fitLen = 0;
+                        TTF_GetStringSize(font, kDots, 3, &dotsW, &dotsH);
+                        TTF_MeasureString(font, twid->text, (size_t)twid->textLength,
+                                          effWrapWss - dotsW, &fitW, &fitLen);
+                        while (fitLen > 0 && twid->text[fitLen - 1] == ' ') fitLen--;
+                        char* cut = (char*)malloc(fitLen + 4);
+                        if (cut) {
+                            memcpy(cut, twid->text, fitLen);
+                            memcpy(cut + fitLen, kDots, 4);
+                            surf = TTF_RenderText_Blended(font, cut, fitLen + 3, sc);
+                            free(cut);
+                        }
+                    }
+                    twid->__ellipsisW = effWrapW;
                 } else if (effMode == UI_WRAP_CHAR && effWrapW > 0) {
                     // SDL_ttf doesn't ship a char-wrap mode; pre-insert
                     // '\n' between characters that would overflow and let

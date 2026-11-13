@@ -75,7 +75,13 @@ typedef enum UIWrapMode {
      * available width. If it already fits, it is rendered at the
      * natural size. Supported by UIText.
      */
-    UI_WRAP_FIT  = 3
+    UI_WRAP_FIT  = 3,
+    /**
+     * One line, cut with "…" where it stops fitting the available width
+     * (file names in a list, tab titles). Follows width changes live.
+     * Supported by UIText.
+     */
+    UI_WRAP_ELLIPSIS = 4
 } UIWrapMode;
 
 /**
@@ -196,6 +202,7 @@ typedef struct UIText {
     int           __cachedTextLen;  /**< Internal: textLength the cache was built for. */
     int           __cachedWrapMode; /**< Internal: wrapMode the cache was built for. */
     int           __cachedWrapW;    /**< Internal: wrapW the cache was built for. */
+    int           __ellipsisW;      /**< Internal: width the ellipsis texture was cut for. */
 } UIText;
 
 /**

@@ -103,6 +103,8 @@ pub enum WrapMode {
     Char = 2,
     /// Shrink-to-fit on a single line.
     Fit = 3,
+    /// One line, cut with "…" where it stops fitting the width.
+    Ellipsis = 4,
 }
 
 /// Styled text widget.
