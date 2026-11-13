@@ -3729,7 +3729,9 @@ fn build_video(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
 ///   leadingPad: 0       extra x offset of the first tab (e.g. a leading ▶ Game tab);
 ///                       the canvas also adds `overlap` so the first tab's left ear isn't
 ///                       clipped by the canvas edge.
-///   activeColor / inactiveColor / barColor / dividerColor: hex colors
+///   activeColor / barColor / dividerColor: hex colors
+///   inactiveColor / inactiveHoverColor: inactive tabs get a rounded body in
+///                       these colors (without inactiveColor: dividers only)
 fn build_canvas(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
     let w = dim_prop(ctx, el, "width").unwrap_or(400.0);
     let h = dim_prop(ctx, el, "height").unwrap_or(35.0);
@@ -3743,15 +3745,16 @@ fn build_canvas(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
     let active_c = style::color_prop(el, "activeColor")
         .map(to_color)
         .unwrap_or_else(|| Color::rgb(0x1e, 0x1f, 0x22));
-    let inactive_c = style::color_prop(el, "inactiveColor")
-        .map(to_color)
-        .unwrap_or_else(|| Color::rgb(0x2b, 0x2d, 0x30));
     let bar_c = style::color_prop(el, "barColor")
         .map(to_color)
         .unwrap_or_else(|| Color::rgb(0x2b, 0x2d, 0x30));
     let divider_c = style::color_prop(el, "dividerColor")
         .map(to_color)
         .unwrap_or_else(|| Color::rgb(0x3a, 0x3c, 0x41));
+    let inactive_body = style::color_prop(el, "inactiveColor").map(to_color);
+    let inactive_hover = style::color_prop(el, "inactiveHoverColor")
+        .map(to_color)
+        .unwrap_or_else(|| Color::rgb(0x3a, 0x3a, 0x3e));
     let accent_c = style::color_prop(el, "accentColor")
         .map(to_color)
         .unwrap_or_else(|| Color::rgb(0x35, 0x74, 0xf0));
@@ -3866,21 +3869,46 @@ fn build_canvas(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
             d.bezier_to(x1, base_y - f + f * K, x1 + f - f * K, base_y, x1 + f, base_y);
             d.close_path();
         };
-        let _ = inactive_c;
-
-        // Pass 1: short dividers between neighbouring inactive tabs (none next to
-        // the active tab, whose ears already separate it).
-        d.set_fill(divider_c);
+        // Pass 1: inactive tabs — a soft rounded body inset from the slot, a
+        // shade lighter under the pointer. Without `inactiveColor` they stay
+        // bare labels split by short dividers.
+        let (mx, my) = d.mouse_pos();
+        let pointer_in = d.is_mouse_inside();
         let div_h = (tab_h * 0.5).round();
-        for i in 1..n {
-            if active_idx == Some(i - 1) || active_idx == Some(i) {
+        for i in 0..n {
+            if active_idx == Some(i) {
                 continue;
             }
             let x = leading + (i as f32) * tab_w - scroll_x;
-            if x < -2.0 || x > cw {
+            if x + tab_w < -2.0 || x > cw + 2.0 {
                 continue;
             }
-            d.fill_rect(x - 0.5, top_y + (tab_h - div_h) * 0.5, 1.0, div_h);
+            match inactive_body {
+                Some(body) => {
+                    let hover = pointer_in && mx >= x && mx < x + tab_w && my >= top_y;
+                    let (bx, by, bw, bh, r) = (x + 3.0, top_y + 2.0, tab_w - 6.0, tab_h - 6.0, 7.0_f32);
+                    d.set_fill(if hover { inactive_hover } else { body });
+                    d.begin_path();
+                    d.move_to(bx + r, by);
+                    d.line_to(bx + bw - r, by);
+                    d.bezier_to(bx + bw - r + r * K, by, bx + bw, by + r - r * K, bx + bw, by + r);
+                    d.line_to(bx + bw, by + bh - r);
+                    d.bezier_to(bx + bw, by + bh - r + r * K, bx + bw - r + r * K, by + bh, bx + bw - r, by + bh);
+                    d.line_to(bx + r, by + bh);
+                    d.bezier_to(bx + r - r * K, by + bh, bx, by + bh - r + r * K, bx, by + bh - r);
+                    d.line_to(bx, by + r);
+                    d.bezier_to(bx, by + r - r * K, bx + r - r * K, by, bx + r, by);
+                    d.close_path();
+                    d.fill();
+                }
+                None => {
+                    if i == 0 || active_idx == Some(i - 1) {
+                        continue;
+                    }
+                    d.set_fill(divider_c);
+                    d.fill_rect(x - 0.5, top_y + (tab_h - div_h) * 0.5, 1.0, div_h);
+                }
+            }
         }
         // Pass 2: the active tab — the page surface itself (no accent bar).
         if let Some(ai) = active_idx {
