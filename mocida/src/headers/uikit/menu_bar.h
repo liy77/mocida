@@ -115,6 +115,12 @@ void ui_menu_bar_set_item_callback(ui_menu_bar_item_callback_t cb, void* user);
 // menu item (UI test scripts drive the native menu this way).
 void ui_menu_bar_trigger(uint32_t id);
 
+// Visit every leaf item of the installed root menu (submenus included) with
+// its shortcut string (may be NULL) and id. Used by UI automation to resolve
+// a key chord to the item the OS menu would fire for it.
+void ui_menu_bar_foreach_item(void (*fn)(const char* shortcut, uint32_t id, void* user),
+                              void* user);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Drive a running mocida app over its MOCIDA_CONTROL socket.
+
+    mocida-ctl --launch -- ./my-app args...     start the app hidden, in the background
+    mocida-ctl 'click "Run"' 'waitfor ~"running"' 'shot /tmp/run.png'
+    mocida-ctl tree                              list visible labeled widgets
+    echo 'find tip:~"Assets"' | mocida-ctl       commands from stdin
+    mocida-ctl quit
+
+Commands and selectors are documented in src/uikit/app_automation.inc.
+The socket path comes from -s, else $MOCIDA_CONTROL, else /tmp/mocida.sock.
+Exits 1 if any reply reports FAIL or error.
+"""
+import argparse
+import os
+import socket
+import subprocess
+import sys
+import time
+
+
+def connect(path, timeout):
+    deadline = time.time() + timeout
+    while True:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            s.connect(path)
+            return s
+        except OSError:
+            s.close()
+            if time.time() >= deadline:
+                raise
+            time.sleep(0.1)
+
+
+def launch(path, argv, log):
+    env = dict(os.environ)
+    env["MOCIDA_CONTROL"] = path
+    env.setdefault("MOCIDA_WINDOW_HIDDEN", "1")
+    env.pop("MOCIDA_SCRIPT", None)
+    if os.path.exists(path):
+        os.unlink(path)
+    with open(log, "ab") as out:
+        proc = subprocess.Popen(argv, env=env, stdout=out, stderr=out,
+                                stdin=subprocess.DEVNULL, start_new_session=True)
+    s = connect(path, 15)
+    s.close()
+    print(f"launched pid {proc.pid} (hidden), control socket {path}, log {log}")
+
+
+def run(path, commands, timeout):
+    s = connect(path, timeout)
+    f = s.makefile("rwb", buffering=0)
+    failed = False
+    for cmd in commands:
+        cmd = cmd.strip()
+        if not cmd:
+            continue
+        f.write(cmd.encode() + b"\n")
+        print(f"> {cmd}")
+        while True:
+            line = f.readline()
+            if not line:
+                return failed
+            text = line.decode(errors="replace").rstrip("\n")
+            if text == ".":
+                break
+            if text.startswith(("FAIL", "error")):
+                failed = True
+            print(f"  {text}")
+    s.close()
+    return failed
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("-s", "--socket",
+                    default=os.environ.get("MOCIDA_CONTROL", "/tmp/mocida.sock"))
+    ap.add_argument("--timeout", type=float, default=5.0,
+                    help="seconds to wait for the socket")
+    ap.add_argument("--launch", action="store_true",
+                    help="start the app given after -- hidden, then return")
+    ap.add_argument("--log", default="/tmp/mocida-ctl.log",
+                    help="app stdout/stderr when launching")
+    ap.add_argument("args", nargs="*")
+    a = ap.parse_args()
+
+    if a.launch:
+        if not a.args:
+            ap.error("--launch needs the app command after --")
+        launch(a.socket, a.args, a.log)
+        return 0
+
+    commands = a.args or [l for l in sys.stdin.read().splitlines()]
+    return 1 if run(a.socket, commands, a.timeout) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

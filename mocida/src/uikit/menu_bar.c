@@ -221,3 +221,19 @@ void ui_menu_bar_set_item_callback(ui_menu_bar_item_callback_t cb, void* user) {
 void ui_menu_bar_trigger(uint32_t id) {
     if (g_item_cb) g_item_cb(id, g_item_user);
 }
+
+static void ForeachItem(UIMenuBar* m,
+                        void (*fn)(const char* shortcut, uint32_t id, void* user),
+                        void* user) {
+    if (!m) return;
+    for (int i = 0; i < m->n_items; i++) {
+        UIMenuBarItem* it = m->items[i];
+        if (it && !it->is_separator) fn(it->shortcut, it->id, user);
+    }
+    for (int i = 0; i < m->n_subs; i++) ForeachItem(m->subs[i], fn, user);
+}
+
+void ui_menu_bar_foreach_item(void (*fn)(const char* shortcut, uint32_t id, void* user),
+                              void* user) {
+    if (fn) ForeachItem(g_root, fn, user);
+}

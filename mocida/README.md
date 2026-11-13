@@ -86,6 +86,20 @@ Once enabled: **F9** widget bounds · **F10** FPS/timing HUD · **F8** depth hea
 
 Crashes (segfault, abort, divide-by-zero, …) write `mocida_crash_YYYYMMDD_HHMMSS.log` with a symbolicated backtrace + recent log lines + widget tree snapshot — wherever the process was running.
 
+### UI automation
+
+Any mocida app can be driven by selectors instead of coordinates, through the same input path real events take. Nothing touches the OS cursor, the keyboard focus or the window order. With `MOCIDA_WINDOW_HIDDEN=1`, the app runs in the background with no Dock icon:
+
+```sh
+tools/mocida-ctl --launch -- ./my-app          # hidden, with MOCIDA_CONTROL=/tmp/mocida.sock
+tools/mocida-ctl tree                          # visible labeled widgets + bounds
+tools/mocida-ctl 'click "Create New Project…"' 'click tip:"Add object"' \
+                 'waitfor ~"1 objects"' 'key cmd+s' 'shot /tmp/after.png'
+tools/mocida-ctl quit
+```
+
+Selectors match text, button labels, placeholders, tooltips and ids: `"Run"` (exact), `~"Assets"` (contains), `tip:` / `text:` / `id:` / `type:` / `img:`, and `#2` to pick the 2nd match. Commands include `click`, `dclick`, `rclick`, `hover`, `scroll`, `key`, `text`, `find`, `tree`, `expect`, `expect-not`, `waitfor`, `waitfor-not`, `shot`, `menu` and `quit`. On macOS, `key cmd+…` goes through the menu bar like AppKit does. `MOCIDA_SCRIPT=file` replays the same commands from a file. The full reference is in [`src/uikit/app_automation.inc`](src/uikit/app_automation.inc).
+
 ---
 
 ## Prerequisites
