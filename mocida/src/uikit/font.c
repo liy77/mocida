@@ -459,7 +459,15 @@ char* UIGetFont(const char* family_name) {
     const char* hit = LookupCached(family_name);
     if (hit) return (char*)hit;
 
-    const char* path = ResolveFamily(family_name);
+    // A font file's path (what UIGetDefaultFontPath and earlier lookups hand
+    // out) is used as is.
+    const char* path = NULL;
+    if (strchr(family_name, '/') || strchr(family_name, '\\')) {
+        SDL_PathInfo info;
+        // Kept for the rest of the run, like the other cached lookups.
+        if (SDL_GetPathInfo(family_name, &info) && info.type == SDL_PATHTYPE_FILE) path = strdup(family_name);
+    }
+    if (!path) path = ResolveFamily(family_name);
     if (!path) {
         const char* alias = FamilyAlias(family_name);
         if (alias) path = ResolveFamily(alias);
