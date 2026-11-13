@@ -22,7 +22,7 @@ docs-only = []
 sdl3-headers = []
 
 [build-dependencies]
-bindgen = "0.70"
+bindgen = "0.73"
 
 [lib]
 name = "mocida_sys"

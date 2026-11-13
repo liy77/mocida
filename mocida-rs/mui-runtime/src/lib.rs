@@ -1197,15 +1197,6 @@ fn build_node(ctx: &mut Ctx, node: &Node, layout: &mut Layout) -> Result<Option<
     }
 }
 
-fn build_first(ctx: &mut Ctx, nodes: &[Node], layout: &mut Layout) -> Result<Option<Widget>> {
-    for n in nodes {
-        if let Some(w) = build_node(ctx, n, layout)? {
-            return Ok(Some(w));
-        }
-    }
-    Ok(None)
-}
-
 /// Build a group of sibling nodes (an `if`/`else` branch or a `for`-body) into a
 /// SINGLE widget. One renderable child is returned as-is; several are wrapped in a
 /// content-sized Stack that flows the same way as the enclosing container. This is
