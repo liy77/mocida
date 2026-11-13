@@ -57,6 +57,10 @@ typedef struct {
     int freeLayout;            /**< 1 = don't flow items; render each at its own
                                 *   explicit x/y (absolute). For freely-positioned
                                 *   content like game objects on a canvas. */
+    float __flowExtent;        /**< Main-axis extent of the visible items plus
+                                *   padding, recorded by each render when hidden
+                                *   items freed room (0 = the box size applies).
+                                *   UIScroll sizes its content from it. */
 } UIStack;
 
 UIStack* UIStack_Create(UIStackOrientation orientation);

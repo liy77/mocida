@@ -6,6 +6,21 @@
 // window_render.inc. Relies on file-level state + the Draw* primitives from
 // window_draw.inc.
 
+// Main-axis size an item really occupies: a flowing Stack whose children are
+// partly hidden reports its rendered extent; anything else its box.
+static float StackFlowSize(const UIWidget* item, int horizontal) {
+    const float box = horizontal ? (item->width ? *item->width : 0.0f)
+                                 : (item->height ? *item->height : 0.0f);
+    const UIWidgetBase* b = (const UIWidgetBase*)item->data;
+    if (b && b->__widget_type && !strcmp(b->__widget_type, UI_WIDGET_STACK)) {
+        const UIStack* st = (const UIStack*)b;
+        const int sameAxis = (st->orientation == UI_STACK_HORIZONTAL) == (horizontal != 0);
+        if (!st->freeLayout && sameAxis && st->__flowExtent > 0.0f && st->__flowExtent < box)
+            return st->__flowExtent;
+    }
+    return box;
+}
+
 static void RenderWidget_Stack(UIWindow* window, UIWidget* el,
                                 UIWidgetBase* base, float op) {
 
@@ -62,9 +77,12 @@ static void RenderWidget_Stack(UIWindow* window, UIWidget* el,
         const float gap = (s->justify == UI_STACK_JUSTIFY_BETWEEN) ? betweenGap : s->spacing;
         float cursorX = el->x + s->paddingLeft + ((s->orientation == UI_STACK_HORIZONTAL) ? mainStart : 0.0f);
         float cursorY = el->y + s->paddingTop  + ((s->orientation == UI_STACK_HORIZONTAL) ? 0.0f : mainStart);
+        float flowEnd = 0.0f;   // furthest visible content on the main axis
+        int   shrunk  = 0;      // a hidden item (here or deeper) freed room
         for (int i = 0; i < s->items->count; i++) {
             UIWidget* item = s->items->children[i];
-            if (!item || !item->visible) continue;
+            if (!item) continue;
+            if (!item->visible) { shrunk = 1; continue; }
             // Free layout: don't flow — render each item at its own explicit
             // x/y (e.g. game objects on a canvas). No cursor advance.
             if (s->freeLayout) {
@@ -88,6 +106,9 @@ static void RenderWidget_Stack(UIWindow* window, UIWidget* el,
                 item->x = cursorX;
                 item->y = cursorY + off + mT;  // cross align + leading cross margin
                 RenderSingleWidget(window, item);
+                const float fw = StackFlowSize(item, 1);
+                if (fw < iw) shrunk = 1;
+                flowEnd = SDL_max(flowEnd, item->x - el->x + fw + mR);
                 cursorX += iw + mR + gap;      // trailing main-axis margin + gap
             } else {
                 const float ew = iw + mL + mR;
@@ -99,9 +120,17 @@ static void RenderWidget_Stack(UIWindow* window, UIWidget* el,
                 item->x = cursorX + off + mL;
                 item->y = cursorY;
                 RenderSingleWidget(window, item);
+                const float fh = StackFlowSize(item, 0);
+                if (fh < ih) shrunk = 1;
+                flowEnd = SDL_max(flowEnd, item->y - el->y + fh + mB);
                 cursorY += ih + mB + gap;
             }
         }
+        // 0 = "use the box": only report a smaller extent when hidden items
+        // actually freed room, so fixed-size rows keep their full size.
+        s->__flowExtent = (!s->freeLayout && shrunk)
+            ? flowEnd + ((s->orientation == UI_STACK_HORIZONTAL) ? s->paddingRight : s->paddingBottom)
+            : 0.0f;
 }
 
 // Glass: a styled container. Where the OS provides a native region backdrop

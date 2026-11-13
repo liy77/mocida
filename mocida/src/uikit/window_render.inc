@@ -130,6 +130,21 @@ static void RenderScroll(UIWindow* window, UIWidget* el, UIScroll* s) {
         s->content->y = viewport.y - s->scrollY;
         EnsureWidgetSize(s->content, s->contentW, s->contentH);
         RenderSingleWidget(window, s->content);
+        // A flowing Stack reports the room its *visible* items took; items
+        // hidden via `visible` take none, so track that instead of the
+        // build-time size (no scrollbar / overscroll for hidden content).
+        UIWidgetBase* cb = (UIWidgetBase*)s->content->data;
+        if (cb && !strcmp(cb->__widget_type, UI_WIDGET_STACK)) {
+            const UIStack* st = (const UIStack*)cb;
+            const int horiz = st->orientation == UI_STACK_HORIZONTAL;
+            const float box = horiz ? (s->content->width ? *s->content->width : 0.0f)
+                                    : (s->content->height ? *s->content->height : 0.0f);
+            const float extent = st->__flowExtent > 0.0f ? st->__flowExtent : box;
+            if (!st->freeLayout && extent > 0.0f) {
+                if (horiz) s->contentW = extent;
+                else       s->contentH = extent;
+            }
+        }
     }
 
     FlushRenderBatch(window->sdlRenderer);
