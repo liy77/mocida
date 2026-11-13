@@ -134,8 +134,13 @@ fn main() {
             // and the consuming binary fails to link SDL_GetPerformanceCounter.
             let sdl3_direct = lib_dir.join("SDL3.lib");
             let sdl3_nested = sdl_subdir.join("SDL3.lib");
-            println!("cargo:rerun-if-changed={}", sdl3_direct.display());
-            println!("cargo:rerun-if-changed={}", sdl3_nested.display());
+            // Only Windows has SDL3.lib; cargo treats a missing rerun-if-changed
+            // path as always changed, which reran this script (and rebuilt every
+            // dependent crate) on each build elsewhere.
+            if target.contains("windows") {
+                println!("cargo:rerun-if-changed={}", sdl3_direct.display());
+                println!("cargo:rerun-if-changed={}", sdl3_nested.display());
+            }
             if sdl3_nested.exists() {
                 println!("cargo:rustc-link-search=native={}", sdl_subdir.display());
             }
