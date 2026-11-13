@@ -14,7 +14,21 @@ struct UISound {
     Uint32           pcmLen;  /**< Length of `pcm` in bytes. */
     SDL_AudioSpec    spec;    /**< Audio format of the loaded sample. */
     SDL_AudioStream* stream;  /**< Stream bound to the default playback device. */
+    unsigned         epoch;   /**< UIAudio__Epoch() when `stream` was opened. */
 };
+
+// SDL_Quit frees every audio stream, and SDL_DestroyAudioStream does not
+// validate its argument, so anything outliving the app (a sound captured
+// by a callback, a Rust handle dropped after App) must not touch its
+// stream again. UIApp_Destroy bumps the epoch right before SDL_Quit.
+static unsigned g_audioEpoch = 1;
+
+unsigned UIAudio__Epoch(void) { return g_audioEpoch; }
+void UIAudio__Invalidate(void) { g_audioEpoch++; }
+
+static int StreamAlive(SDL_AudioStream* stream, unsigned epoch) {
+    return stream && epoch == g_audioEpoch && (SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO);
+}
 
 // Path candidates mirror UIAsset_LoadSurface: cwd, exe dir, exe dir/..
 // Audio uses SDL_LoadWAV directly so we can't reuse the helper - the
@@ -78,11 +92,12 @@ UISound* UISound_LoadWav(const char* path) {
         free(s);
         return NULL;
     }
+    s->epoch = g_audioEpoch;
     return s;
 }
 
 void UISound_Play(UISound* s) {
-    if (!s || !s->stream || !s->pcm) return;
+    if (!s || !StreamAlive(s->stream, s->epoch) || !s->pcm) return;
     // Clear anything still queued so a rapid re-trigger restarts cleanly.
     SDL_ClearAudioStream(s->stream);
     SDL_PutAudioStreamData(s->stream, s->pcm, (int)s->pcmLen);
@@ -90,25 +105,25 @@ void UISound_Play(UISound* s) {
 }
 
 void UISound_SetGain(UISound* s, float gain) {
-    if (!s || !s->stream) return;
+    if (!s || !StreamAlive(s->stream, s->epoch)) return;
     if (gain < 0.0f) gain = 0.0f;
     SDL_SetAudioStreamGain(s->stream, gain);
 }
 
 void UISound_Stop(UISound* s) {
-    if (!s || !s->stream) return;
+    if (!s || !StreamAlive(s->stream, s->epoch)) return;
     SDL_ClearAudioStream(s->stream);
     SDL_PauseAudioStreamDevice(s->stream);
 }
 
 int UISound_IsPlaying(UISound* s) {
-    if (!s || !s->stream) return 0;
+    if (!s || !StreamAlive(s->stream, s->epoch)) return 0;
     return SDL_GetAudioStreamAvailable(s->stream) > 0 ? 1 : 0;
 }
 
 void UISound_Destroy(UISound* s) {
     if (!s) return;
-    if (s->stream) SDL_DestroyAudioStream(s->stream);
+    if (StreamAlive(s->stream, s->epoch)) SDL_DestroyAudioStream(s->stream);
     if (s->pcm)    SDL_free(s->pcm);
     free(s);
 }

@@ -611,16 +611,28 @@ pub fn window_close() {
 
 impl Drop for App {
     fn drop(&mut self) {
-        if !self.ptr.is_null() {
-            unsafe {
-                sys::UIApp_Destroy(self.ptr);
-            }
-        }
         // Clear the TLS slot so a future App in the same thread
         // doesn't dispatch into a freed callback.
         EVENT_TRAMPOLINE_STATE.with(|cell| {
             *cell.borrow_mut() = None;
         });
+        // The closures (and whatever they captured: sounds, images, widget
+        // handles) go before UIApp_Destroy, whose SDL_Quit frees the SDL
+        // objects those captures still point at.
+        if !self.ptr.is_null() {
+            unsafe {
+                sys::UIApp_OnTick(self.ptr, None, std::ptr::null_mut());
+                sys::UIApp_OnResize(self.ptr, None, std::ptr::null_mut());
+            }
+        }
+        self.tick_cb = None;
+        self.resize_cb = None;
+        self.event_cbs.clear();
+        if !self.ptr.is_null() {
+            unsafe {
+                sys::UIApp_Destroy(self.ptr);
+            }
+        }
     }
 }
 

@@ -1,6 +1,8 @@
 #include <uikit/input.h>
 /* input.c: feeds window events into the polled key / mouse state. */
 void UIInput__OnEvent(const SDL_Event* e);
+/* sound.c: marks every open audio stream as freed by SDL_Quit. */
+void UIAudio__Invalidate(void);
 #include <SDL3/SDL.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1819,6 +1821,7 @@ void UIApp_Destroy(UIApp* app) {
     UIApp_BundleShutdown();
 
     UICursor_Shutdown();
+    UIAudio__Invalidate();
     SDL_Quit();
 #ifdef MOCIDA_WEB
     UIApp_ClearWebApp(app);

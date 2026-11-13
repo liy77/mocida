@@ -14,6 +14,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* sound.c: bumped right before SDL_Quit frees every audio stream. */
+unsigned UIAudio__Epoch(void);
+
 #ifdef _WIN32
 
 // Media Foundation pulls in COM (ole32 / mfplat / mfreadwrite / mfuuid).
@@ -33,6 +36,7 @@ struct UIVideo {
     IMFSourceReader* reader;
     SDL_Texture*     texture;
     SDL_AudioStream* audio;
+    unsigned         audioEpoch; // UIAudio__Epoch() when `audio` was opened
     char*            source;
 
     // ----- Stream info -----
@@ -438,7 +442,7 @@ void UIVideo_Destroy(UIVideo* v) {
     if (v->pendingSample) IMFSample_Release(v->pendingSample);
     if (v->reader)  IMFSourceReader_Release(v->reader);
     if (v->texture) SDL_DestroyTexture(v->texture);
-    if (v->audio)   SDL_DestroyAudioStream(v->audio);
+    if (v->audio && v->audioEpoch == UIAudio__Epoch()) SDL_DestroyAudioStream(v->audio);
     free(v->source);
     free(v);
 }
@@ -490,6 +494,7 @@ static void PumpAudio(UIVideo* v) {
         SDL_AudioSpec spec = { SDL_AUDIO_S16LE, v->audioChannels, v->audioSampleRate };
         v->audio = SDL_OpenAudioDeviceStream(
             SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+        v->audioEpoch = UIAudio__Epoch();
         if (!v->audio) {
             UI_ERROR(UI_CAT_VIDEO, "SDL_OpenAudioDeviceStream failed: %s",
                     SDL_GetError());
@@ -734,6 +739,7 @@ struct UIVideo {
     SDL_Texture*     texture;    // created lazily on first Tick once
                                  // width/height are known
     SDL_AudioStream* audio;      // created lazily on first audio sample
+    unsigned audioEpoch;         // UIAudio__Epoch() when `audio` was opened
 
     // ----- Stream info (populated during preroll) -----
     int videoWidth;
@@ -1062,7 +1068,7 @@ void UIVideo_Destroy(UIVideo* v) {
     }
     if (v->bus)      gst_object_unref(v->bus);
     if (v->texture)  SDL_DestroyTexture(v->texture);
-    if (v->audio)    SDL_DestroyAudioStream(v->audio);
+    if (v->audio && v->audioEpoch == UIAudio__Epoch()) SDL_DestroyAudioStream(v->audio);
     free(v->source);
     free(v);
 }
@@ -1140,6 +1146,7 @@ void UIVideo_Tick(UIVideo* v, SDL_Renderer* renderer) {
             spec.freq     = v->audioSampleRate;
             v->audio = SDL_OpenAudioDeviceStream(
                 SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+            v->audioEpoch = UIAudio__Epoch();
             if (v->audio) {
                 SDL_SetAudioStreamGain(v->audio,
                     v->muted ? 0.0f : v->volume);
