@@ -219,6 +219,9 @@ void UIApp_SetAlwaysOnTop(int on);
 void        UIApp_SetTitleG (const char* title);
 void        UIApp_SetSizeG  (int width, int height);
 void        UIApp_SetMaxFpsG(int fps);
+/** Brings the window to the front and gives it keyboard focus (a game window
+ *  opened from another app). No effect on a hidden window. */
+void        UIApp_RaiseWindowG(void);
 int         UIApp_GetWidthG (void);
 int         UIApp_GetHeightG(void);
 const char* UIApp_GetTitleG (void);

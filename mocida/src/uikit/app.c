@@ -1342,6 +1342,10 @@ void UIApp_SetSizeG(int width, int height) {
 void UIApp_SetMaxFpsG(int fps) {
     if (g_currentApp) UIApp_SetTargetFPS(g_currentApp, fps);
 }
+void UIApp_RaiseWindowG(void) {
+    if (g_currentApp && g_currentApp->window && g_currentApp->window->sdlWindow)
+        SDL_RaiseWindow(g_currentApp->window->sdlWindow);
+}
 int UIApp_GetWidthG(void) {
     return g_currentApp ? UIApp_GetWidth(g_currentApp) : 0;
 }
