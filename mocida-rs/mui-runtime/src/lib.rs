@@ -2528,13 +2528,13 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
     let explicit_lines = label.lines().count().max(1);
     let widest_line = label
         .lines()
-        .map(|ln| text_extent(ln, size).0)
+        .map(|ln| text_width(el, ln, size))
         .fold(0.0_f32, f32::max);
     let (_full_w, line_h) = text_extent(&label, size);
     let natural_w = if widest_line > 0.0 {
         widest_line
     } else {
-        text_extent(&label, size).0
+        text_width(el, &label, size)
     };
     let wrap_mode = style::enum_member(el, "wrap").and_then(|s| wrap_from(&s));
     let w = dim_prop(ctx, el, "width").unwrap_or(natural_w);
@@ -4712,7 +4712,7 @@ fn build_caption(
         text = text.color(to_color(c));
     }
     text = apply_text_font(text, el)?;
-    let (tw, _th) = text_extent(label, size);
+    let tw = text_width(el, label, size);
     Ok((text.into_widget_sized(tw, box_h)?, tw))
 }
 
@@ -4805,6 +4805,20 @@ fn sized_text(label: &str, size: f32, color: Color, layout: &mut Layout) -> Resu
     let text = Text::new(label, size)?.color(color);
     let (x, y) = layout.next_sized(w, h);
     Ok(text.into_widget_sized(w, h)?.position(x, y))
+}
+
+/// Natural single-line width of a `Text` / caption: the real glyph run in the
+/// element's font and weight, so centered text lines up exactly. Falls back
+/// to the [`text_extent`] estimate when the font can't be measured.
+fn text_width(el: &Element, label: &str, size: f32) -> f32 {
+    if label.is_empty() {
+        return text_extent(label, size).0;
+    }
+    let family = style::font_family(el).and_then(|f| mocida::text::get_font(&f));
+    let bits = style::font_style_bits(el);
+    mocida::text::measure(label, size, family.as_deref(), FontStyle::from_bits(bits))
+        .map(|(w, _)| (w + 1.0).ceil())
+        .unwrap_or_else(|| text_extent(label, size).0)
 }
 
 /// Rough text bounds in logical px (mocida re-measures the real glyph run).

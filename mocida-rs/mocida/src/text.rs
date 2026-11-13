@@ -366,6 +366,29 @@ pub fn search_fonts() {
     unsafe { sys::UISearchFonts() };
 }
 
+/// Measures one line of `text` in logical points with the renderer's font
+/// cache (`family` is a font path; `None` = the default font). `None` off
+/// the main thread or when the font can't be opened.
+pub fn measure(text: &str, size: f32, family: Option<&str>, style: FontStyle) -> Option<(f32, f32)> {
+    let t = CString::new(text).ok()?;
+    let fam = match family {
+        Some(f) => Some(CString::new(f).ok()?),
+        None => None,
+    };
+    let (mut w, mut h) = (0.0_f32, 0.0_f32);
+    let ok = unsafe {
+        sys::UIText_MeasureString(
+            fam.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+            size,
+            style.bits(),
+            t.as_ptr(),
+            &mut w,
+            &mut h,
+        )
+    };
+    (ok != 0).then_some((w, h))
+}
+
 /// Resolves a font family name to an on-disk path (mirrors
 /// `UIGetFont`). Returns `None` if the family is unknown.
 pub fn get_font(family: &str) -> Option<String> {

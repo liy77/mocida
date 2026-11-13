@@ -1275,3 +1275,22 @@ void UIWindow_Destroy(UIWindow* window) {
     CleanupTaaHistory();
     free(window);
 }
+
+int UIText_MeasureString(const char* fontFamily, float fontSize, int fontStyle,
+                         const char* text, float* outW, float* outH) {
+    if (!text || fontSize <= 0.0f || !SDL_IsMainThread()) return 0;
+    if (!TTF_WasInit() && !TTF_Init()) return 0;
+    const char* path = fontFamily ? fontFamily : UIGetDefaultFontPath();
+    // Measure at 2x (the Retina raster size) so hinting matches what is drawn.
+    const float ss = 2.0f;
+    TTF_Font* font = GetFont(path, fontSize * ss);
+    if (!font) return 0;
+    TTF_SetFontStyle(font, (TTF_FontStyleFlags)fontStyle);
+    int w = 0, h = 0;
+    const int ok = TTF_GetStringSize(font, text, 0, &w, &h);
+    TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
+    if (!ok) return 0;
+    if (outW) *outW = (float)w / ss;
+    if (outH) *outH = (float)h / ss;
+    return 1;
+}

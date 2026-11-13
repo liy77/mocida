@@ -230,6 +230,18 @@ UIText* UIText_SetFontStyle(UIText* text, int fontStyle);
 UIText* UIText_SetFontSize(UIText* text, float fontSize);
 
 /**
+ * Measures one line of UTF-8 text in logical points with the same font
+ * cache the renderer uses, so layout code can size a UIText to its real
+ * glyph run instead of guessing.
+ * @param fontFamily Font file path (or mocida:// path); NULL = the default font.
+ * @param fontStyle  UIFontStyle bits (bold, italic, ...).
+ * @return 1 on success. 0 off the main thread (SDL_ttf is single-threaded)
+ *         or when the font can't be opened; the outputs are left untouched.
+ */
+int UIText_MeasureString(const char* fontFamily, float fontSize, int fontStyle,
+                         const char* text, float* outW, float* outH);
+
+/**
  * Sets the color of the UIText object.
  * @param text Pointer to the UIText object.
  * @param color Color to be set.
