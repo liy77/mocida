@@ -1225,7 +1225,7 @@ fn build_group(ctx: &mut Ctx, nodes: &[Node], layout: &mut Layout) -> Result<Opt
         let mut child_layout = Layout::root();
         if let Some(w) = build_node(ctx, n, &mut child_layout)? {
             let cw = child_layout.content_width().max(0.0);
-            let ch = child_layout.content_height().max(0.0);
+            let ch = child_layout.placed_height();
             let shown = unsafe { (*w.as_ptr()).visible } != 0;
             if !shown {
                 hidden_w = hidden_w.max(cw);

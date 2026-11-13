@@ -53,6 +53,12 @@ impl Layout {
         (self.y - self.start_y).max(0.0)
     }
 
+    /// Height of what was placed, without the gap after the last row: the
+    /// size of a widget measured on its own layout.
+    pub fn placed_height(&self) -> f32 {
+        (self.y - self.start_y - ROW_GAP).max(0.0)
+    }
+
     /// Widest row placed so far.
     pub fn content_width(&self) -> f32 {
         self.max_w
