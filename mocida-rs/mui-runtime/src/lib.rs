@@ -732,6 +732,9 @@ pub fn build_view_seeded(
             children.add(widget)?;
         }
     }
+    for tooltip in std::mem::take(&mut ctx.tooltips) {
+        children.add(tooltip)?;
+    }
     Ok((children, ctx.reactive))
 }
 
@@ -969,6 +972,9 @@ struct Ctx<'a> {
     /// sibling can size against it (`width: left_panel.width`). Collected once
     /// before the build from the source props.
     id_dims: HashMap<String, (Option<f32>, Option<f32>)>,
+    /// Tooltips from `tooltip:` props. They float above everything, so they're
+    /// appended to the root children after the build instead of nesting.
+    tooltips: Vec<Widget>,
 }
 
 impl<'a> Ctx<'a> {
@@ -982,6 +988,7 @@ impl<'a> Ctx<'a> {
             avail_h: 0.0,
             parent_horizontal: None,
             id_dims: HashMap::new(),
+            tooltips: Vec::new(),
         }
     }
 
@@ -1079,6 +1086,17 @@ fn build_node(ctx: &mut Ctx, node: &Node, layout: &mut Layout) -> Result<Option<
         }
         Node::Element(el) => {
             let w = build_element(ctx, el, layout)?;
+            // `tooltip: "text"` on any element: a hover label after a short delay.
+            if let Some(text) = prop_string_value(ctx, el, "tooltip").filter(|t| !t.is_empty()) {
+                if let Ok(tt) = mocida::Tooltip::new(&w, &text, 12.0) {
+                    let tt = tt
+                        .delay(450)
+                        .colors(Color::rgba(44, 44, 46, 0.96), Color::rgb(245, 245, 247));
+                    if let Ok(widget) = tt.into_widget() {
+                        ctx.tooltips.push(widget);
+                    }
+                }
+            }
             // Live width/height: a signal-bound dimension updates the widget in
             // place (no rebuild) — see subscribe_reactive_size.
             subscribe_reactive_size(ctx, el, w.as_ptr());

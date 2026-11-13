@@ -1,4 +1,5 @@
 #include <uikit/popup.h>
+#include <uikit/font.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -17,6 +18,11 @@ UITooltip* UITooltip_Create(UIWidget* target, const char* text, float fontSize) 
     tt->target     = target;
     tt->text       = text ? _strdup(text) : _strdup("");
     tt->fontSize   = fontSize > 0.0f ? fontSize : 12.0f;
+    {
+        // The app font, so the label renders without a SetFontFamily call.
+        const char* defFont = UIGetDefaultFontPath();
+        tt->fontFamily = defFont ? _strdup(defFont) : NULL;
+    }
     tt->bgColor    = (UIColor){ 15, 23, 42, 0.92f };
     tt->textColor  = (UIColor){ 248, 250, 252, 1.0f };
     tt->radius     = 6.0f;

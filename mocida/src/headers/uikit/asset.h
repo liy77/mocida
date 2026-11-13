@@ -23,6 +23,13 @@
 SDL_Texture* UIAsset_LoadTexture(SDL_Renderer* renderer, const char* path);
 
 /**
+ * Like UIAsset_LoadTexture, but an `.svg` is rasterised so its larger side is
+ * `pixels` device pixels (crisp at the size it's shown) instead of at its own
+ * viewBox size. Other formats load unchanged.
+ */
+SDL_Texture* UIAsset_LoadTextureSized(SDL_Renderer* renderer, const char* path, int pixels);
+
+/**
  * Variant returning an SDL_Surface (caller-owned - remember to call
  * SDL_DestroySurface).
  *

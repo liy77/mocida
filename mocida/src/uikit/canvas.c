@@ -13,8 +13,9 @@
 #define UI_PATH_INITIAL_CAP 64
 #define UI_STATE_INITIAL_CAP 8
 
-/* Width (render px) of the anti-aliasing fringe around fills and strokes. */
-#define UI_CANVAS_AA 0.9f
+/* Width of the anti-aliasing fringe around fills and strokes: 0.9 device
+ * pixel, expressed in logical points for the current draw density. */
+#define UI_CANVAS_AA (0.9f / UIWindow__DrawDensity())
 /* Frames a cached text texture may go unused before it's evicted (~2 s). */
 #define UI_CANVAS_TEXT_TTL 120u
 

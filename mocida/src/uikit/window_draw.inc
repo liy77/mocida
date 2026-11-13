@@ -304,7 +304,10 @@ static SDL_Texture* RasterizeCoverageCircle(SDL_Renderer* renderer,
     return tex;
 }
 
-static SDL_Texture* GetCachedCircleTexture(SDL_Renderer* renderer, int size) {
+// `diameter` is in logical points; the texture is rasterised at the current
+// draw density and drawn back into `diameter` points, i.e. 1:1 device pixels.
+static SDL_Texture* GetCachedCircleTexture(SDL_Renderer* renderer, float diameter) {
+    int size = (int)ceilf(diameter * g_drawDensity - 0.01f);
     if (size < 2) size = 2;
 
     // If the global quality changed since the last generation, drop everything.
@@ -319,12 +322,16 @@ static SDL_Texture* GetCachedCircleTexture(SDL_Renderer* renderer, int size) {
         }
     }
 
-    int slotToUse = 0;
+    int slotToUse = -1;
     for (int i = 0; i < MAX_CIRCLE_CACHE; i++) {
         if (g_circleCache[i] == NULL) {
             slotToUse = i;
             break;
         }
+    }
+    if (slotToUse < 0) {
+        slotToUse = g_circleCacheNext;
+        g_circleCacheNext = (g_circleCacheNext + 1) % MAX_CIRCLE_CACHE;
     }
 
     if (g_circleCache[slotToUse] != NULL) {
@@ -1064,8 +1071,7 @@ void DrawRoundedRectFill(SDL_Renderer* rend, SDL_FRect rect, UIColor color, floa
     // draws + 2 mod state updates per rounded rect to a single
     // RenderGeometry call removes the dominant per-widget overhead on
     // a UI scene full of buttons/cards/dropdowns.
-    const int cornerSize = (int)ceilf(r * 2.0f);
-    SDL_Texture* corner = GetCachedCircleTexture(rend, cornerSize);
+    SDL_Texture* corner = GetCachedCircleTexture(rend, r * 2.0f);
     if (!corner) return;
 
     // DrawCircle elsewhere applies SDL_SetTextureColorMod on the same
@@ -1133,8 +1139,7 @@ void DrawRoundedRectFill(SDL_Renderer* rend, SDL_FRect rect, UIColor color, floa
 // Version optimized for speed, not quality
 void DrawCircle(SDL_Renderer* renderer, float centerX, float centerY, float radius, UIColor color) {
     // Use pre-rendered texture for circles
-    int size = (int)ceilf(radius * 2);
-    SDL_Texture* circleTexture = GetCachedCircleTexture(renderer, size);
+    SDL_Texture* circleTexture = GetCachedCircleTexture(renderer, radius * 2.0f);
     
     if (circleTexture) {
         // Set color

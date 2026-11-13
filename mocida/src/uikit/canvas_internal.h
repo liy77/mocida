@@ -3,6 +3,9 @@
 
 #include <uikit/canvas.h>
 
+/* Device pixels per logical point of the frame being drawn (window.c). */
+float UIWindow__DrawDensity(void);
+
 /* Internal struct definition - kept private from public API users. */
 typedef struct {
     UIColor fillColor;

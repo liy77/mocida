@@ -1323,7 +1323,10 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
                 // re-pump every frame, so the image pops in when ready.
                 UIImage_PumpRemote(img, window->sdlRenderer);
             } else {
-                img->__SDL_texture = UIAsset_LoadTexture(window->sdlRenderer, img->source);
+                // Vector sources are rasterised at the size they're drawn
+                // (device pixels), so icons and previews stay crisp.
+                const int px = (int)ceilf(SDL_max(*el->width, *el->height) * g_drawDensity);
+                img->__SDL_texture = UIAsset_LoadTextureSized(window->sdlRenderer, img->source, px);
                 if (img->__SDL_texture) {
                     img->loadState = IMAGE_LOAD_SUCCESS;
                     SDL_SetTextureScaleMode(img->__SDL_texture,
@@ -3538,6 +3541,12 @@ static void RenderWidget_Tooltip(UIWindow* window, UIWidget* el,
 
 
         UITooltip* tt = (UITooltip*)base;
+        // The hover delay elapses while the cursor rests — motion events stop
+        // then, so the delay is also checked here, every frame.
+        if (!tt->_visible && tt->_insideTarget &&
+            (SDL_GetTicks() - tt->_enterMs) >= (Uint64)tt->delayMs) {
+            tt->_visible = 1;
+        }
         if (!tt->_visible || !tt->text || !*tt->text) return;
 
         TTF_Font* font = (tt->fontFamily && tt->fontSize > 0.0f)

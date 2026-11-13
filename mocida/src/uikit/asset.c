@@ -59,6 +59,34 @@ SDL_Texture* UIAsset_LoadTexture(SDL_Renderer* renderer, const char* path) {
     return NULL;
 }
 
+static int IsSvgPath(const char* path) {
+    const size_t n = path ? strlen(path) : 0;
+    return n > 4 && SDL_strcasecmp(path + n - 4, ".svg") == 0;
+}
+
+SDL_Texture* UIAsset_LoadTextureSized(SDL_Renderer* renderer, const char* path, int pixels) {
+    if (!renderer || !path) return NULL;
+    const char* resolved = UIApp_ResolveBundle(path);
+    if (pixels > 0 && resolved && IsSvgPath(resolved)) {
+        char buf2[ASSET_PATH_BUF];
+        char buf3[ASSET_PATH_BUF];
+        const char* candidates[3] = { NULL, NULL, NULL };
+        const int count = BuildCandidates(path, buf2, buf3, candidates);
+        for (int i = 0; i < count; i++) {
+            SDL_IOStream* io = SDL_IOFromFile(candidates[i], "rb");
+            if (!io) continue;
+            // Height 0 keeps the aspect ratio; the draw path then fits it.
+            SDL_Surface* s = IMG_LoadSizedSVG_IO(io, pixels, 0);
+            SDL_CloseIO(io);
+            if (!s) continue;
+            SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, s);
+            SDL_DestroySurface(s);
+            if (tex) return tex;
+        }
+    }
+    return UIAsset_LoadTexture(renderer, path);
+}
+
 SDL_Surface* UIAsset_LoadSurface(const char* path) {
     if (!path) return NULL;
 

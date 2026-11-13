@@ -50,7 +50,7 @@ static UIWindow* g_activeWindow = NULL;
 // Configuration for quality vs performance control
 #define USE_ANTIALIASING 1       // (legacy - always on now via analytic coverage)
 #define UPSCALE_FACTOR 1         // No full-frame upscaling (uses screen size)
-#define MAX_CIRCLE_CACHE 16
+#define MAX_CIRCLE_CACHE 64
 #define MAX_BATCH_SIZE 1024      // Maximum rectangles in a batch
 
 // Bounds for the AA samples-per-side count used by analytic coverage.
@@ -148,9 +148,16 @@ static int    g_taaMotionThreshold = 24;
 static SDL_Texture *g_smoothTexture = NULL;
 static int g_smoothW = 0, g_smoothH = 0;
 
-// Circle cache
+// Circle cache, keyed by the texture's size in device pixels.
 static SDL_Texture* g_circleCache[MAX_CIRCLE_CACHE] = {NULL};
 static int g_circleCacheSizes[MAX_CIRCLE_CACHE] = {0};
+static int g_circleCacheNext = 0;   // round-robin eviction slot
+
+// Device pixels per logical point for the target being drawn this frame (2 on
+// Retina, the SSAA factor when rendering offscreen). Coverage textures are
+// rasterised at this density so their AA ramp is one *device* pixel wide —
+// at logical size they'd be stretched 2× and the edges turn into stair steps.
+static float g_drawDensity = 1.0f;
 
 // Shadow cache. Entries are keyed by width/height/radius/blur/spread
 // rounded to integers (granularity is fine enough for practical reuse -
@@ -176,7 +183,7 @@ static SDL_FRect g_tempRect1 = {0};
 static SDL_FRect g_tempRect2 = {0};
 
 // Forward declarations to fix compilation errors
-static SDL_Texture* GetCachedCircleTexture(SDL_Renderer* renderer, int size);
+static SDL_Texture* GetCachedCircleTexture(SDL_Renderer* renderer, float diameter);
 void        CleanupCircleCache(void);
 static void CleanupShadowCache(void);
 static void CleanupTaaHistory(void);
@@ -365,6 +372,10 @@ void UIWindow_RequestShot(const char* path) {
     g_shotRequest = SDL_strdup(path);
 }
 
+float UIWindow__DrawDensity(void) {
+    return g_drawDensity;
+}
+
 // Main rendering function - optimized for high performance
 int UIWindow_Render(UIWindow* window) {
     if (!window || !window->sdlRenderer) return -1;
@@ -450,6 +461,18 @@ int UIWindow_Render(UIWindow* window) {
     }
 
     SDL_Texture* simTarget = sim ? UIWindow_DeviceSimulatorGetRenderTarget(window) : NULL;
+
+    // Device pixels per logical point for this frame's target. Coverage caches
+    // are keyed by device-pixel size, so a density change just misses the cache.
+    if (needsOffscreen) {
+        g_drawDensity = (float)aaScale;
+    } else if (sim || rw <= 0) {
+        g_drawDensity = 1.0f;
+    } else {
+        int pw = rw, ph = rh;
+        SDL_GetWindowSizeInPixels(window->sdlWindow, &pw, &ph);
+        g_drawDensity = SDL_clamp((float)pw / (float)rw, 1.0f, 4.0f);
+    }
 
     if (needsOffscreen) {
         const int tw = rw * aaScale;
