@@ -38,6 +38,8 @@ install_manifest.txt
 *Targets.cmake
 *Config.cmake
 *ConfigVersion.cmake
+# Source file, not a build output; case-insensitive filesystems match it above.
+!cmake/sdltargets.cmake
 CTestTestfile.cmake
 Testing
 compile_commands.json
