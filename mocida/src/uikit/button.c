@@ -258,6 +258,19 @@ static UIChildren* ContainerChildren(UIWidget* w) {
     return NULL;
 }
 
+// A press only reaches a Scroll's content inside the scroll's viewport, so
+// buttons scrolled (or clipped) out of view can't catch clicks meant for the
+// panels around them.
+static UIChildren* PressChildren(UIWidget* w, float x, float y) {
+    if (w && w->visible && w->data &&
+        strcmp(((UIWidgetBase*)w->data)->__widget_type, UI_WIDGET_SCROLL) == 0) {
+        const float sw = w->width ? *w->width : 0.0f;
+        const float sh = w->height ? *w->height : 0.0f;
+        if (x < w->x || y < w->y || x >= w->x + sw || y >= w->y + sh) return NULL;
+    }
+    return ContainerChildren(w);
+}
+
 // Per-button event application (one widget, already known to be a button).
 static void ButtonOnMotion(UIButton* btn, int inside) {
     btn->isMouseInside = inside;
@@ -296,7 +309,7 @@ void UIButton_DispatchMouseDown(UIChildren* children, float x, float y) {
                 btn->state         = UI_BUTTON_STATE_PRESSED;
             }
         } else {
-            UIChildren* kids = ContainerChildren(w);
+            UIChildren* kids = PressChildren(w, x, y);
             if (kids) UIButton_DispatchMouseDown(kids, x, y);
         }
     }

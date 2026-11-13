@@ -262,7 +262,8 @@ void UIPopup_DispatchMouseMotion(UIChildren* children, float x, float y) {
         if (tt) {
             const UIWidget* tgt = tt->target;
             const int inside = (tgt && tgt->width && tgt->height &&
-                                InsideRect(x, y, tgt->x, tgt->y, *tgt->width, *tgt->height));
+                                InsideRect(x, y, tgt->x, tgt->y, *tgt->width, *tgt->height) &&
+                                UIWidget_EventOcclusionAllows(tgt));
             if (inside) {
                 if (!tt->_insideTarget) {
                     tt->_insideTarget = 1;

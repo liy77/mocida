@@ -629,6 +629,14 @@ void UIApp_SendEditKeyG(int scancode, int shift);
  */
 int UIApp_TextHasFocusG(void);
 
+/**
+ * Finds the first visible, on-screen widget matching an automation selector
+ * (`"Run"`, `tip:"Add node"`, `~"Assets"`, `id:panel`; see app_automation.inc)
+ * in the current app and writes its window-space box. Returns 1 if found.
+ * Used for guided tours that point at live UI.
+ */
+int UIApp_FindWidgetBoundsG(const char* selector, float* x, float* y, float* w, float* h);
+
 #ifdef MOCIDA_WEB
 void UIApp_RunOneFrame(UIApp* app, Uint32 dtMs);
 void UIApp_RunWeb(UIApp* app);

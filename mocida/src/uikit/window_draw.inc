@@ -1156,10 +1156,141 @@ void DrawCircle(SDL_Renderer* renderer, float centerX, float centerY, float radi
 }
 
 // Optimized version for performance
+// Anti-aliased ring (annulus) coverage: outer radius = size/2, thickness in
+// pixels. Used for the corners of a border drawn over a translucent fill.
+static SDL_Texture* RasterizeCoverageRing(SDL_Renderer* renderer, int size, float thickness, int samplesPerSide) {
+    if (size < 2) size = 2;
+    if (samplesPerSide < 1) samplesPerSide = 1;
+    Uint8* pixels = (Uint8*)malloc((size_t)size * (size_t)size * 4);
+    if (!pixels) return NULL;
+    const float c = (float)size * 0.5f;
+    const float ro = c - 0.5f;
+    const float ri = SDL_max(0.0f, ro - thickness);
+    const float ro2 = ro * ro, ri2 = ri * ri;
+    const float step = 1.0f / (float)samplesPerSide;
+    const int total = samplesPerSide * samplesPerSide;
+    for (int py = 0; py < size; py++) {
+        for (int px = 0; px < size; px++) {
+            int hits = 0;
+            for (int sy = 0; sy < samplesPerSide; sy++) {
+                const float y = (float)py + (sy + 0.5f) * step - c;
+                for (int sx = 0; sx < samplesPerSide; sx++) {
+                    const float x = (float)px + (sx + 0.5f) * step - c;
+                    const float d2 = x * x + y * y;
+                    if (d2 <= ro2 && d2 > ri2) hits++;
+                }
+            }
+            Uint8* p = pixels + ((size_t)py * (size_t)size + (size_t)px) * 4;
+            p[0] = p[1] = p[2] = 255;
+            p[3] = (Uint8)((hits * 255 + total / 2) / total);
+        }
+    }
+    SDL_Surface* surf = SDL_CreateSurfaceFrom(size, size, SDL_PIXELFORMAT_RGBA32, pixels, size * 4);
+    SDL_Texture* tex = surf ? SDL_CreateTextureFromSurface(renderer, surf) : NULL;
+    if (surf) SDL_DestroySurface(surf);
+    free(pixels);
+    if (tex) {
+        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
+    }
+    return tex;
+}
+
+#define MAX_RING_CACHE 16
+static SDL_Texture* g_ringCache[MAX_RING_CACHE];
+static int g_ringCacheKey[MAX_RING_CACHE][3]; // size, thickness*8, samples
+static int g_ringCacheNext;
+
+static void CleanupRingCache(void) {
+    for (int i = 0; i < MAX_RING_CACHE; i++) {
+        if (g_ringCache[i]) SDL_DestroyTexture(g_ringCache[i]);
+        g_ringCache[i] = NULL;
+    }
+}
+
+static SDL_Texture* GetCachedRingTexture(SDL_Renderer* renderer, float diameter, float thickness) {
+    int size = (int)ceilf(diameter * g_drawDensity - 0.01f);
+    if (size < 2) size = 2;
+    const float tpx = thickness * g_drawDensity;
+    const int key[3] = { size, (int)lroundf(tpx * 8.0f), g_aaSamplesPerSide };
+    for (int i = 0; i < MAX_RING_CACHE; i++) {
+        if (g_ringCache[i] && !memcmp(g_ringCacheKey[i], key, sizeof(key))) return g_ringCache[i];
+    }
+    const int slot = g_ringCacheNext;
+    g_ringCacheNext = (g_ringCacheNext + 1) % MAX_RING_CACHE;
+    if (g_ringCache[slot]) SDL_DestroyTexture(g_ringCache[slot]);
+    g_ringCache[slot] = RasterizeCoverageRing(renderer, size, tpx, g_aaSamplesPerSide);
+    memcpy(g_ringCacheKey[slot], key, sizeof(key));
+    return g_ringCache[slot];
+}
+
+// Border only (no fill inside), so a translucent fill under it isn't
+// darkened by the border colour: 4 edge strips + 4 AA ring quadrants.
+static void DrawRoundedRectRing(SDL_Renderer* rend, SDL_FRect rect, UIColor color, float radius, float bw) {
+    const SDL_Color sc = {
+        (Uint8)color.r, (Uint8)color.g, (Uint8)color.b,
+        (Uint8)SDL_clamp((int)(color.a * 255.0f), 0, 255)
+    };
+    const float r = SDL_max(bw, SDL_min(radius, SDL_min(rect.w, rect.h) * 0.5f));
+    const SDL_FRect edges[4] = {
+        { rect.x + r,          rect.y,               rect.w - 2.0f * r, bw },
+        { rect.x + r,          rect.y + rect.h - bw, rect.w - 2.0f * r, bw },
+        { rect.x,              rect.y + r,           bw, rect.h - 2.0f * r },
+        { rect.x + rect.w - bw, rect.y + r,          bw, rect.h - 2.0f * r },
+    };
+    for (int i = 0; i < 4; i++) {
+        if (edges[i].w > 0.0f && edges[i].h > 0.0f) BatchRect(rend, &edges[i], sc);
+    }
+    FlushRenderBatch(rend);
+    SDL_Texture* ring = GetCachedRingTexture(rend, r * 2.0f, bw);
+    if (!ring) return;
+    const SDL_FColor fc = { sc.r / 255.0f, sc.g / 255.0f, sc.b / 255.0f, sc.a / 255.0f };
+    static const float uvs[4][4] = {
+        { 0.0f, 0.5f, 0.0f, 0.5f }, { 0.5f, 1.0f, 0.0f, 0.5f },
+        { 0.0f, 0.5f, 0.5f, 1.0f }, { 0.5f, 1.0f, 0.5f, 1.0f },
+    };
+    const float dx[4] = { rect.x, rect.x + rect.w - r, rect.x, rect.x + rect.w - r };
+    const float dy[4] = { rect.y, rect.y, rect.y + rect.h - r, rect.y + rect.h - r };
+    SDL_Vertex v[16];
+    int idx[24];
+    for (int i = 0; i < 4; i++) {
+        const int b = i * 4;
+        v[b + 0].position = (SDL_FPoint){ dx[i],     dy[i]     };
+        v[b + 1].position = (SDL_FPoint){ dx[i] + r, dy[i]     };
+        v[b + 2].position = (SDL_FPoint){ dx[i] + r, dy[i] + r };
+        v[b + 3].position = (SDL_FPoint){ dx[i],     dy[i] + r };
+        v[b + 0].color = v[b + 1].color = v[b + 2].color = v[b + 3].color = fc;
+        v[b + 0].tex_coord = (SDL_FPoint){ uvs[i][0], uvs[i][2] };
+        v[b + 1].tex_coord = (SDL_FPoint){ uvs[i][1], uvs[i][2] };
+        v[b + 2].tex_coord = (SDL_FPoint){ uvs[i][1], uvs[i][3] };
+        v[b + 3].tex_coord = (SDL_FPoint){ uvs[i][0], uvs[i][3] };
+        const int j = i * 6;
+        idx[j + 0] = b + 0; idx[j + 1] = b + 1; idx[j + 2] = b + 2;
+        idx[j + 3] = b + 0; idx[j + 4] = b + 2; idx[j + 5] = b + 3;
+    }
+    SDL_SetTextureColorMod(ring, 255, 255, 255);
+    SDL_SetTextureAlphaMod(ring, 255);
+    SDL_RenderGeometry(rend, ring, v, 16, idx, 24);
+}
+
 void DrawRoundedRectWithBorder(SDL_Renderer* renderer, SDL_FRect rect, 
                               UIColor fillColor, float radius, 
                               int borderWidth, UIColor borderColor) {
     if (!renderer || rect.w <= 0 || rect.h <= 0) return;
+
+    // Translucent fill: the border must not paint under it, so draw the fill
+    // inset and the border as a ring on top.
+    if (borderWidth > 0 && fillColor.a < 0.999f) {
+        const float bw = (float)borderWidth;
+        SDL_FRect inner = { rect.x + bw, rect.y + bw, rect.w - 2.0f * bw, rect.h - 2.0f * bw };
+        if (inner.w > 0 && inner.h > 0 && fillColor.a > 0.0f) {
+            DrawRoundedRectFill(renderer, inner, fillColor, SDL_max(0.0f, radius - bw));
+        }
+        if (borderColor.a > 0.0f) {
+            DrawRoundedRectRing(renderer, rect, borderColor, radius, bw);
+        }
+        return;
+    }
 
     // Draw border if needed
     if (borderWidth > 0) {
@@ -1339,7 +1470,10 @@ void DrawGlassBackdropBlur(SDL_Renderer* r, SDL_FRect rect, float blurPx) {
 }
 
 // Cleanup circle cache
+static void CleanupRingCache(void);
+
 void CleanupCircleCache(void) {
+    CleanupRingCache();
     for (int i = 0; i < MAX_CIRCLE_CACHE; i++) {
         if (g_circleCache[i] != NULL) {
             SDL_DestroyTexture(g_circleCache[i]);

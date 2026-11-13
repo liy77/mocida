@@ -301,13 +301,42 @@ static void RenderSingleWidget(UIWindow* window, UIWidget* el) {
 
 #include "window_widgets.inc"
 
+// A culled container never lays out its children, so they would keep stale
+// (or never-set, 0,0) positions and could catch clicks on visible UI. Park
+// the whole subtree at the container's own off-screen position instead.
+static void ParkSubtree(UIWidget* el, float x, float y) {
+    if (!el || !el->data) return;
+    UIWidgetBase* b = (UIWidgetBase*)el->data;
+    UIChildren* kids = NULL;
+    if (UIWidget_TypeIs(b->__widget_type, UI_WIDGET_STACK)) kids = ((UIStack*)b)->items;
+    else if (UIWidget_TypeIs(b->__widget_type, UI_WIDGET_GLASS)) kids = ((UIGlass*)b)->items;
+    else if (UIWidget_TypeIs(b->__widget_type, UI_WIDGET_GRID)) kids = ((UIGrid*)b)->items;
+    else if (UIWidget_TypeIs(b->__widget_type, UI_WIDGET_RECTANGLE)) kids = (UIChildren*)((UIRectangle*)b)->children;
+    else if (UIWidget_TypeIs(b->__widget_type, UI_WIDGET_SCROLL)) {
+        UIWidget* c = ((UIScroll*)b)->content;
+        if (c) { c->x = x; c->y = y; ParkSubtree(c, x, y); }
+        return;
+    }
+    if (!kids) return;
+    for (int i = 0; i < kids->count; i++) {
+        UIWidget* k = kids->children[i];
+        if (!k) continue;
+        k->x = x;
+        k->y = y;
+        ParkSubtree(k, x, y);
+    }
+}
+
 static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
     // A hidden widget hides its whole subtree, so an off-screen screen kept
     // built for an instant phase switch costs nothing per frame.
     if (UI_UNLIKELY(!el || !el->visible || !el->data)) return;
     // Skip widgets fully outside the window. Big win for scrolls /
     // lists with off-screen content; cheap when the widget has bounds.
-    if (UI_UNLIKELY(WidgetCulled(window, el))) return;
+    if (UI_UNLIKELY(WidgetCulled(window, el))) {
+        ParkSubtree(el, el->x, el->y);
+        return;
+    }
 
     if (el->alignment) UIAlignment_Align(el);
     UIWidgetBase* base = (UIWidgetBase*)el->data;

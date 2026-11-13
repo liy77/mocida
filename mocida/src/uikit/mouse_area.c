@@ -54,6 +54,19 @@ static UIChildren* ContainerChildren(UIWidget* w) {
     return NULL;
 }
 
+// A press only reaches a Scroll's content inside the scroll's viewport, so
+// rows scrolled (or clipped) out of view can't catch clicks meant for the
+// panels around them.
+static UIChildren* PressChildren(UIWidget* w, float x, float y) {
+    if (w && w->visible && w->data &&
+        strcmp(((UIWidgetBase*)w->data)->__widget_type, UI_WIDGET_SCROLL) == 0) {
+        const float sw = w->width ? *w->width : 0.0f;
+        const float sh = w->height ? *w->height : 0.0f;
+        if (x < w->x || y < w->y || x >= w->x + sw || y >= w->y + sh) return NULL;
+    }
+    return ContainerChildren(w);
+}
+
 // Clamps the (x, y) origin of a w x h rectangle to live inside the
 // area's clamp rect. Returns the corrected position via out params.
 static void ApplyClamp(const UIMouseArea* area,
@@ -175,7 +188,7 @@ int UIMouseArea_DispatchDrop(UIChildren* children, float x, float y) {
         UIWidget* w = children->children[i];
         UIMouseArea* area = AsArea(w);
         if (!area) {
-            UIChildren* kids = ContainerChildren(w);
+            UIChildren* kids = PressChildren(w, x, y);
             if (kids && UIMouseArea_DispatchDrop(kids, x, y)) return 1;
             continue;
         }
@@ -340,7 +353,7 @@ void UIMouseArea_DispatchMouseDown(UIChildren* children, float x, float y, int b
         UIWidget* w = children->children[i];
         UIMouseArea* area = AsArea(w);
         if (!area) {
-            UIChildren* kids = ContainerChildren(w);
+            UIChildren* kids = PressChildren(w, x, y);
             if (kids) UIMouseArea_DispatchMouseDown(kids, x, y, button);
             continue;
         }

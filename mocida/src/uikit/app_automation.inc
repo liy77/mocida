@@ -742,3 +742,18 @@ static int Auto_TextFocused(UIChildren* c) {
 int UIApp_TextHasFocusG(void) {
     return g_currentApp && g_currentApp->window && Auto_TextFocused(g_currentApp->window->children);
 }
+
+int UIApp_FindWidgetBoundsG(const char* selector, float* x, float* y, float* w, float* h) {
+    if (!g_currentApp || !g_currentApp->window || !selector) return 0;
+    AutoSelector sel;
+    if (!Auto_ParseSelector(selector, &sel, NULL)) return 0;
+    AutoNode* n = Auto_Find(g_currentApp, &sel, NULL);
+    if (!n) return 0;
+    float bx, by, bw, bh;
+    Auto_Bounds(n->w, &bx, &by, &bw, &bh);
+    if (x) *x = bx;
+    if (y) *y = by;
+    if (w) *w = bw;
+    if (h) *h = bh;
+    return 1;
+}

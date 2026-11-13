@@ -239,6 +239,13 @@ static int PathAllowsRec(UIChildren* children, UIWidget* leaf, float x, float y)
     // Descend into the leaf's own branch and check deeper levels too.
     UIWidget* b = children->children[branch];
     if (b == leaf) return 0;
+    // Content scrolled or clipped out of a Scroll's viewport can't take input
+    // (it would catch clicks / hover meant for the panels around it).
+    if (b->data && b->width && b->height &&
+        strcmp(((UIWidgetBase*)b->data)->__widget_type, UI_WIDGET_SCROLL) == 0 &&
+        (x < b->x || y < b->y || x >= b->x + *b->width || y >= b->y + *b->height)) {
+        return 1;
+    }
     UIChildren* kids = WheelContainerChildren(b);
     if (!kids) return 0;
     return PathAllowsRec(kids, leaf, x, y);

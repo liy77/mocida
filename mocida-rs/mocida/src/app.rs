@@ -578,6 +578,15 @@ pub fn text_has_focus() -> bool {
     unsafe { sys::UIApp_TextHasFocusG() != 0 }
 }
 
+/// Window-space box `(x, y, w, h)` of the first visible widget matching an
+/// automation selector (`tip:"Add node"`, `"Run"`, `~"Assets"`), or `None`.
+pub fn find_widget_bounds(selector: &str) -> Option<(f32, f32, f32, f32)> {
+    let c = std::ffi::CString::new(selector).ok()?;
+    let (mut x, mut y, mut w, mut h) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    let found = unsafe { sys::UIApp_FindWidgetBoundsG(c.as_ptr(), &mut x, &mut y, &mut w, &mut h) };
+    (found != 0).then_some((x, y, w, h))
+}
+
 /// Minimizes the current app's window to the taskbar.
 pub fn window_minimize() {
     unsafe { sys::UIApp_MinimizeG() };

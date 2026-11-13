@@ -667,15 +667,6 @@ pub fn build_view_with(view: &View, components: &Registry) -> Result<(Children, 
     build_view_seeded(view, components, &HashMap::new())
 }
 
-/// Like [`build_view_with`] but seeds each signal's initial value from `seed`
-/// (`name → value`), overriding the `signal(...)` default. This is what makes a
-/// **reactive rebuild** preserve live state: snapshot the old [`Reactive`] via
-/// [`Reactive::values`], then rebuild with that snapshot as the seed.
-///
-/// It also subscribes every *structural* signal (one referenced by an `if`
-/// condition or `for` iterator) to the returned [`Reactive`]'s dirty flag, so a
-/// host loop can cheaply detect when a screen-switch / list change needs a
-/// rebuild — without rebuilding on every keystroke into a text input.
 thread_local! {
     /// Scrolls built by the last (outermost) build, keyed by source span.
     static SCROLLS_BUILT: RefCell<Vec<(String, usize)>> = RefCell::new(Vec::new());
@@ -696,6 +687,15 @@ fn previous_scroll_offset(key: &str) -> Option<(f32, f32)> {
     }
 }
 
+/// Like [`build_view_with`] but seeds each signal's initial value from `seed`
+/// (`name → value`), overriding the `signal(...)` default. This is what makes a
+/// **reactive rebuild** preserve live state: snapshot the old [`Reactive`] via
+/// [`Reactive::values`], then rebuild with that snapshot as the seed.
+///
+/// It also subscribes every *structural* signal (one referenced by an `if`
+/// condition or `for` iterator) to the returned [`Reactive`]'s dirty flag, so a
+/// host loop can cheaply detect when a screen-switch / list change needs a
+/// rebuild — without rebuilding on every keystroke into a text input.
 pub fn build_view_seeded(
     view: &View,
     components: &Registry,
