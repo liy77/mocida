@@ -714,7 +714,13 @@ UICanvas* UICanvas_DrawText(UICanvas* canvas, const char* text, float x, float y
     if (!canvas || !text || !*text || !fontFamily || size <= 0.0f) return canvas;
     SDL_Renderer* r = UICanvas_GetRenderer(canvas);
     if (!r) return canvas;
-    TTF_Font* font = CanvasGetFont(fontFamily, size);
+    /* Rasterize at the display's pixel density (and the current transform's
+     * scale) and draw back at logical size, so text is as sharp as UIText on
+     * Retina instead of a 1x bitmap stretched 2x. */
+    const float scale = MatrixScale(canvas);
+    const float density = SDL_max(1.0f, UIWindow__DrawDensity());
+    const float px = roundf(size * scale * density * 2.0f) / 2.0f;
+    TTF_Font* font = CanvasGetFont(fontFamily, px);
     if (!font) return canvas;
     const UIColor c = CurState(canvas)->fillColor;
     const SDL_Color sc = {
@@ -726,7 +732,10 @@ UICanvas* UICanvas_DrawText(UICanvas* canvas, const char* text, float x, float y
     if (!e) return canvas;
     float x0, y0;
     TransformPoint(canvas, x, y, &x0, &y0);
-    SDL_FRect dst = { x0, y0, e->w, e->h };
+    /* Snap to device pixels: a half-pixel offset blurs the glyphs. */
+    x0 = roundf(x0 * density) / density;
+    y0 = roundf(y0 * density) / density;
+    SDL_FRect dst = { x0, y0, e->w / density, e->h / density };
     SDL_RenderTexture(r, e->tex, NULL, &dst);
     return canvas;
 }

@@ -4280,8 +4280,26 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
         prop_string_value(ctx, el, "clickXSignal").and_then(|n| ctx.signal(&n).cloned());
     let click_y_sig =
         prop_string_value(ctx, el, "clickYSignal").and_then(|n| ctx.signal(&n).cloned());
-    if click_x_sig.is_some() || click_y_sig.is_some() {
+    // `pressedSignal: "name"` holds 1 while the button is down on this area and
+    // 0 after it's released — with clickX/Y (press point) and dragX/Y (moved
+    // so far) a host can run press / drag / release tools (scene gizmos). Each
+    // event has one callback slot, so it shares the MouseDown handler below and
+    // every MouseUp handler.
+    let pressed_sig = prop_string_value(ctx, el, "pressedSignal").and_then(|n| ctx.signal(&n).cloned());
+    let release = {
+        let p = pressed_sig.clone();
+        move || {
+            if let Some(s) = &p {
+                let _ = s.borrow_mut().set(0);
+            }
+        }
+    };
+    if click_x_sig.is_some() || click_y_sig.is_some() || pressed_sig.is_some() {
+        let pressed = pressed_sig.clone();
         area = area.on(MouseAreaEvent::MouseDown, move |ev| {
+            if let Some(s) = &pressed {
+                let _ = s.borrow_mut().set(1);
+            }
             if let Some(s) = &click_x_sig {
                 let _ = s.borrow_mut().set(ev.x.round() as i32);
             }
@@ -4374,6 +4392,7 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
     let mut rc_handler = handler_apply_closure(ctx, el, "onRightClick");
     let has_right = rc_handler.is_some() || rc_x_sig.is_some() || rc_y_sig.is_some();
 
+    let mut up_taken = false;
     for (prop, ev) in EVENTS {
         // MouseUp is handled below when an onRightClick is present (so the two
         // can share the single slot); skip the plain registration here.
@@ -4381,7 +4400,16 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
             continue;
         }
         if let Some(mut f) = handler_apply_closure(ctx, el, prop) {
-            area = area.on(*ev, move |_| f());
+            if *ev == MouseAreaEvent::MouseUp {
+                let release = release.clone();
+                area = area.on(*ev, move |_| {
+                    release();
+                    f()
+                });
+                up_taken = true;
+            } else {
+                area = area.on(*ev, move |_| f());
+            }
         }
     }
 
@@ -4390,7 +4418,10 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
         let mut up = handler_apply_closure(ctx, el, "onClick")
             .or_else(|| handler_apply_closure(ctx, el, "onRelease"))
             .or_else(|| handler_apply_closure(ctx, el, "onMouseUp"));
+        let release = release.clone();
+        up_taken = true;
         area = area.on(MouseAreaEvent::MouseUp, move |ev| {
+            release();
             if ev.button == 3 {
                 if let Some(s) = &rc_x_sig {
                     let _ = s.borrow_mut().set(ev.x.round() as i32);
@@ -4405,6 +4436,15 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
                 f();
             }
         });
+    }
+    if pressed_sig.is_some() && !up_taken {
+        let release = release.clone();
+        area = area.on(MouseAreaEvent::MouseUp, move |_| release());
+    }
+    // A drag released outside the area may not deliver MouseUp here; its
+    // DragEnd does (unless the slot belongs to drag-and-drop).
+    if pressed_sig.is_some() && prop_string_value(ctx, el, "dragData").is_none() && find_prop(el, "onDragEnd").is_none() {
+        area = area.on(MouseAreaEvent::DragEnd, move |_| release());
     }
     // `hoverBackground:` — recolor the visible card on hover (the MouseArea
     // itself is invisible; the wrapping Rectangle is the card). We grab the
