@@ -127,12 +127,14 @@ static void GetDeviceSize(const UIDeviceSimulatorState* state, int* w, int* h) {
 static void GetSafeArea(const UIDeviceSimulatorState* state, UIScreenInsets* out) {
     if (!state || !out) return;
     const UIDeviceProfile* p = &state->profile;
-    // Landscape assumes a 90° clockwise rotation from portrait.
+    // Landscape is the portrait device turned 90° clockwise (as the frame is
+    // drawn): its top edge (notch / island) ends up on the right and the home
+    // bar on the left.
     if (state->orientation == UI_DEVICE_ORIENTATION_LANDSCAPE) {
-        out->top    = p->safeRight;
-        out->bottom = p->safeLeft;
-        out->left   = p->safeTop;
-        out->right  = p->safeBottom;
+        out->top    = p->safeLeft;
+        out->right  = p->safeTop;
+        out->bottom = p->safeRight;
+        out->left   = p->safeBottom;
     } else {
         out->top    = p->safeTop;
         out->bottom = p->safeBottom;
