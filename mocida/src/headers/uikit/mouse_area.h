@@ -115,6 +115,13 @@ struct UIMouseArea {
     void* onDragStartUd;
     void* onDragUd;
     void* onDragEndUd;
+
+    /**
+     * When != 0, a press inside this area first goes to mouse areas in the
+     * widgets laid out before it in the same container (the content it
+     * covers), so a button nested in a clickable row gets its own clicks.
+     */
+    int nestedFirst;
 };
 
 /**
@@ -127,6 +134,7 @@ UIMouseArea* UIMouseArea_Create(void);
 UIMouseArea* UIMouseArea_SetDraggable(UIMouseArea* area, int draggable);
 UIMouseArea* UIMouseArea_SetEnabled  (UIMouseArea* area, int enabled);
 UIMouseArea* UIMouseArea_SetCursor   (UIMouseArea* area, UICursor cursor);
+UIMouseArea* UIMouseArea_SetNestedFirst(UIMouseArea* area, int nestedFirst);
 
 /**
  * Sets the widget that moves together with the area while dragging.

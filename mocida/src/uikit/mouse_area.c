@@ -114,6 +114,12 @@ UIMouseArea* UIMouseArea_SetEnabled(UIMouseArea* area, int enabled) {
     return area;
 }
 
+UIMouseArea* UIMouseArea_SetNestedFirst(UIMouseArea* area, int nestedFirst) {
+    if (!area) return area;
+    area->nestedFirst = nestedFirst ? 1 : 0;
+    return area;
+}
+
 UIMouseArea* UIMouseArea_SetDragTarget(UIMouseArea* area, UIWidget* target) {
     if (!area) return area;
     area->dragTarget = target;
@@ -345,8 +351,12 @@ static int TraceInput(void) {
     return on;
 }
 
-void UIMouseArea_DispatchMouseDown(UIChildren* children, float x, float y, int button) {
-    if (!children) return;
+// Returns 1 when some area captured the press. `covered` = the search is in
+// the content under a nestedFirst area that already passed the occlusion test
+// (that area itself is what covers these, so they don't re-test it).
+static int DispatchDown(UIChildren* children, float x, float y, int button, int covered) {
+    if (!children) return 0;
+    int captured = 0;
 
     // Walk back-to-front (highest z first) so the topmost area wins.
     for (int i = children->count - 1; i >= 0; i--) {
@@ -354,7 +364,7 @@ void UIMouseArea_DispatchMouseDown(UIChildren* children, float x, float y, int b
         UIMouseArea* area = AsArea(w);
         if (!area) {
             UIChildren* kids = PressChildren(w, x, y);
-            if (kids) UIMouseArea_DispatchMouseDown(kids, x, y, button);
+            if (kids && DispatchDown(kids, x, y, button, covered)) captured = 1;
             continue;
         }
         if (TraceInput()) {
@@ -365,7 +375,14 @@ void UIMouseArea_DispatchMouseDown(UIChildren* children, float x, float y, int b
         }
         if (!area->enabled) continue;
 
-        if (InsideWidget(w, x, y) && UIWidget_EventOcclusionAllows(w)) {
+        if (InsideWidget(w, x, y) && (covered || UIWidget_EventOcclusionAllows(w))) {
+            // A nested area in the content this one covers takes the press.
+            if (area->nestedFirst) {
+                for (int j = i - 1; j >= 0; j--) {
+                    UIChildren* kids = PressChildren(children->children[j], x, y);
+                    if (kids && DispatchDown(kids, x, y, button, 1)) return 1;
+                }
+            }
             area->pressed = 1;
             area->lastMouseX = x;
             area->lastMouseY = y;
@@ -391,9 +408,14 @@ void UIMouseArea_DispatchMouseDown(UIChildren* children, float x, float y, int b
                 area->lastClickY      = y;
                 area->lastClickButton = button;
             }
-            return; // capture - don't propagate to widgets below
+            return 1; // capture - don't propagate to widgets below
         }
     }
+    return captured;
+}
+
+void UIMouseArea_DispatchMouseDown(UIChildren* children, float x, float y, int button) {
+    DispatchDown(children, x, y, button, 0);
 }
 
 void UIMouseArea_DispatchMouseUp(UIChildren* children, float x, float y, int button) {

@@ -4208,6 +4208,9 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
     // top (it sits AFTER the content in the rect's vertical flow, so a negative
     // top margin of the content height returns it to the origin, covering it).
     let mut area = MouseArea::new()?;
+    if !el.children.is_empty() {
+        area = area.nested_first(true);
+    }
     if let Some(c) = style::enum_member(el, "cursor") {
         area = area.cursor(cursor_from(&c));
     }

@@ -139,6 +139,13 @@ impl MouseArea {
         self
     }
 
+    /// Lets mouse areas inside the content this area covers take presses
+    /// first (a button nested in a clickable row).
+    pub fn nested_first(self, on: bool) -> Self {
+        unsafe { sys::UIMouseArea_SetNestedFirst(self.ptr, on as i32) };
+        self
+    }
+
     /// Enables or disables the area entirely.
     pub fn enabled(self, enabled: bool) -> Self {
         unsafe { sys::UIMouseArea_SetEnabled(self.ptr, enabled as i32) };
