@@ -190,6 +190,10 @@ void UIImage_SetCache(UIImage* image, int cache);
  *  to the existing texture immediately and to any future (re)load. */
 void UIImage_SetAntialiasing(UIImage* image, int on);
 
+/** Size of the image's texture in texels. Returns 0 (and leaves w/h alone)
+ *  while the image has no texture yet. */
+int UIImage_GetTextureSize(const UIImage* image, float* w, float* h);
+
 /**
  * Advances the asynchronous load of a remote (http/https) image. Called by
  * the renderer every frame while the texture is not yet ready: it kicks off

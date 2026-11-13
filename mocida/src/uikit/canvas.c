@@ -643,6 +643,34 @@ UICanvas* UICanvas_DrawImage(UICanvas* canvas, UIImage* image, float x, float y,
     return canvas;
 }
 
+UICanvas* UICanvas_DrawImageRegion(UICanvas* canvas, UIImage* image,
+                                   float sx, float sy, float sw, float sh,
+                                   float x, float y, float w, float h,
+                                   float angle, int flip) {
+    if (!canvas || !image) return canvas;
+    SDL_Renderer* r = UICanvas_GetRenderer(canvas);
+    if (!r) return canvas;
+    SDL_Texture* tex = image->__SDL_texture;
+    if (!tex) return canvas;
+    if (sw <= 0.0f || sh <= 0.0f) {
+        float tw = 0.0f, th = 0.0f;
+        SDL_GetTextureSize(tex, &tw, &th);
+        sx = 0.0f; sy = 0.0f; sw = tw; sh = th;
+    }
+    float x0, y0;
+    TransformPoint(canvas, x, y, &x0, &y0);
+    const float s = MatrixScale(canvas);
+    const SDL_FRect src = { sx, sy, sw, sh };
+    const SDL_FRect dst = { x0, y0, w * s, h * s };
+    const SDL_FlipMode mode = (SDL_FlipMode)(((flip & 1) ? SDL_FLIP_HORIZONTAL : 0) |
+                                             ((flip & 2) ? SDL_FLIP_VERTICAL : 0));
+    SDL_SetTextureAlphaModFloat(tex, SDL_clamp(Alpha(canvas), 0.0f, 1.0f));
+    SDL_SetTextureBlendMode(tex, CurState(canvas)->blendMode);
+    SDL_RenderTextureRotated(r, tex, &src, &dst, angle, NULL, mode);
+    SDL_SetTextureAlphaModFloat(tex, 1.0f);
+    return canvas;
+}
+
 /* Cached texture for (font, text, color) — rasterised once, reused every frame. */
 static UICanvasTextEntry* TextEntry(UICanvas* c, SDL_Renderer* r, TTF_Font* font,
                                     const char* text, SDL_Color sc) {

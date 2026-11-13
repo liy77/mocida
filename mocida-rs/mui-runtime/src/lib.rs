@@ -1579,6 +1579,9 @@ fn build_element(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wid
             "Spinner" => build_spinner(ctx, el, layout)?,
             "Image" => build_image(ctx, el, layout)?,
             "Video" => build_video(ctx, el, layout)?,
+            "Canvas" if find_prop(el, "tabs").is_none() && id_name(el).is_some() => {
+                build_painted_canvas(ctx, el, layout)?
+            }
             "Canvas" | "TabBarCanvas" => build_canvas(ctx, el, layout)?,
             "WebView" | "Webview" => build_webview(ctx, el, layout)?,
             "Dialog" => build_dialog(ctx, el, layout)?,
@@ -3927,6 +3930,40 @@ fn build_canvas(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
     Ok(apply_anchor(widget, style::anchor(el)))
 }
 
+type Painter = Rc<RefCell<dyn FnMut(&mut mocida::canvas::CanvasDraw)>>;
+
+thread_local! {
+    static PAINTERS: RefCell<HashMap<String, Painter>> = RefCell::new(HashMap::new());
+}
+
+/// Sets what `Canvas(id: "<id>", width:, height:)` draws: `painter` runs every
+/// frame with the canvas's local coordinates (0,0 = its top-left, clipped to
+/// its bounds). It outlives rebuilds, so register it once; a later call
+/// replaces it.
+pub fn set_canvas_painter(id: &str, painter: impl FnMut(&mut mocida::canvas::CanvasDraw) + 'static) {
+    let p: Painter = Rc::new(RefCell::new(painter));
+    PAINTERS.with(|m| m.borrow_mut().insert(id.to_string(), p));
+}
+
+/// A `Canvas` with an `id:` and no `tabs:` — painted by the host through
+/// [`set_canvas_painter`].
+fn build_painted_canvas(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
+    let w = dim_prop(ctx, el, "width").unwrap_or(400.0);
+    let h = dim_prop(ctx, el, "height").unwrap_or(300.0);
+    let id = id_name(el).unwrap_or_default();
+    let canvas = Canvas::new(w, h)?.on_frame(move |d| {
+        let painter = PAINTERS.with(|m| m.borrow().get(&id).cloned());
+        if let Some(p) = painter {
+            if let Ok(mut f) = p.try_borrow_mut() {
+                (&mut *f)(d);
+            }
+        }
+    });
+    let (x, y) = place(el, layout, w, h);
+    let widget = canvas.into_widget_sized(w, h)?.position(x, y);
+    Ok(apply_anchor(widget, style::anchor(el)))
+}
+
 /// `WebView("https://…", width:, height:, radius:, borderColor:, borderWidth:)`
 /// — an embedded browser surface (mocida's `UIWebView`, WebView2 on Windows).
 /// The positional arg (or `url:`/`src:`) is the initial URL. `radius:` rounds
@@ -4196,7 +4233,9 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
         // A resize handle gets the matching resize cursor automatically (↔ for a
         // horizontal/width drag, ↕ for a vertical/height drag) — like a browser —
         // unless an explicit `cursor:` already set a non-default one.
-        if drag_x_sig.is_some() {
+        if find_prop(el, "cursor").is_some() {
+            // Explicit cursor (applied above) wins, e.g. `move` for a pan surface.
+        } else if drag_x_sig.is_some() {
             area = area.cursor(Cursor::EwResize);
         } else {
             area = area.cursor(Cursor::NsResize);
@@ -4724,6 +4763,8 @@ fn cursor_from(name: &str) -> Cursor {
         "text" => Cursor::Text,
         "ewresize" | "colresize" | "ew-resize" | "horizontalresize" => Cursor::EwResize,
         "nsresize" | "rowresize" | "ns-resize" | "verticalresize" => Cursor::NsResize,
+        "move" | "grab" => Cursor::Move,
+        "crosshair" => Cursor::Crosshair,
         _ => Cursor::Default,
     }
 }

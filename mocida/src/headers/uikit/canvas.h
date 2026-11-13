@@ -54,6 +54,14 @@ UICanvas* UICanvas_StrokeCircle(UICanvas* canvas, float x, float y, float r);
 
 UICanvas* UICanvas_DrawImage(UICanvas* canvas, UIImage* image, float x, float y,
                              float w, float h);
+/* Draws the texel rect (sx, sy, sw, sh) of `image` into (x, y, w, h), rotated
+ * by `angle` degrees about the rect's center and mirrored by `flip`
+ * (1 = horizontal, 2 = vertical, 3 = both). sw/sh <= 0 means the whole
+ * texture. Draws nothing until the image has a texture. */
+UICanvas* UICanvas_DrawImageRegion(UICanvas* canvas, UIImage* image,
+                                   float sx, float sy, float sw, float sh,
+                                   float x, float y, float w, float h,
+                                   float angle, int flip);
 UICanvas* UICanvas_DrawText (UICanvas* canvas, const char* text, float x, float y,
                              const char* fontFamily, float size);
 

@@ -235,6 +235,27 @@ impl CanvasDraw {
         self
     }
 
+    /// Draw the texel rect `src` (x, y, w, h; zero size = whole texture) of
+    /// `img` into `dst`, rotated by `degrees` about `dst`'s center and
+    /// mirrored per `flip_h` / `flip_v`. Sprite-sheet frames use `src`.
+    pub fn draw_image_region(
+        &mut self,
+        img: &crate::image::Image,
+        src: (f32, f32, f32, f32),
+        dst: (f32, f32, f32, f32),
+        degrees: f32,
+        flip_h: bool,
+        flip_v: bool,
+    ) -> &mut Self {
+        let flip = flip_h as i32 | (flip_v as i32) << 1;
+        unsafe {
+            sys::UICanvas_DrawImageRegion(
+                self.ptr, img.as_ptr(), src.0, src.1, src.2, src.3, dst.0, dst.1, dst.2, dst.3, degrees, flip,
+            )
+        };
+        self
+    }
+
     /// The live `SDL_Renderer*` this canvas paints into. Valid only during the
     /// frame callback; pass it to [`Image::from_memory`](crate::image::Image::from_memory)
     /// to decode a texture eagerly for [`draw_image`](CanvasDraw::draw_image).

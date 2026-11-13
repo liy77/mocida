@@ -124,6 +124,15 @@ void UIImage_SetAntialiasing(UIImage* image, int on) {
             image->antialiasing ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
 }
 
+int UIImage_GetTextureSize(const UIImage* image, float* w, float* h) {
+    if (!image || !image->__SDL_texture) return 0;
+    float tw = 0.0f, th = 0.0f;
+    if (!SDL_GetTextureSize(image->__SDL_texture, &tw, &th)) return 0;
+    if (w) *w = tw;
+    if (h) *h = th;
+    return 1;
+}
+
 /* --- process-wide URL -> bytes cache (FIFO eviction past a size cap) --- */
 
 typedef struct RemoteCacheNode {

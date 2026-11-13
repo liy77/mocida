@@ -3777,6 +3777,9 @@ static void RenderWidget_Canvas(UIWindow* window, UIWidget* el,
     UICanvas* canvas = (UICanvas*)base;
     if (!el->width || !el->height) return;
     if (op <= 0.0f) return;
+    // The widget may be resized after creation (reactive width/height).
+    canvas->width = *el->width;
+    canvas->height = *el->height;
 
     FlushRenderBatch(window->sdlRenderer);
 

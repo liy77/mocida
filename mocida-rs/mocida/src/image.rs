@@ -129,6 +129,13 @@ impl Image {
         self
     }
 
+    /// Size of the decoded texture in texels, once it exists (always for
+    /// [`Image::from_memory`]).
+    pub fn texture_size(&self) -> Option<(f32, f32)> {
+        let (mut w, mut h) = (0.0f32, 0.0f32);
+        (unsafe { sys::UIImage_GetTextureSize(self.ptr, &mut w, &mut h) } != 0).then_some((w, h))
+    }
+
     /// Borrow the raw `UIImage*`.
     #[inline]
     pub fn as_ptr(&self) -> *mut sys::UIImage {
