@@ -169,6 +169,12 @@ rotates (Ctrl+Shift+R), takes screenshots (Ctrl+S) and scales (Ctrl+0 fits the
 display).
 From Rust: `Runtime::enable_device_frames(device_frames::lookup("iphone-16")…)`.
 
+`.mui` code can ask which system it runs on (or the one being simulated) to
+show or hide parts of the UI: `Platform.os` (`macos`, `windows`, `linux`, `ios`,
+`android`, or a console), `Platform.device`, and `Platform.isMobile`,
+`isTouch`, `isDesktop`, `isConsole`, `isIOS`, `isAndroid`… — e.g.
+`if Platform.isTouch { TouchHint() }`.
+
 Frames come from [device-frames-media](https://github.com/jonnyjackson26/device-frames-media)
 (iPhone 6s–17, iPad, Pixel, Galaxy). Only their measurements are in this repo
 (`mui-runtime/src/device_frame_catalog.rs`, regenerated with

@@ -69,6 +69,17 @@ struct Sim {
 /// A catalog device (`iphone-17-pro`, `pixel-9-pro`…), downloading its frame
 /// the first time, or one of the placeholder profiles (`iphone15`…).
 fn sim_for(name: &str, color: Option<&str>, legacy_frame: Option<&str>) -> Result<Sim, String> {
+    let sim = sim_device(name, color, legacy_frame)?;
+    // `Platform.*` in the .mui reports the simulated device.
+    let id = name.to_lowercase();
+    let os = device_frames::lookup(name).map_or(if id.starts_with("galaxy") { "android" } else { "ios" }, |d| d.os);
+    std::env::set_var("MOCIDA_PLATFORM", os);
+    std::env::set_var("MOCIDA_PLATFORM_DEVICE", device_frames::lookup(name).map_or(id.as_str(), |d| d.id));
+    std::env::set_var("MOCIDA_PLATFORM_TOUCH", "1");
+    Ok(sim)
+}
+
+fn sim_device(name: &str, color: Option<&str>, legacy_frame: Option<&str>) -> Result<Sim, String> {
     if let Some(dev) = device_frames::lookup(name) {
         let v = dev.variant(color);
         println!("mui-dev: preparing the {} ({}) frame…", dev.name, v.name);
@@ -355,7 +366,11 @@ fn apply_sim_window_size(
     if std::env::var_os("MOCIDA_CONTROL").is_some() {
         println!("mui-dev: simulator window {w}×{h}");
     }
+    // Loosen the limits first: a new minimum taller than the old maximum
+    // (turning landscape → portrait) is refused otherwise.
     unsafe {
+        mocida::sys::UIApp_SetMinSize(app_ptr, 1, 1);
+        mocida::sys::UIApp_SetMaxSize(app_ptr, 100_000, 100_000);
         mocida::sys::UIApp_SetWindowSize(app_ptr, w, h);
         mocida::sys::UIApp_SetMinSize(app_ptr, w, h);
         mocida::sys::UIApp_SetMaxSize(app_ptr, w, h);
@@ -653,6 +668,13 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
                             Ok(sim) => {
                                 println!("mui-dev: simulating {}", sim.label);
                                 *sim_tick.borrow_mut() = Some(sim);
+                                // Rebuild so `Platform.*` checks see the new device.
+                                let seed = reactive_slot.borrow().as_ref().map(|r| r.values()).unwrap_or_default();
+                                let src = source_cell.borrow().clone();
+                                if let Ok(built) = build_seeded(&src, watch_path.to_str(), &seed) {
+                                    unsafe { mocida::sys::UIApp_SetChildren(app_ptr, built.children.into_raw()) };
+                                    *reactive_slot.borrow_mut() = Some(built.reactive);
+                                }
                             }
                             Err(e) => eprintln!("mui-dev: {e}"),
                         }

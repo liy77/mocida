@@ -78,6 +78,7 @@ pub fn build_reactive_env(reactive: &Reactive) -> ReactiveEnv {
 pub mod device_profiles;
 pub mod device_simulator;
 pub mod device_frames;
+pub mod platform;
 mod device_frame_catalog;
 mod highlight;
 mod layout;
@@ -5950,6 +5951,7 @@ fn screen_member(base: &Expr, field: &str) -> Option<String> {
         ("Screen", "safeRight") => {
             Some(unsafe { mocida::sys::UIScreen_GetSafeArea().right }.to_string())
         }
+        ("Platform", f) => crate::platform::member(f),
         ("Window", "title") | ("App", "title") => Some(unsafe {
             let p = mocida::sys::UIApp_GetTitleG();
             if p.is_null() {
@@ -6658,6 +6660,12 @@ fn resolve_operand_env(s: &str, env: &Env) -> String {
     }
     if s.parse::<f64>().is_ok() {
         return s.to_string();
+    }
+    // `Platform.isMobile`, `Platform.os` (the system, or the one simulated).
+    if let Some(field) = s.strip_prefix("Platform.") {
+        if let Some(v) = crate::platform::member(field) {
+            return v;
+        }
     }
     env.get(s).map(str::to_string).unwrap_or_default()
 }

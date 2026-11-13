@@ -307,6 +307,8 @@ static void Auto_Mouse(UIApp* app, Uint32 type, float x, float y, Uint8 button, 
         e.button.down = (type == SDL_EVENT_MOUSE_BUTTON_DOWN);
         e.button.clicks = clicks;
     }
+    // Like a real click: the polled mouse state (UIInput) sees it too.
+    UIInput__OnEvent(&e);
     HandleEvent(app, &e);
 }
 
