@@ -83,9 +83,42 @@ void UIGrid_Destroy(UIGrid* g) {
 // UIScroll
 // =====================================================================
 
+// Live scrolls, so a UI runtime can carry a scroll offset from an old tree to
+// its rebuilt copy without touching freed memory.
+static UIScroll** g_liveScrolls;
+static int g_liveCount, g_liveCap;
+
+static void LiveScrollAdd(UIScroll* s) {
+    if (g_liveCount == g_liveCap) {
+        int cap = g_liveCap ? g_liveCap * 2 : 32;
+        UIScroll** grown = (UIScroll**)realloc(g_liveScrolls, sizeof(UIScroll*) * (size_t)cap);
+        if (!grown) return;
+        g_liveScrolls = grown;
+        g_liveCap = cap;
+    }
+    g_liveScrolls[g_liveCount++] = s;
+}
+
+static void LiveScrollRemove(UIScroll* s) {
+    for (int i = 0; i < g_liveCount; i++) {
+        if (g_liveScrolls[i] == s) {
+            g_liveScrolls[i] = g_liveScrolls[--g_liveCount];
+            return;
+        }
+    }
+}
+
+int UIScroll_IsLive(const UIScroll* s) {
+    for (int i = 0; s && i < g_liveCount; i++) {
+        if (g_liveScrolls[i] == s) return 1;
+    }
+    return 0;
+}
+
 UIScroll* UIScroll_Create(void) {
     UIScroll* s = (UIScroll*)calloc(1, sizeof(UIScroll));
     if (!s) return NULL;
+    LiveScrollAdd(s);
     s->__widget_type = UI_WIDGET_SCROLL;
     s->allowVertical = 1;
     s->allowHorizontal = 1;
@@ -158,6 +191,7 @@ void UIScroll_InvalidateContentSize(UIScroll* s) {
 
 void UIScroll_Destroy(UIScroll* s) {
     if (!s) return;
+    LiveScrollRemove(s);
     if (s->content) UIWidget_Destroy(s->content);
     if (s->background) UIRectangle_Destroy((UIRectangle*)s->background);
     free(s);

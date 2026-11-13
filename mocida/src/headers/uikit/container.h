@@ -160,6 +160,10 @@ void UIScroll_InvalidateContentSize(UIScroll* s);
 
 void UIScroll_Destroy(UIScroll* s);
 
+/** 1 while `s` exists (created and not yet destroyed). Lets a UI runtime
+ *  carry a scroll offset from an old tree to its rebuilt copy safely. */
+int UIScroll_IsLive(const UIScroll* s);
+
 // ---------------------------------------------------------------------
 // UIListView / UIGridView - sugar that wires Scroll + Grid together
 // ---------------------------------------------------------------------

@@ -676,7 +676,52 @@ pub fn build_view_with(view: &View, components: &Registry) -> Result<(Children, 
 /// condition or `for` iterator) to the returned [`Reactive`]'s dirty flag, so a
 /// host loop can cheaply detect when a screen-switch / list change needs a
 /// rebuild — without rebuilding on every keystroke into a text input.
+thread_local! {
+    /// Scrolls built by the last (outermost) build, keyed by source span.
+    static SCROLLS_BUILT: RefCell<Vec<(String, usize)>> = RefCell::new(Vec::new());
+    /// The previous tree's scrolls while a rebuild runs (offsets to carry over).
+    static SCROLLS_PREV: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
+    static BUILD_DEPTH: std::cell::Cell<u32> = std::cell::Cell::new(0);
+}
+
+/// Scroll offset the previous tree had for the Scroll at `key`, if that
+/// widget still exists.
+fn previous_scroll_offset(key: &str) -> Option<(f32, f32)> {
+    let p = SCROLLS_PREV.with(|m| m.borrow().get(key).copied())? as *mut mocida::sys::UIScroll;
+    unsafe {
+        if mocida::sys::UIScroll_IsLive(p) == 0 {
+            return None;
+        }
+        Some(((*p).scrollX, (*p).scrollY))
+    }
+}
+
 pub fn build_view_seeded(
+    view: &View,
+    components: &Registry,
+    seed: &HashMap<String, String>,
+) -> Result<(Children, Reactive)> {
+    // A structural rebuild recreates every Scroll; the outermost build carries
+    // each one's offset over (matched by source position) so lists don't jump
+    // back to the top whenever their content changes.
+    let outer = BUILD_DEPTH.with(|d| {
+        let depth = d.get();
+        d.set(depth + 1);
+        depth == 0
+    });
+    if outer {
+        let built = SCROLLS_BUILT.with(|v| std::mem::take(&mut *v.borrow_mut()));
+        SCROLLS_PREV.with(|m| *m.borrow_mut() = built.into_iter().collect());
+    }
+    let result = build_view_seeded_inner(view, components, seed);
+    BUILD_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    if outer {
+        SCROLLS_PREV.with(|m| m.borrow_mut().clear());
+    }
+    result
+}
+
+fn build_view_seeded_inner(
     view: &View,
     components: &Registry,
     seed: &HashMap<String, String>,
@@ -1381,14 +1426,16 @@ fn build_for(
         }
         for a in &aux { ctx.env.vars.remove(a); }
         ctx.parent_horizontal = saved_orient;
-        let gap = 8.0;
+        // Match UIGridView's own gap (10) and padding (12 per side), so the
+        // box fits the cells exactly (no inner scrollbar, no clipped row).
+        let (gap, pad) = (10.0, 12.0);
         let rows = ((n + cols - 1) / cols).max(1);
         // Size to the ITEMS, not the full column count, so a half-empty last
         // row (or a grid with fewer items than columns) doesn't reserve a wide
         // band of empty cells — keeps the grid compact + centerable.
         let eff_cols = cols.min(n.max(1));
-        let w = cell_w * eff_cols as f32 + gap * eff_cols as f32;
-        let h = cell_h * rows as f32 + gap * rows as f32;
+        let w = cell_w * eff_cols as f32 + gap * (eff_cols - 1) as f32 + pad * 2.0;
+        let h = cell_h * rows as f32 + gap * (rows - 1) as f32 + pad * 2.0;
         let (x, y) = layout.next_sized(w, h);
         return Ok(Some(gv.into_widget_sized(w, h)?.position(x, y)));
     }
@@ -4106,9 +4153,20 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
     for node in &el.children {
         let before_h = child_layout.content_height();
         if let Some(widget) = build_node(ctx, node, &mut child_layout)? {
+            // An `if` / `for` group builds its own wrapper without advancing
+            // this layout; count its real box so the overlay lines up.
+            let (ww, wh) = unsafe {
+                let p = widget.as_ptr();
+                if p.is_null() {
+                    (0.0, 0.0)
+                } else {
+                    ((*p).width.as_ref().copied().unwrap_or(0.0), (*p).height.as_ref().copied().unwrap_or(0.0))
+                }
+            };
+            let advanced = (child_layout.content_height() - before_h).max(0.0);
             rect.add_child(widget);
-            content_w = content_w.max(child_layout.content_width());
-            content_h += (child_layout.content_height() - before_h).max(0.0);
+            content_w = content_w.max(child_layout.content_width()).max(ww);
+            content_h += if advanced > 0.0 { advanced } else { wh };
         }
     }
     ctx.avail_w = saved_avail.0;
@@ -4471,6 +4529,14 @@ fn build_scroll(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
     // scroll position — otherwise the fresh Scroll starts at 0 and the signal,
     // already holding the target value, never fires its subscriber again.
     let scroll_ptr = scroll.as_ptr();
+    let key = format!("{:?}", el.span);
+    if let Some((ox, oy)) = previous_scroll_offset(&key) {
+        let ox = if scrollx_signal.is_some() { 0.0 } else { ox };
+        if ox != 0.0 || oy != 0.0 {
+            unsafe { mocida::sys::UIScroll_SetScroll(scroll_ptr, ox, oy) };
+        }
+    }
+    SCROLLS_BUILT.with(|v| v.borrow_mut().push((key, scroll_ptr as usize)));
     if let Some(name) = &scrollx_signal {
         if let Some(sig) = ctx.reactive.signals.get(name) {
             let cur = sig.borrow().get() as f32;
