@@ -27,6 +27,7 @@
 //   mousedown X Y / mouseup X Y              press / release (with move X Y between: a slow drag)
 //   key [ctrl+][shift+][alt+][cmd+]NAME      e.g. key cmd+s, key Escape
 //   keydown NAME / keyup NAME                hold / release a key (UIInput state)
+//   keyevent NAME down|up                    a key event through SDL's queue
 //   text STRING                              text input (rest of the line)
 //   find SEL                                 list every match with bounds
 //   tree [~"filter"]                         list labeled visible widgets
@@ -473,6 +474,22 @@ static void Auto_Exec(AutoCtx* ctx, UIApp* app, const char* l) {
             e.wheel.y = (float)SDL_atof(after);
             Auto_Mouse(app, SDL_EVENT_MOUSE_MOTION, x, y, 0, 0);
             HandleEvent(app, &e);
+            Auto_Out(ctx, "ok");
+        }
+    } else if (!SDL_strcmp(cmd, "keyevent") && *rest) {
+        // A real key event through SDL's queue (the path keyboard input takes).
+        char name[64] = {0};
+        char state[8] = {0};
+        if (SDL_sscanf(rest, "%63s %7s", name, state) == 2) {
+            SDL_Event e;
+            SDL_zero(e);
+            const int down = !SDL_strcmp(state, "down");
+            e.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+            e.key.key = SDL_GetKeyFromName(name);
+            e.key.scancode = SDL_GetScancodeFromName(name);
+            e.key.down = down;
+            e.key.windowID = SDL_GetWindowID(app->window->sdlWindow);
+            SDL_PushEvent(&e);
             Auto_Out(ctx, "ok");
         }
     } else if ((!SDL_strcmp(cmd, "keydown") || !SDL_strcmp(cmd, "keyup")) && *rest) {
