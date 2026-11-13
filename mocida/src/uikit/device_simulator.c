@@ -3,11 +3,20 @@
 #include <uikit/window.h>
 #include <uikit/asset.h>
 #include <uikit/debug.h>
+#include <uikit/font.h>
+#include <SDL3_image/SDL_image.h>
+#include <SDL3_ttf/SDL_ttf.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 struct UIDeviceSimulatorState {
     UIDeviceProfile profile;
+    /** A screenshot was asked for: taken from the render target next frame. */
+    int shotPending;
+    /** When the screenshot flash ends (SDL ticks). */
+    Uint64 flashUntil;
     UIDeviceOrientation orientation;
     SDL_Texture* frameTexture;
     SDL_Texture* renderTarget;
@@ -26,6 +35,78 @@ struct UIDeviceSimulatorState {
 static float WindowDensity(UIWindow* window) {
     float d = (window && window->sdlWindow) ? SDL_GetWindowPixelDensity(window->sdlWindow) : 1.0f;
     return SDL_clamp(d > 0.0f ? d : 1.0f, 1.0f, 3.0f);
+}
+
+// ── Toolbar ──────────────────────────────────────────────────────────────
+// A bar above the device (like the iOS Simulator's title bar): the device
+// name, orientation and scale on the left; Screenshot, Rotate, Restart and
+// Zoom on the right. It outlives a re-enable (a host re-enables the
+// simulator on every rotate / scale), so its settings are kept here.
+#define SIM_TOOLBAR_H 44
+
+static int g_toolbar = 0;
+static UIDeviceSimulatorActionFn g_actionFn = NULL;
+static void* g_actionUd = NULL;
+static int g_hover = 0, g_pressed = 0;
+static char g_lastShot[1024];
+
+typedef struct {
+    int action;
+    const char* svg;
+} SimButton;
+
+#define SIM_SVG(body) "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='24' height='24'>" body "</svg>"
+static const SimButton kSimButtons[] = {
+    { UI_SIM_ACTION_SCREENSHOT, SIM_SVG(
+        "<path fill='none' stroke='#e5e5ea' stroke-width='1.8' stroke-linejoin='round' "
+        "d='M4 8h3l1.6-2.4h6.8L17 8h3v11H4z'/><circle cx='12' cy='13.2' r='3.4' fill='none' stroke='#e5e5ea' stroke-width='1.8'/>") },
+    { UI_SIM_ACTION_ROTATE, SIM_SVG(
+        "<rect x='8' y='4' width='8' height='14' rx='1.8' fill='none' stroke='#e5e5ea' stroke-width='1.8' transform='rotate(-30 12 11)'/>"
+        "<path fill='none' stroke='#e5e5ea' stroke-width='1.8' stroke-linecap='round' d='M4.5 15.5a8.5 8.5 0 0 0 7 5'/>"
+        "<path fill='none' stroke='#e5e5ea' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M9.5 18.6l2 1.9-2.4 1.4'/>") },
+    { UI_SIM_ACTION_RESTART, SIM_SVG(
+        "<path fill='none' stroke='#e5e5ea' stroke-width='1.8' stroke-linecap='round' d='M19 12a7 7 0 1 1-2.05-4.95'/>"
+        "<path fill='none' stroke='#e5e5ea' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M17.5 3.8v3.6h-3.6'/>") },
+    { UI_SIM_ACTION_ZOOM, SIM_SVG(
+        "<path fill='none' stroke='#e5e5ea' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' "
+        "d='M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5'/>") },
+};
+#define SIM_BUTTONS ((int)(sizeof(kSimButtons) / sizeof(kSimButtons[0])))
+#define SIM_BTN_W 34
+#define SIM_BTN_H 30
+
+static SDL_Renderer* g_iconRenderer = NULL;
+static SDL_Texture* g_icons[SIM_BUTTONS];
+static SDL_Texture* g_labelTex = NULL;
+static char g_labelText[256];
+
+void UIApp_SetDeviceSimulatorToolbar(UIApp* app, int show, UIDeviceSimulatorActionFn fn, void* userdata) {
+    (void)app;
+    g_toolbar = show ? 1 : 0;
+    g_actionFn = fn;
+    g_actionUd = userdata;
+}
+
+int UIApp_DeviceSimulatorToolbarHeight(void) {
+    return g_toolbar ? SIM_TOOLBAR_H : 0;
+}
+
+void UIApp_DeviceSimulatorHostDisplaySize(UIApp* app, int* w, int* h) {
+    SDL_Rect r = {0};
+    SDL_DisplayID id = (app && app->window && app->window->sdlWindow)
+        ? SDL_GetDisplayForWindow(app->window->sdlWindow) : SDL_GetPrimaryDisplay();
+    if (!id || !SDL_GetDisplayUsableBounds(id, &r)) SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &r);
+    if (w) *w = r.w;
+    if (h) *h = r.h;
+}
+
+void UIApp_DeviceSimulatorTakeScreenshot(UIApp* app) {
+    UIDeviceSimulatorState* state = (app && app->window) ? (UIDeviceSimulatorState*)app->window->__deviceSimulator : NULL;
+    if (state) state->shotPending = 1;
+}
+
+const char* UIApp_DeviceSimulatorLastScreenshot(void) {
+    return g_lastShot;
 }
 
 static UIDeviceSimulatorState* GetState(UIWindow* window) {
@@ -334,8 +415,9 @@ void UIWindow_DeviceSimulatorWindowToDevice(UIWindow* window,
     if (window && window->sdlWindow) SDL_GetWindowSize(window->sdlWindow, &rawW, &rawH);
     float hostW = (float)rawW;
     float hostH = (float)rawH;
+    const float top = (float)UIApp_DeviceSimulatorToolbarHeight();
     float cx = hostW * 0.5f;
-    float cy = hostH * 0.5f;
+    float cy = top + (hostH - top) * 0.5f;
 
     // Inverse of SDL clockwise 90° rotation: (u,v) -> (v,-u); identity for portrait.
     float fx, fy;
@@ -387,8 +469,9 @@ void UIWindow_DeviceSimulatorDeviceToWindow(UIWindow* window,
     if (window && window->sdlWindow) SDL_GetWindowSize(window->sdlWindow, &rawW, &rawH);
     float hostW = (float)rawW;
     float hostH = (float)rawH;
+    const float top = (float)UIApp_DeviceSimulatorToolbarHeight();
     float cx = hostW * 0.5f;
-    float cy = hostH * 0.5f;
+    float cy = top + (hostH - top) * 0.5f;
 
     // SDL clockwise 90° rotation: (u,v) -> (-v, u); identity for portrait.
     if (landscape) {
@@ -485,16 +568,213 @@ static void ApplyMask(SDL_Renderer* r, UIDeviceSimulatorState* state) {
     SDL_SetRenderTarget(r, prev);
 }
 
+// ── Screenshot, flash and toolbar drawing ─────────────────────────────────
+
+// Saves the device screen (the render target, before the corner mask) to the
+// Desktop (or MOCIDA_SCREENSHOT_DIR), named like the iOS Simulator's.
+static void TakeScreenshot(UIWindow* window, UIDeviceSimulatorState* state) {
+    SDL_Renderer* r = window->sdlRenderer;
+    SDL_Texture* prev = SDL_GetRenderTarget(r);
+    SDL_SetRenderTarget(r, state->renderTarget);
+    SDL_Surface* shot = SDL_RenderReadPixels(r, NULL);
+    SDL_SetRenderTarget(r, prev);
+    if (!shot) {
+        UI_WARN(UI_CAT_RENDER, "simulator screenshot failed: %s", SDL_GetError());
+        return;
+    }
+    // MOCIDA_SCREENSHOT_DIR (ending in a separator) overrides the Desktop.
+    const char* dir = SDL_getenv("MOCIDA_SCREENSHOT_DIR");
+    if (!dir || !*dir) dir = SDL_GetUserFolder(SDL_FOLDER_DESKTOP);
+    char stamp[64];
+    time_t now = time(NULL);
+    strftime(stamp, sizeof(stamp), "%Y-%m-%d at %H.%M.%S", localtime(&now));
+    snprintf(g_lastShot, sizeof(g_lastShot), "%sSimulator Screenshot - %s - %s.png",
+             dir ? dir : "", state->profile.name ? state->profile.name : "Device", stamp);
+    if (IMG_SavePNG(shot, g_lastShot)) {
+        UI_INFO(UI_CAT_RENDER, "simulator screenshot saved to %s", g_lastShot);
+        state->flashUntil = SDL_GetTicks() + 320;
+        if (g_actionFn) g_actionFn(UI_SIM_ACTION_SCREENSHOT, g_actionUd);
+    } else {
+        UI_WARN(UI_CAT_RENDER, "simulator screenshot: couldn't write %s: %s", g_lastShot, SDL_GetError());
+        g_lastShot[0] = '\0';
+    }
+    SDL_DestroySurface(shot);
+}
+
+static void DrawFlash(SDL_Renderer* r, UIDeviceSimulatorState* state, const SDL_FPoint corners[4]) {
+    const Uint64 now = SDL_GetTicks();
+    if (now >= state->flashUntil) return;
+    const float a = 0.85f * (float)(state->flashUntil - now) / 320.0f;
+    SDL_Vertex v[4];
+    for (int i = 0; i < 4; i++) {
+        v[i].position = corners[i];
+        v[i].color.r = v[i].color.g = v[i].color.b = 1.0f;
+        v[i].color.a = a;
+        v[i].tex_coord.x = v[i].tex_coord.y = 0.0f;
+    }
+    const int idx[6] = { 0, 1, 2, 0, 2, 3 };
+    SDL_RenderGeometry(r, NULL, v, 4, idx, 6);
+}
+
+static float ButtonX(int hostW, int i) {
+    return (float)(hostW - 10 - SIM_BUTTONS * SIM_BTN_W - (SIM_BUTTONS - 1) * 4 + i * (SIM_BTN_W + 4));
+}
+
+// 1-based index of the toolbar button under (x, y), 0 for none.
+static int ButtonAt(UIWindow* window, float x, float y) {
+    int hostW = 0, hostH = 0;
+    if (window && window->sdlWindow) SDL_GetWindowSize(window->sdlWindow, &hostW, &hostH);
+    const float by = (SIM_TOOLBAR_H - SIM_BTN_H) * 0.5f;
+    if (y < by || y >= by + SIM_BTN_H) return 0;
+    for (int i = 0; i < SIM_BUTTONS; i++) {
+        const float bx = ButtonX(hostW, i);
+        if (x >= bx && x < bx + SIM_BTN_W) return i + 1;
+    }
+    return 0;
+}
+
+static SDL_Texture* IconTexture(SDL_Renderer* r, int i, int px) {
+    if (g_iconRenderer != r) {
+        memset(g_icons, 0, sizeof(g_icons));
+        g_labelTex = NULL;
+        g_labelText[0] = '\0';
+        g_iconRenderer = r;
+    }
+    if (!g_icons[i]) {
+        const char* svg = kSimButtons[i].svg;
+        SDL_IOStream* io = SDL_IOFromConstMem(svg, strlen(svg));
+        SDL_Surface* surf = io ? IMG_LoadSizedSVG_IO(io, px, px) : NULL;
+        if (io) SDL_CloseIO(io);
+        if (surf) {
+            g_icons[i] = SDL_CreateTextureFromSurface(r, surf);
+            SDL_DestroySurface(surf);
+            if (g_icons[i]) SDL_SetTextureScaleMode(g_icons[i], SDL_SCALEMODE_LINEAR);
+        }
+    }
+    return g_icons[i];
+}
+
+// "iPhone 17 Pro  ·  Portrait  ·  75%", rendered at the window's density.
+static void DrawLabel(SDL_Renderer* r, UIWindow* window, UIDeviceSimulatorState* state, float maxW) {
+    char text[256];
+    snprintf(text, sizeof(text), "%s  \xC2\xB7  %s  \xC2\xB7  %d%%",
+             state->profile.name ? state->profile.name : "Device",
+             state->orientation == UI_DEVICE_ORIENTATION_LANDSCAPE ? "Landscape" : "Portrait",
+             (int)(state->hostScale * 100.0f + 0.5f));
+    const float d = SDL_clamp(SDL_GetWindowPixelDensity(window->sdlWindow), 1.0f, 3.0f);
+    if (!g_labelTex || strcmp(text, g_labelText) != 0) {
+        if (g_labelTex) SDL_DestroyTexture(g_labelTex);
+        g_labelTex = NULL;
+        snprintf(g_labelText, sizeof(g_labelText), "%s", text);
+        static TTF_Font* font = NULL;
+        static float fontD = 0.0f;
+        if (!font || fontD != d) {
+            if (font) TTF_CloseFont(font);
+            font = TTF_OpenFont(UIGetFont(NULL), 12.5f * d);
+            fontD = d;
+        }
+        if (font) {
+            const SDL_Color c = { 229, 229, 234, 255 };
+            SDL_Surface* surf = TTF_RenderText_Blended(font, text, 0, c);
+            if (surf) {
+                g_labelTex = SDL_CreateTextureFromSurface(r, surf);
+                SDL_DestroySurface(surf);
+                if (g_labelTex) SDL_SetTextureScaleMode(g_labelTex, SDL_SCALEMODE_LINEAR);
+            }
+        }
+    }
+    if (!g_labelTex) return;
+    float tw = 0.0f, th = 0.0f;
+    SDL_GetTextureSize(g_labelTex, &tw, &th);
+    tw /= d;
+    th /= d;
+    if (tw > maxW) return; // no room next to the buttons
+    SDL_FRect dst = { 14.0f, floorf((SIM_TOOLBAR_H - th) * 0.5f), tw, th };
+    SDL_RenderTexture(r, g_labelTex, NULL, &dst);
+}
+
+static void DrawToolbar(SDL_Renderer* r, UIWindow* window, UIDeviceSimulatorState* state, int hostW) {
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    SDL_FRect bar = { 0, 0, (float)hostW, SIM_TOOLBAR_H };
+    SDL_SetRenderDrawColor(r, 37, 37, 40, 255);
+    SDL_RenderFillRect(r, &bar);
+    SDL_FRect line = { 0, SIM_TOOLBAR_H - 1, (float)hostW, 1 };
+    SDL_SetRenderDrawColor(r, 58, 58, 60, 255);
+    SDL_RenderFillRect(r, &line);
+
+    const float d = SDL_clamp(SDL_GetWindowPixelDensity(window->sdlWindow), 1.0f, 3.0f);
+    const float by = (SIM_TOOLBAR_H - SIM_BTN_H) * 0.5f;
+    for (int i = 0; i < SIM_BUTTONS; i++) {
+        const float bx = ButtonX(hostW, i);
+        if (g_hover == i + 1 || g_pressed == i + 1) {
+            SDL_FRect bg = { bx, by, SIM_BTN_W, SIM_BTN_H };
+            SDL_SetRenderDrawColor(r, 255, 255, 255, g_pressed == i + 1 ? 46 : 24);
+            SDL_RenderFillRect(r, &bg);
+        }
+        SDL_Texture* icon = IconTexture(r, i, (int)(18 * d));
+        if (icon) {
+            SDL_FRect dst = { bx + (SIM_BTN_W - 18) * 0.5f, by + (SIM_BTN_H - 18) * 0.5f, 18, 18 };
+            SDL_RenderTexture(r, icon, NULL, &dst);
+        }
+    }
+    DrawLabel(r, window, state, ButtonX(hostW, 0) - 24.0f);
+}
+
+static void Fire(UIWindow* window, int action) {
+    UIDeviceSimulatorState* state = GetState(window);
+    if (!state) return;
+    if (action == UI_SIM_ACTION_SCREENSHOT) {
+        state->shotPending = 1;
+    } else if (g_actionFn) {
+        g_actionFn(action, g_actionUd);
+    } else if (action == UI_SIM_ACTION_ROTATE) {
+        UIWindow_DeviceSimulatorToggleOrientation(window);
+        state = GetState(window);
+        if (!state) return;
+        const UIDeviceProfile* p = &state->profile;
+        const int land = state->orientation == UI_DEVICE_ORIENTATION_LANDSCAPE;
+        SDL_SetWindowSize(window->sdlWindow,
+                          (int)((land ? p->frameH : p->frameW) * state->hostScale),
+                          (int)((land ? p->frameW : p->frameH) * state->hostScale) + UIApp_DeviceSimulatorToolbarHeight());
+    }
+}
+
+int UIWindow_DeviceSimulatorToolbarEvent(UIWindow* window, int kind, float x, float y) {
+    if (!g_toolbar || !GetState(window)) return 0;
+    const int over = y < SIM_TOOLBAR_H;
+    switch (kind) {
+        case 0: // motion
+            g_hover = over ? ButtonAt(window, x, y) : 0;
+            return over && !g_pressed;
+        case 1: // press
+            if (!over) return 0;
+            g_pressed = ButtonAt(window, x, y);
+            return 1;
+        default: { // release
+            if (!g_pressed) return 0;
+            const int b = g_pressed;
+            g_pressed = 0;
+            if (ButtonAt(window, x, y) == b) Fire(window, kSimButtons[b - 1].action);
+            return 1;
+        }
+    }
+}
+
 void UIWindow_DeviceSimulatorPresentFrame(UIWindow* window, int hostW, int hostH) {
     UIDeviceSimulatorState* state = GetState(window);
     if (!state) return;
     SDL_Renderer* r = window->sdlRenderer;
     if (!r) return;
     if (!state->renderTarget) return;
+    if (state->shotPending) {
+        state->shotPending = 0;
+        TakeScreenshot(window, state);
+    }
     const UIDeviceProfile* p = &state->profile;
     const float scale = state->hostScale;
+    const float top = (float)UIApp_DeviceSimulatorToolbarHeight();
     const float cx = hostW * 0.5f;
-    const float cy = hostH * 0.5f;
+    const float cy = top + (hostH - top) * 0.5f;
 
     SDL_FRect frameDst = {
         cx - p->frameW * scale * 0.5f,
@@ -516,13 +796,15 @@ void UIWindow_DeviceSimulatorPresentFrame(UIWindow* window, int hostW, int hostH
         DrawDeviceTextureInRect(r, state->renderTarget, corners);
         SDL_RenderTextureRotated(r, state->frameTexture, NULL, &frameDst,
                                  angle, NULL, SDL_FLIP_NONE);
-        return;
-    }
-    if (state->frameTexture) {
-        SDL_RenderTextureRotated(r, state->frameTexture, NULL, &frameDst,
-                                 angle, NULL, SDL_FLIP_NONE);
     } else {
-        DrawFallbackBezel(r, hostW, hostH);
+        if (state->frameTexture) {
+            SDL_RenderTextureRotated(r, state->frameTexture, NULL, &frameDst,
+                                     angle, NULL, SDL_FLIP_NONE);
+        } else {
+            DrawFallbackBezel(r, hostW, hostH);
+        }
+        DrawDeviceTextureInRect(r, state->renderTarget, corners);
     }
-    DrawDeviceTextureInRect(r, state->renderTarget, corners);
+    DrawFlash(r, state, corners);
+    if (g_toolbar) DrawToolbar(r, window, state, hostW);
 }

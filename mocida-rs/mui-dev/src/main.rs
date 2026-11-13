@@ -41,6 +41,10 @@ const SIM_SCALE_100: u32 = 901;
 const SIM_SCALE_75: u32 = 902;
 const SIM_SCALE_50: u32 = 903;
 const SIM_SCALE_FIT: u32 = 904;
+const SIM_RESTART: u32 = 905;
+const SIM_ZOOM: u32 = 906;
+const SIM_SCREENSHOT: u32 = 907;
+const SIM_SCREENSHOT_SAVED: u32 = 908;
 /// `SIM_DEVICE_BASE + i` switches to `MENU_DEVICES[i]`.
 const SIM_DEVICE_BASE: u32 = 920;
 
@@ -81,13 +85,15 @@ fn sim_for(name: &str, color: Option<&str>, legacy_frame: Option<&str>) -> Resul
     Ok(Sim { profile: *profile, frames: None, legacy_frame: legacy_frame.map(str::to_string), label: profile.name.to_string() })
 }
 
-/// The host scale that fits the framed device on the current display.
-fn fit_scale(profile: &DeviceProfile, orientation: DeviceOrientation) -> f32 {
+/// The host scale that fits the framed device on the display the window is on.
+fn fit_scale(app_ptr: *mut mocida::sys::UIApp, profile: &DeviceProfile, orientation: DeviceOrientation) -> f32 {
     let (fw, fh) = match orientation {
         DeviceOrientation::Portrait => (profile.frame_w, profile.frame_h),
         DeviceOrientation::Landscape => (profile.frame_h, profile.frame_w),
     };
-    let (sw, sh) = unsafe { (mocida::sys::UIScreen_GetWidth(), mocida::sys::UIScreen_GetHeight()) };
+    let (mut sw, mut sh) = (0, 0);
+    unsafe { mocida::sys::UIApp_DeviceSimulatorHostDisplaySize(app_ptr, &mut sw, &mut sh) };
+    let sh = sh - unsafe { mocida::sys::UIApp_DeviceSimulatorToolbarHeight() };
     if sw <= 0 || sh <= 0 || fw <= 0 || fh <= 0 {
         return 1.0;
     }
@@ -109,6 +115,18 @@ unsafe extern "C" fn sim_menu_cb(id: u32, user: *mut c_void) {
     if !user.is_null() {
         (*(user as *const AtomicU32)).store(id, Ordering::Release);
     }
+}
+
+/// The simulator toolbar's buttons, routed into the same pending action.
+unsafe extern "C" fn sim_toolbar_cb(action: std::os::raw::c_int, user: *mut c_void) {
+    let id = match action {
+        1 => SIM_ROTATE,
+        2 => SIM_RESTART,
+        3 => SIM_SCREENSHOT_SAVED,
+        4 => SIM_ZOOM,
+        _ => return,
+    };
+    sim_menu_cb(id, user);
 }
 
 const DEFAULT_SAMPLE: &str = r#"
@@ -332,7 +350,11 @@ fn apply_sim_window_size(
         DeviceOrientation::Landscape => (profile.frame_h, profile.frame_w),
     };
     let w = (fw as f32 * scale) as i32;
-    let h = (fh as f32 * scale) as i32;
+    // The toolbar (rotate, screenshot, restart, zoom) sits above the device.
+    let h = (fh as f32 * scale) as i32 + unsafe { mocida::sys::UIApp_DeviceSimulatorToolbarHeight() };
+    if std::env::var_os("MOCIDA_CONTROL").is_some() {
+        println!("mui-dev: simulator window {w}×{h}");
+    }
     unsafe {
         mocida::sys::UIApp_SetWindowSize(app_ptr, w, h);
         mocida::sys::UIApp_SetMinSize(app_ptr, w, h);
@@ -463,7 +485,11 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
         } else {
             DeviceOrientation::Portrait
         };
-        let scale = opts.device_scale.unwrap_or_else(|| fit_scale(&sim.profile, orientation));
+        // The toolbar above the device; its buttons land in sim_action.
+        unsafe {
+            mocida::sys::UIApp_SetDeviceSimulatorToolbar(app.as_ptr(), 1, Some(sim_toolbar_cb), sim_action_ptr as *mut c_void)
+        };
+        let scale = opts.device_scale.unwrap_or_else(|| fit_scale(app.as_ptr(), &sim.profile, orientation));
 
         // Lock the window to device frame dimensions — no resize, no maximize.
         apply_sim_window_size(app.as_ptr(), &sim.profile, orientation, scale);
@@ -492,6 +518,8 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
             .submenu(
                 Menu::new("View")
                     .item("Rotate", Some("CmdOrCtrl+Shift+R"), SIM_ROTATE)
+                    .item("Screenshot", Some("CmdOrCtrl+S"), SIM_SCREENSHOT)
+                    .item("Restart App", Some("CmdOrCtrl+Shift+K"), SIM_RESTART)
                     .separator()
                     .item("Fit the Display", Some("CmdOrCtrl+0"), SIM_SCALE_FIT)
                     .item("Scale 100%", Some("CmdOrCtrl+1"), SIM_SCALE_100)
@@ -575,6 +603,43 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
                 match action {
                     SIM_ROTATE => ori = ori.toggle(),
                     SIM_SCALE_FIT => sim_fit_tick.set(true),
+                    SIM_SCREENSHOT => {
+                        unsafe { mocida::sys::UIApp_DeviceSimulatorTakeScreenshot(app_ptr) };
+                        return;
+                    }
+                    SIM_SCREENSHOT_SAVED => {
+                        let path = unsafe { std::ffi::CStr::from_ptr(mocida::sys::UIApp_DeviceSimulatorLastScreenshot()) };
+                        println!("mui-dev: screenshot saved to {}", path.to_string_lossy());
+                        return;
+                    }
+                    SIM_RESTART => {
+                        // Start the app over: a fresh build, every signal back to its initial value.
+                        let src = std::fs::read_to_string(&watch_path).unwrap_or_else(|_| source_cell.borrow().clone());
+                        match build_seeded(&src, watch_path.to_str(), &HashMap::new()) {
+                            Ok(built) => {
+                                unsafe { mocida::sys::UIApp_SetChildren(app_ptr, built.children.into_raw()) };
+                                *reactive_slot.borrow_mut() = Some(built.reactive);
+                                *source_cell.borrow_mut() = src;
+                                println!("mui-dev: app restarted");
+                            }
+                            Err(e) => eprintln!("mui-dev: restart failed: {e}"),
+                        }
+                        return;
+                    }
+                    // Zoom cycles through the sizes that fit the display: the
+                    // fitted size, then 100% / 75% / 50% when smaller, then back.
+                    SIM_ZOOM => {
+                        let fit = sim_tick.borrow().as_ref().map_or(1.0, |sim| fit_scale(app_ptr, &sim.profile, ori));
+                        let current = if sim_fit_tick.get() { fit } else { sim_scale_tick.get() };
+                        let next = [1.0f32, 0.75, 0.5].into_iter().find(|&z| z < current - 0.01 && z <= fit);
+                        match next {
+                            Some(s) => {
+                                sim_fit_tick.set(false);
+                                sim_scale_tick.set(s);
+                            }
+                            None => sim_fit_tick.set(true),
+                        }
+                    }
                     SIM_SCALE_100 | SIM_SCALE_75 | SIM_SCALE_50 => {
                         sim_fit_tick.set(false);
                         sim_scale_tick.set(match action {
@@ -597,7 +662,7 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
                 sim_orientation_tick.set(ori);
                 if let Some(sim) = sim_tick.borrow().as_ref() {
                     if sim_fit_tick.get() {
-                        sim_scale_tick.set(fit_scale(&sim.profile, ori));
+                        sim_scale_tick.set(fit_scale(app_ptr, &sim.profile, ori));
                     }
                     let scale = sim_scale_tick.get();
                     apply_sim_window_size(app_ptr, &sim.profile, ori, scale);

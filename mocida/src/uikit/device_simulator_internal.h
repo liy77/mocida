@@ -31,6 +31,9 @@ float UIWindow_DeviceSimulatorGetDensity(UIWindow* window);
 /** Rebuilds the render target when the window moved to a display of another
  *  pixel density. Call once per frame before rendering. */
 void UIWindow_DeviceSimulatorSyncDensity(UIWindow* window);
+/** Toolbar input, in window points: kind 0 = motion, 1 = press, 2 = release.
+ *  Returns 1 when the toolbar took the event (the app must not see it). */
+int UIWindow_DeviceSimulatorToolbarEvent(UIWindow* window, int kind, float x, float y);
 float UIWindow_DeviceSimulatorGetHostScale(UIWindow* window);
 
 void UIWindow_DeviceSimulatorSetOrientation(UIWindow* window,

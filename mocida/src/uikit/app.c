@@ -696,6 +696,7 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
         case SDL_EVENT_MOUSE_MOTION: {
             float rx, ry;
             WindowToRenderCoords(app, event->motion.x, event->motion.y, &rx, &ry);
+            if (UIWindow_DeviceSimulatorToolbarEvent(app->window, 0, rx, ry)) break;
             ApplySimulatorMouseTransform(app, &rx, &ry);
             // Remember where the cursor is so a structural rebuild can re-derive
             // hover state at this point (UIApp_SetChildren flags it; the refresh
@@ -726,6 +727,7 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
         case SDL_EVENT_MOUSE_BUTTON_DOWN: {
             float rx, ry;
             WindowToRenderCoords(app, event->button.x, event->button.y, &rx, &ry);
+            if (UIWindow_DeviceSimulatorToolbarEvent(app->window, 1, rx, ry)) break;
             ApplySimulatorMouseTransform(app, &rx, &ry);
             // Establish the z-order occluder so a click over an overlay can't
             // also reach widgets behind it (unless they're propagatingEvents).
@@ -780,7 +782,8 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
                     UIDeviceOrientation o = UIApp_GetCurrentDeviceOrientation(app);
                     float scale = UIWindow_DeviceSimulatorGetHostScale(app->window);
                     int newW = (int)((o == UI_DEVICE_ORIENTATION_LANDSCAPE ? p->frameH : p->frameW) * scale);
-                    int newH = (int)((o == UI_DEVICE_ORIENTATION_LANDSCAPE ? p->frameW : p->frameH) * scale);
+                    int newH = (int)((o == UI_DEVICE_ORIENTATION_LANDSCAPE ? p->frameW : p->frameH) * scale)
+                             + UIApp_DeviceSimulatorToolbarHeight();
                     SDL_SetWindowSize(app->window->sdlWindow, newW, newH);
                     break;
                 }
@@ -804,6 +807,7 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
         case SDL_EVENT_MOUSE_BUTTON_UP: {
             float rx, ry;
             WindowToRenderCoords(app, event->button.x, event->button.y, &rx, &ry);
+            if (UIWindow_DeviceSimulatorToolbarEvent(app->window, 2, rx, ry)) break;
             ApplySimulatorMouseTransform(app, &rx, &ry);
             // End any scrollbar-thumb drag before the usual up-dispatch.
             ScrollbarDragEnd(app->window->children);

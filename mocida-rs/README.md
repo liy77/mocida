@@ -161,8 +161,12 @@ mui-dev --list-devices
 
 The screen is laid out at the device's size in points, with its safe areas,
 rendered at the display's pixel density, rounded to the screen's shape and
-drawn under the device's frame (camera island, bezel). The Simulator menu
-switches devices, rotates (Ctrl+Shift+R) and scales (Ctrl+0 fits the display).
+drawn under the device's frame (camera island, bezel). A toolbar above the
+device shows its name, orientation and scale, with buttons to take a
+screenshot (saved to the Desktop, or `$MOCIDA_SCREENSHOT_DIR`), rotate, restart
+the app (fresh state) and zoom. The Simulator menu also switches devices,
+rotates (Ctrl+Shift+R), takes screenshots (Ctrl+S) and scales (Ctrl+0 fits the
+display).
 From Rust: `Runtime::enable_device_frames(device_frames::lookup("iphone-16")…)`.
 
 Frames come from [device-frames-media](https://github.com/jonnyjackson26/device-frames-media)
