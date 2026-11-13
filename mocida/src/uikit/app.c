@@ -197,6 +197,12 @@ static int BranchCovers(UIWidget* w, float x, float y) {
         y >= w->y && y < w->y + *w->height) {
         return 1; // this widget's own box covers the point
     }
+    // A Scroll's content only covers inside its viewport: rows scrolled up
+    // behind a header must not block the header's buttons.
+    if (sized && strcmp(__bc_base->__widget_type, UI_WIDGET_SCROLL) == 0 &&
+        (x < w->x || y < w->y || x >= w->x + *w->width || y >= w->y + *w->height)) {
+        return 0;
+    }
     // A sized widget whose box does NOT cover the point doesn't occlude here,
     // but a sizeless container might still hold a covering child. Descend.
     UIChildren* kids = WheelContainerChildren(w);
