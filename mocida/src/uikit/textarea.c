@@ -39,7 +39,9 @@ static void SetFocused(UITextArea* ta, SDL_Window* win, int focused);
 // Without this, a TextArea inside any container — the common case (e.g. an editor
 // pane deep in a Stack tree) — never receives focus, text, keys or wheel.
 static UIChildren* TA_ContainerChildren(UIWidget* w) {
-    if (!w || !w->data) return NULL;
+    // A hidden container hides its subtree from input too (it isn't laid out,
+    // so its children sit at stale positions and would steal clicks/focus).
+    if (!w || !w->data || !w->visible) return NULL;
     UIWidgetBase* base = (UIWidgetBase*)w->data;
     const char* t = base->__widget_type;
     if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;

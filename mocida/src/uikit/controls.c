@@ -495,7 +495,9 @@ static int InsideRect(float x, float y, float rx, float ry, float rw, float rh) 
 // containers. Mirrors button.c / textfield.c. Without this, controls nested in
 // a Stack never receive clicks.
 static UIChildren* CtlContainerChildren(UIWidget* w) {
-    if (!w || !w->data) return NULL;
+    // A hidden container hides its subtree from input too (it isn't laid out,
+    // so its children sit at stale positions and would steal clicks/focus).
+    if (!w || !w->data || !w->visible) return NULL;
     UIWidgetBase* base = (UIWidgetBase*)w->data;
     const char* t = base->__widget_type;
     if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;

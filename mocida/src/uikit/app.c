@@ -31,6 +31,7 @@
 #include <uikit/asset.h>
 #include <uikit/crash.h>
 #include <uikit/font.h>
+#include <uikit/menu_bar.h>
 #include "device_simulator_internal.h"
 
 #ifdef MOCIDA_WEB
@@ -73,7 +74,9 @@ static void WindowToRenderCoords(UIApp* app, float wx, float wy, float* rx, floa
 // children's absolute x/y during render, so the same absolute hit-test works at
 // any depth. A Scroll's content is re-laid-out to absolute on-screen positions.
 static UIChildren* WheelContainerChildren(UIWidget* w) {
-    if (!w || !w->data) return NULL;
+    // A hidden container hides its subtree from input too (it isn't laid out,
+    // so its children sit at stale positions and would steal clicks/focus).
+    if (!w || !w->data || !w->visible) return NULL;
     UIWidgetBase* base = (UIWidgetBase*)w->data;
     const char* t = base->__widget_type;
     if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;
@@ -474,7 +477,9 @@ static bool LiveResizeWatch(void* userdata, SDL_Event* event) {
 // hover-test can recurse into NESTED interactive widgets (e.g. a resize-handle
 // MouseArea deep inside Stacks). Mirrors the dispatch's ContainerChildren.
 static UIChildren* CursorContainerChildren(UIWidget* w) {
-    if (!w || !w->data) return NULL;
+    // A hidden container hides its subtree from input too (it isn't laid out,
+    // so its children sit at stale positions and would steal clicks/focus).
+    if (!w || !w->data || !w->visible) return NULL;
     UIWidgetBase* base = (UIWidgetBase*)w->data;
     const char* t = base->__widget_type;
     if (!strcmp(t, UI_WIDGET_STACK))     return ((UIStack*)base)->items;
@@ -1931,6 +1936,187 @@ void UIApp_SendEditKey(UIApp* app, int scancode, int shift) {
                                (SDL_Scancode)scancode, mod);
 }
 
+// ---------------------------------------------------------------------
+// MOCIDA_SCRIPT=file: replay a UI test script through HandleEvent (the same
+// path real input takes), so a run can be driven and screenshotted without
+// touching the OS cursor — pair with MOCIDA_WINDOW_HIDDEN=1. One command per
+// line; `#` starts a comment. Coordinates are window points.
+//   wait MS                 pause
+//   move X Y                mouse motion
+//   click X Y [right|middle]
+//   dclick X Y              double click
+//   drag X1 Y1 X2 Y2        press, move in steps, release
+//   wheel X Y DY            vertical wheel (positive = up)
+//   key [ctrl+][shift+][alt+][cmd+]NAME   e.g. key ctrl+b, key Escape
+//   text STRING             text input (rest of the line)
+//   shot PATH               save the next frame as PNG
+//   menu ID                 fire native menu item ID (as if picked)
+//   log MESSAGE             echo to stderr
+//   quit                    close the app
+// ---------------------------------------------------------------------
+
+typedef struct {
+    char**  lines;
+    int     count;
+    int     pc;
+    Uint64  waitUntil;
+    int     loaded;
+} MocidaScript;
+
+static MocidaScript g_script;
+
+static void Script_Load(void) {
+    g_script.loaded = 1;
+    const char* path = SDL_getenv("MOCIDA_SCRIPT");
+    if (!path) return;
+    size_t size = 0;
+    char* buf = (char*)SDL_LoadFile(path, &size);
+    if (!buf) {
+        fprintf(stderr, "[mocida.script] cannot read %s: %s\n", path, SDL_GetError());
+        return;
+    }
+    int cap = 64;
+    g_script.lines = (char**)malloc(sizeof(char*) * (size_t)cap);
+    char* save = NULL;
+    for (char* l = SDL_strtok_r(buf, "\n", &save); l; l = SDL_strtok_r(NULL, "\n", &save)) {
+        while (*l == ' ' || *l == '\t') l++;
+        size_t n = strlen(l);
+        while (n && (l[n - 1] == '\r' || l[n - 1] == ' ' || l[n - 1] == '\t')) l[--n] = '\0';
+        if (!n || l[0] == '#') continue;
+        if (g_script.count == cap) {
+            cap *= 2;
+            g_script.lines = (char**)realloc(g_script.lines, sizeof(char*) * (size_t)cap);
+        }
+        g_script.lines[g_script.count++] = SDL_strdup(l);
+    }
+    SDL_free(buf);
+    fprintf(stderr, "[mocida.script] %s: %d commands\n", path, g_script.count);
+}
+
+static void Script_Mouse(UIApp* app, Uint32 type, float x, float y, Uint8 button) {
+    SDL_Event e;
+    SDL_zero(e);
+    e.type = type;
+    if (type == SDL_EVENT_MOUSE_MOTION) {
+        e.motion.x = x; e.motion.y = y;
+    } else {
+        e.button.x = x; e.button.y = y;
+        e.button.button = button;
+        e.button.down = (type == SDL_EVENT_MOUSE_BUTTON_DOWN);
+        e.button.clicks = 1;
+    }
+    HandleEvent(app, &e);
+}
+
+static void Script_Key(UIApp* app, const char* spec) {
+    char tmp[128];
+    SDL_strlcpy(tmp, spec, sizeof(tmp));
+    SDL_Keymod mod = SDL_KMOD_NONE;
+    char* name = tmp;
+    for (char* plus = SDL_strchr(name, '+'); plus && plus[1]; plus = SDL_strchr(name, '+')) {
+        *plus = '\0';
+        if      (!SDL_strcasecmp(name, "ctrl"))  mod |= SDL_KMOD_LCTRL;
+        else if (!SDL_strcasecmp(name, "shift")) mod |= SDL_KMOD_LSHIFT;
+        else if (!SDL_strcasecmp(name, "alt"))   mod |= SDL_KMOD_LALT;
+        else if (!SDL_strcasecmp(name, "cmd"))   mod |= SDL_KMOD_LGUI;
+        name = plus + 1;
+    }
+    const SDL_Keycode key = SDL_GetKeyFromName(name);
+    if (key == SDLK_UNKNOWN) {
+        fprintf(stderr, "[mocida.script] unknown key '%s'\n", name);
+        return;
+    }
+    SDL_Event e;
+    SDL_zero(e);
+    e.type = SDL_EVENT_KEY_DOWN;
+    e.key.key = key;
+    e.key.scancode = SDL_GetScancodeFromKey(key, NULL);
+    e.key.mod = mod;
+    e.key.down = true;
+    HandleEvent(app, &e);
+}
+
+static void Script_Step(UIApp* app) {
+    if (!g_script.loaded) Script_Load();
+    if (!g_script.lines) return;
+    const Uint64 now = SDL_GetTicks();
+    while (g_script.pc < g_script.count && now >= g_script.waitUntil) {
+        const int lineNo = g_script.pc + 1;
+        const char* l = g_script.lines[g_script.pc++];
+        char cmd[16] = {0};
+        int consumed = 0;
+        if (SDL_sscanf(l, "%15s %n", cmd, &consumed) < 1) continue;
+        const char* rest = l + consumed;
+        float x = 0, y = 0, x2 = 0, y2 = 0;
+        char opt[16] = {0};
+
+        if (!SDL_strcmp(cmd, "wait")) {
+            g_script.waitUntil = now + (Uint64)SDL_atoi(rest);
+            return;
+        } else if (!SDL_strcmp(cmd, "move") && SDL_sscanf(rest, "%f %f", &x, &y) == 2) {
+            Script_Mouse(app, SDL_EVENT_MOUSE_MOTION, x, y, 0);
+        } else if ((!SDL_strcmp(cmd, "click") || !SDL_strcmp(cmd, "dclick")) &&
+                   SDL_sscanf(rest, "%f %f %15s", &x, &y, opt) >= 2) {
+            Uint8 b = SDL_BUTTON_LEFT;
+            if (!SDL_strcmp(opt, "right"))  b = SDL_BUTTON_RIGHT;
+            if (!SDL_strcmp(opt, "middle")) b = SDL_BUTTON_MIDDLE;
+            const int times = cmd[0] == 'd' ? 2 : 1;
+            Script_Mouse(app, SDL_EVENT_MOUSE_MOTION, x, y, 0);
+            for (int i = 0; i < times; i++) {
+                Script_Mouse(app, SDL_EVENT_MOUSE_BUTTON_DOWN, x, y, b);
+                Script_Mouse(app, SDL_EVENT_MOUSE_BUTTON_UP, x, y, b);
+            }
+            g_script.waitUntil = now + 50;   // let the host tick react
+            return;
+        } else if (!SDL_strcmp(cmd, "drag") &&
+                   SDL_sscanf(rest, "%f %f %f %f", &x, &y, &x2, &y2) == 4) {
+            Script_Mouse(app, SDL_EVENT_MOUSE_MOTION, x, y, 0);
+            Script_Mouse(app, SDL_EVENT_MOUSE_BUTTON_DOWN, x, y, SDL_BUTTON_LEFT);
+            for (int i = 1; i <= 8; i++) {
+                Script_Mouse(app, SDL_EVENT_MOUSE_MOTION,
+                             x + (x2 - x) * (float)i / 8.0f,
+                             y + (y2 - y) * (float)i / 8.0f, 0);
+            }
+            Script_Mouse(app, SDL_EVENT_MOUSE_BUTTON_UP, x2, y2, SDL_BUTTON_LEFT);
+            g_script.waitUntil = now + 50;
+            return;
+        } else if (!SDL_strcmp(cmd, "wheel") && SDL_sscanf(rest, "%f %f %f", &x, &y, &x2) == 3) {
+            SDL_Event e;
+            SDL_zero(e);
+            e.type = SDL_EVENT_MOUSE_WHEEL;
+            e.wheel.mouse_x = x; e.wheel.mouse_y = y;
+            e.wheel.y = x2;
+            HandleEvent(app, &e);
+        } else if (!SDL_strcmp(cmd, "key") && *rest) {
+            Script_Key(app, rest);
+            g_script.waitUntil = now + 30;
+            return;
+        } else if (!SDL_strcmp(cmd, "text") && *rest) {
+            SDL_Event e;
+            SDL_zero(e);
+            e.type = SDL_EVENT_TEXT_INPUT;
+            e.text.text = rest;
+            HandleEvent(app, &e);
+        } else if (!SDL_strcmp(cmd, "shot") && *rest) {
+            UIWindow_RequestShot(rest);
+            g_script.waitUntil = now + 30;
+            return;
+        } else if (!SDL_strcmp(cmd, "menu") && *rest) {
+            ui_menu_bar_trigger((uint32_t)SDL_atoi(rest));
+            g_script.waitUntil = now + 30;
+            return;
+        } else if (!SDL_strcmp(cmd, "log")) {
+            fprintf(stderr, "[mocida.script] %s\n", rest);
+        } else if (!SDL_strcmp(cmd, "quit")) {
+            app->window->visible = 0;
+            app->runInBackground = 0;
+            return;
+        } else {
+            fprintf(stderr, "[mocida.script] line %d: cannot parse '%s'\n", lineNo, l);
+        }
+    }
+}
+
 void UIApp_RunOneFrame(UIApp* app, Uint32 dtMs) {
     if (!app || !app->window) return;
 
@@ -1951,6 +2137,8 @@ void UIApp_RunOneFrame(UIApp* app, Uint32 dtMs) {
 
     SDL_Event e;
     if (app->onTick) app->onTick(app->onTickUserdata);
+
+    Script_Step(app);
 
     {
         UI_SCOPEC("events", UI_PROF_EVENT);

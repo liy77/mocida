@@ -357,6 +357,14 @@ void OptimizeSDLForHighPerformance(SDL_Renderer* renderer) {
 #include "window_render.inc"
 
 
+static char* g_shotRequest = NULL;
+
+void UIWindow_RequestShot(const char* path) {
+    if (!path) return;
+    if (g_shotRequest) SDL_free(g_shotRequest);
+    g_shotRequest = SDL_strdup(path);
+}
+
 // Main rendering function - optimized for high performance
 int UIWindow_Render(UIWindow* window) {
     if (!window || !window->sdlRenderer) return -1;
@@ -569,19 +577,24 @@ int UIWindow_Render(UIWindow* window) {
 
     // MOCIDA_SHOT_FRAME=N + MOCIDA_SHOT_PATH=file.png: save frame N as a PNG
     // (verifying a hidden-window run without putting anything on screen).
+    // UIWindow_RequestShot does the same for the next rendered frame.
     {
         static long shotAt = -2, shotFrame = 0;
         if (shotAt == -2) {
             const char* v = SDL_getenv("MOCIDA_SHOT_FRAME");
             shotAt = (v && SDL_getenv("MOCIDA_SHOT_PATH")) ? SDL_atoi(v) : -1;
         }
-        if (shotAt >= 0 && shotFrame++ == shotAt) {
+        const char* path = NULL;
+        if (shotAt >= 0 && shotFrame++ == shotAt) path = SDL_getenv("MOCIDA_SHOT_PATH");
+        if (g_shotRequest) path = g_shotRequest;
+        if (path) {
             SDL_Surface* shot = SDL_RenderReadPixels(window->sdlRenderer, NULL);
             if (shot) {
-                IMG_SavePNG(shot, SDL_getenv("MOCIDA_SHOT_PATH"));
+                IMG_SavePNG(shot, path);
                 SDL_DestroySurface(shot);
             }
         }
+        if (g_shotRequest) { SDL_free(g_shotRequest); g_shotRequest = NULL; }
     }
 
     // Present final frame
@@ -706,6 +719,12 @@ UIScreenInsets UIScreen_GetSafeArea(void) {
 }
 
 UIWindow* UIWindow_Create(const char* title, int width, int height) {
+    // A hidden (headless test / benchmark) run must not take focus from the
+    // user's foreground app or show up in the Dock: run as a background app.
+    {
+        const char* hidden = SDL_getenv("MOCIDA_WINDOW_HIDDEN");
+        if (hidden && hidden[0] == '1') SDL_SetHint(SDL_HINT_MAC_BACKGROUND_APP, "1");
+    }
     // Initialize SDL with options optimized for performance
     if (SDL_Init(SDL_INIT_VIDEO) != 1) {
         UI_ERROR(UI_CAT_WINDOW, "SDL_Init error: %s", SDL_GetError());

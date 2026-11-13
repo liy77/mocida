@@ -111,6 +111,10 @@ void ui_menu_bar_set(UIMenuBar* root);
 // The callback fires on the main thread.
 void ui_menu_bar_set_item_callback(ui_menu_bar_item_callback_t cb, void* user);
 
+// Fire the item callback for `id` exactly as if the user had picked that
+// menu item (UI test scripts drive the native menu this way).
+void ui_menu_bar_trigger(uint32_t id);
+
 #ifdef __cplusplus
 }
 #endif

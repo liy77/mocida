@@ -478,7 +478,9 @@ static void WordAround(const UITextField* tf, int pos, int* outStart, int* outEn
 // ---------------------------------------------------------------------
 
 static UIChildren* TF_ContainerChildren(UIWidget* w) {
-    if (!w || !w->data) return NULL;
+    // A hidden container hides its subtree from input too (it isn't laid out,
+    // so its children sit at stale positions and would steal clicks/focus).
+    if (!w || !w->data || !w->visible) return NULL;
     UIWidgetBase* base = (UIWidgetBase*)w->data;
     const char* t = base->__widget_type;
     if (strcmp(t, UI_WIDGET_STACK) == 0)     return ((UIStack*)base)->items;

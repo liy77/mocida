@@ -148,6 +148,12 @@ void UIWindow_TrimCaches(void);
 int UIWindow_Render(UIWindow* window);
 
 /**
+ * Saves the next rendered frame (before present) as a PNG at `path`.
+ * Debug/testing aid; works with a hidden window.
+ */
+void UIWindow_RequestShot(const char* path);
+
+/**
  * Creates a UIWindow object with the specified title, width, and height.
  * @param title Title of the window.
  * @param width Width of the window.

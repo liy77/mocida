@@ -230,7 +230,9 @@ static UIButton* AsButton(UIWidget* w) {
 // their children's absolute x/y during the render pass, so the same absolute
 // hit-test (InsideWidget) works at any depth. Other widgets return NULL.
 static UIChildren* ContainerChildren(UIWidget* w) {
-    if (!w || !w->data) return NULL;
+    // A hidden container hides its subtree from input too (it isn't laid out,
+    // so its children sit at stale positions and would steal clicks/focus).
+    if (!w || !w->data || !w->visible) return NULL;
     UIWidgetBase* base = (UIWidgetBase*)w->data;
     const char* t = base->__widget_type;
     if (strcmp(t, UI_WIDGET_STACK) == 0) {

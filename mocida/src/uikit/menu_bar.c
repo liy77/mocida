@@ -209,6 +209,15 @@ void ui_menu_bar_set(UIMenuBar* root) {
 __attribute__((weak)) void ui_menu_bar__hook_set_callback(
     ui_menu_bar_item_callback_t cb, void* user);
 
+static ui_menu_bar_item_callback_t g_item_cb   = NULL;
+static void*                       g_item_user = NULL;
+
 void ui_menu_bar_set_item_callback(ui_menu_bar_item_callback_t cb, void* user) {
+    g_item_cb   = cb;
+    g_item_user = user;
     if (ui_menu_bar__hook_set_callback) ui_menu_bar__hook_set_callback(cb, user);
+}
+
+void ui_menu_bar_trigger(uint32_t id) {
+    if (g_item_cb) g_item_cb(id, g_item_user);
 }
