@@ -77,6 +77,8 @@ pub fn build_reactive_env(reactive: &Reactive) -> ReactiveEnv {
 
 pub mod device_profiles;
 pub mod device_simulator;
+pub mod device_frames;
+mod device_frame_catalog;
 mod highlight;
 mod layout;
 use layout::Layout;
@@ -134,6 +136,25 @@ impl Runtime {
         orientation: DeviceOrientation,
     ) -> std::result::Result<(), mocida::Error> {
         crate::device_simulator::enable(self, profile, frame_png_path, host_scale, orientation)
+    }
+
+    /// Simulate a real device from the frame catalog (`iphone-17-pro`,
+    /// `pixel-9-pro`, …) in `color` (its first color when `None`). The frame
+    /// is downloaded into the cache the first time; returns the profile in
+    /// use. See [`device_frames`].
+    pub fn enable_device_frames(
+        &mut self,
+        device: &crate::device_frames::FrameDevice,
+        color: Option<&str>,
+        host_scale: f32,
+        orientation: DeviceOrientation,
+    ) -> std::result::Result<DeviceProfile, String> {
+        let variant = device.variant(color);
+        let (frame, mask) = crate::device_frames::ensure_files(device, variant)?;
+        let profile = device.profile();
+        crate::device_simulator::enable_frames(self, &profile, &frame, &mask, host_scale, orientation)
+            .map_err(|e| e.to_string())?;
+        Ok(profile)
     }
 
     /// Disable the device simulator for this runtime.

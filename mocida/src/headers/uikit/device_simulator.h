@@ -38,6 +38,17 @@ void UIApp_EnableDeviceSimulator(UIApp* app, const UIDeviceProfile* profile,
 void UIApp_EnableDeviceSimulatorFromFile(UIApp* app, const UIDeviceProfile* profile,
                                          const char* framePath, float hostScale,
                                          UIDeviceOrientation orientation);
+/**
+ * Simulates a real device: `framePath` is its frame (a PNG whose screen is
+ * transparent, drawn over the content, so the camera island and bezel sit on
+ * top) and `maskPath` its screen mask (white = screen, cut to the profile's
+ * screen rect) which rounds the content's corners. The images may be much
+ * larger than the frame in points; they are scaled down on load. Either path
+ * may be NULL (no frame / square corners).
+ */
+void UIApp_EnableDeviceSimulatorFrames(UIApp* app, const UIDeviceProfile* profile,
+                                       const char* framePath, const char* maskPath,
+                                       float hostScale, UIDeviceOrientation orientation);
 void UIApp_DisableDeviceSimulator(UIApp* app);
 bool UIApp_IsDeviceSimulatorEnabled(UIApp* app);
 const UIDeviceProfile* UIApp_GetCurrentDeviceProfile(UIApp* app);

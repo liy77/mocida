@@ -394,8 +394,12 @@ int UIWindow_Render(UIWindow* window) {
     int hostW = rw, hostH = rh;
     const int sim = UIWindow_IsDeviceSimulatorEnabled(window);
     if (sim) {
+        UIWindow_DeviceSimulatorSyncDensity(window);
         UIWindow_DeviceSimulatorGetDeviceSize(window, &rw, &rh);
     }
+    // The simulated screen renders at the window's pixel density, so it stays
+    // as sharp as the rest of the window on a Retina / HiDPI display.
+    const float simDensity = sim ? UIWindow_DeviceSimulatorGetDensity(window) : 1.0f;
     if (rw > 0 && rh > 0) {
         SDL_SetRenderLogicalPresentation(window->sdlRenderer, rw, rh,
                                          SDL_LOGICAL_PRESENTATION_LETTERBOX);
@@ -466,7 +470,9 @@ int UIWindow_Render(UIWindow* window) {
     // are keyed by device-pixel size, so a density change just misses the cache.
     if (needsOffscreen) {
         g_drawDensity = (float)aaScale;
-    } else if (sim || rw <= 0) {
+    } else if (sim) {
+        g_drawDensity = simDensity;
+    } else if (rw <= 0) {
         g_drawDensity = 1.0f;
     } else {
         int pw = rw, ph = rh;
@@ -498,7 +504,7 @@ int UIWindow_Render(UIWindow* window) {
         SDL_SetRenderScale(window->sdlRenderer, (float)aaScale, (float)aaScale);
     } else {
         SDL_SetRenderTarget(window->sdlRenderer, simTarget);
-        SDL_SetRenderScale(window->sdlRenderer, 1.0f, 1.0f);
+        SDL_SetRenderScale(window->sdlRenderer, simDensity, simDensity);
     }
     
     // Configure blending and clear buffer.
@@ -543,7 +549,7 @@ int UIWindow_Render(UIWindow* window) {
             TaaPass(window->sdlRenderer, g_smoothTexture, g_smoothW, g_smoothH);
         }
         SDL_SetRenderTarget(window->sdlRenderer, simTarget);
-        SDL_SetRenderScale(window->sdlRenderer, 1.0f, 1.0f);
+        SDL_SetRenderScale(window->sdlRenderer, simDensity, simDensity);
 
         // Clear the resolve target before the blit. Without this, a freshly
         // resized backbuffer (which can happen mid-frame during the

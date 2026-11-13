@@ -61,6 +61,33 @@ pub fn enable(
     Ok(())
 }
 
+/// Enable the device simulator with a real device frame: `frame` is drawn over
+/// the content (its screen is transparent) and `mask` rounds the content to
+/// the screen's shape. See [`crate::device_frames`] for the catalog.
+pub fn enable_frames(
+    app: &mut crate::Runtime,
+    profile: &DeviceProfile,
+    frame: &std::path::Path,
+    mask: &std::path::Path,
+    host_scale: f32,
+    orientation: DeviceOrientation,
+) -> std::result::Result<(), mocida::Error> {
+    let (p, _name_cstr) = to_c_profile(profile)?;
+    let frame = CString::new(frame.to_string_lossy().as_bytes())?;
+    let mask = CString::new(mask.to_string_lossy().as_bytes())?;
+    unsafe {
+        msys::UIApp_EnableDeviceSimulatorFrames(
+            app.app.as_ptr(),
+            &p,
+            frame.as_ptr(),
+            mask.as_ptr(),
+            host_scale,
+            orientation_to_c(orientation),
+        );
+    }
+    Ok(())
+}
+
 /// Disable the device simulator for `app`.
 pub fn disable(app: &mut crate::Runtime) {
     unsafe {

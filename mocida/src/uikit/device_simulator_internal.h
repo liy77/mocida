@@ -25,6 +25,12 @@ UIDeviceSimulatorState* UIWindow_GetDeviceSimulatorState(UIWindow* window);
 void UIWindow_DeviceSimulatorGetDeviceSize(UIWindow* window, int* w, int* h);
 void UIWindow_DeviceSimulatorGetSafeArea(UIWindow* window, UIScreenInsets* out);
 SDL_Texture* UIWindow_DeviceSimulatorGetRenderTarget(UIWindow* window);
+/** Window pixels per point the content renders at (the target is that much
+ *  bigger than the device size). */
+float UIWindow_DeviceSimulatorGetDensity(UIWindow* window);
+/** Rebuilds the render target when the window moved to a display of another
+ *  pixel density. Call once per frame before rendering. */
+void UIWindow_DeviceSimulatorSyncDensity(UIWindow* window);
 float UIWindow_DeviceSimulatorGetHostScale(UIWindow* window);
 
 void UIWindow_DeviceSimulatorSetOrientation(UIWindow* window,

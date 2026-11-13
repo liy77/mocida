@@ -149,6 +149,28 @@ Everything not in the safe-wrapper table above is still callable
 through `mocida::sys::*` — the raw bindings are re-exported so nothing
 in the C API is locked out, you just pay an `unsafe` block.
 
+## Device simulator
+
+`mui-dev` can show a `.mui` app inside a real phone or tablet:
+
+```text
+mui-dev --device iphone-17-pro app.mui
+mui-dev --device pixel-9-pro --device-color hazel --landscape app.mui
+mui-dev --list-devices
+```
+
+The screen is laid out at the device's size in points, with its safe areas,
+rendered at the display's pixel density, rounded to the screen's shape and
+drawn under the device's frame (camera island, bezel). The Simulator menu
+switches devices, rotates (Ctrl+Shift+R) and scales (Ctrl+0 fits the display).
+From Rust: `Runtime::enable_device_frames(device_frames::lookup("iphone-16")…)`.
+
+Frames come from [device-frames-media](https://github.com/jonnyjackson26/device-frames-media)
+(iPhone 6s–17, iPad, Pixel, Galaxy). Only their measurements are in this repo
+(`mui-runtime/src/device_frame_catalog.rs`, regenerated with
+`assets/devices/gen_frame_catalog.py`); the PNGs are downloaded the first time a
+device is used and kept in the OS cache directory under `mocida/device-frames`.
+
 ## Known sharp edges
 
 - **Single-threaded only.** Like Mocida itself, this crate assumes

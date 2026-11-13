@@ -29,7 +29,8 @@ use std::time::{Duration, SystemTime};
 use mocida::menu_bar::Menu;
 use mocida::text::{get_font, search_fonts};
 use mocida::{App, Children, Color};
-use mui_runtime::device_profiles::{DeviceProfile, PROFILE_NAMES};
+use mui_runtime::device_frames;
+use mui_runtime::device_profiles::{self, DeviceProfile, PROFILE_NAMES};
 use mui_runtime::device_simulator::DeviceOrientation;
 use mui_runtime::Reactive;
 use mui_runtime::Runtime;
@@ -39,6 +40,68 @@ const SIM_ROTATE: u32 = 900;
 const SIM_SCALE_100: u32 = 901;
 const SIM_SCALE_75: u32 = 902;
 const SIM_SCALE_50: u32 = 903;
+const SIM_SCALE_FIT: u32 = 904;
+/// `SIM_DEVICE_BASE + i` switches to `MENU_DEVICES[i]`.
+const SIM_DEVICE_BASE: u32 = 920;
+
+/// The Simulator ▸ Device menu (every `--list-devices` id works with --device).
+const MENU_DEVICES: &[&str] = &[
+    "iphone-17-pro-max", "iphone-17-pro", "iphone-air", "iphone-16", "iphone-13-mini", "iphone-8",
+    "pixel-9-pro-xl", "pixel-9-pro", "pixel-8", "galaxy-s21",
+    "ipad-pro-13-m4-m5", "ipad-mini-8-3-a17-pro", "pixel-tablet", "galaxy-tab-s11-ultra",
+];
+
+/// What the simulator shows: a device profile and the images around it.
+#[derive(Clone)]
+struct Sim {
+    profile: DeviceProfile,
+    /// A real device's frame and screen mask (device-frames catalog).
+    frames: Option<(PathBuf, PathBuf)>,
+    /// A plain frame PNG for the built-in placeholder profiles (--device-frame).
+    legacy_frame: Option<String>,
+    label: String,
+}
+
+/// A catalog device (`iphone-17-pro`, `pixel-9-pro`…), downloading its frame
+/// the first time, or one of the placeholder profiles (`iphone15`…).
+fn sim_for(name: &str, color: Option<&str>, legacy_frame: Option<&str>) -> Result<Sim, String> {
+    if let Some(dev) = device_frames::lookup(name) {
+        let v = dev.variant(color);
+        println!("mui-dev: preparing the {} ({}) frame…", dev.name, v.name);
+        let files = device_frames::ensure_files(dev, v)?;
+        return Ok(Sim {
+            profile: dev.profile(),
+            frames: Some(files),
+            legacy_frame: None,
+            label: format!("{} — {}", dev.name, v.name),
+        });
+    }
+    let profile = device_profiles::lookup(name)
+        .ok_or_else(|| format!("unknown device '{name}' (mui-dev --list-devices shows them)"))?;
+    Ok(Sim { profile: *profile, frames: None, legacy_frame: legacy_frame.map(str::to_string), label: profile.name.to_string() })
+}
+
+/// The host scale that fits the framed device on the current display.
+fn fit_scale(profile: &DeviceProfile, orientation: DeviceOrientation) -> f32 {
+    let (fw, fh) = match orientation {
+        DeviceOrientation::Portrait => (profile.frame_w, profile.frame_h),
+        DeviceOrientation::Landscape => (profile.frame_h, profile.frame_w),
+    };
+    let (sw, sh) = unsafe { (mocida::sys::UIScreen_GetWidth(), mocida::sys::UIScreen_GetHeight()) };
+    if sw <= 0 || sh <= 0 || fw <= 0 || fh <= 0 {
+        return 1.0;
+    }
+    (0.86 * sh as f32 / fh as f32).min(0.92 * sw as f32 / fw as f32).min(1.0)
+}
+
+fn print_devices() {
+    println!("Device frames (https://github.com/jonnyjackson26/device-frames-media):\n");
+    for d in device_frames::FRAME_DEVICES {
+        let colors: Vec<&str> = d.variants.iter().map(|v| v.id).collect();
+        println!("  {:<30} {:<26} {:>4}×{:<5} {}", d.id, d.name, d.points.0, d.points.1, colors.join(", "));
+    }
+    println!("\nPlaceholder profiles: {}", PROFILE_NAMES.join(", "));
+}
 
 /// `extern "C"` trampoline for menu item activations.
 /// `user` is a raw pointer to a `Box<AtomicU32>` owned by `run()`.
@@ -69,10 +132,13 @@ struct CliOptions {
     /// …). Combined with `minimize`, this lets the user run a validation
     /// build on a secondary monitor they aren't looking at and never see.
     display: Option<u32>,
-    /// Named device profile to simulate (e.g. `iphone15`, `galaxy_s24`).
+    /// Device to simulate: a catalog id (`iphone-17-pro`, `pixel-9-pro`…) or a
+    /// placeholder profile (`iphone15`, `galaxy_s24`…).
     device: Option<String>,
-    /// Host UI scale factor for the simulator (default 1.0).
-    device_scale: f32,
+    /// The device's color (`cosmic-orange`); its first color by default.
+    device_color: Option<String>,
+    /// Host UI scale factor for the simulator (default: fit the display).
+    device_scale: Option<f32>,
     /// Optional PNG frame asset to draw around the simulated screen.
     device_frame: Option<String>,
     /// Start the simulator in landscape orientation.
@@ -87,7 +153,8 @@ impl Default for CliOptions {
             minimize: false,
             display: None,
             device: None,
-            device_scale: 1.0,
+            device_color: None,
+            device_scale: None,
             device_frame: None,
             landscape: false,
             path: None,
@@ -111,16 +178,24 @@ fn parse_args() -> CliOptions {
             "--device" => {
                 opts.device = Some(require_arg(&a, &mut it));
             }
+            "--device-color" => {
+                opts.device_color = Some(require_arg(&a, &mut it));
+            }
+            "--list-devices" => {
+                print_devices();
+                std::process::exit(0);
+            }
             "--device-scale" => {
                 let v = require_arg(&a, &mut it);
-                opts.device_scale = v.parse::<f32>().unwrap_or_else(|_| {
+                let scale = v.parse::<f32>().unwrap_or_else(|_| {
                     eprintln!("mui-dev: --device-scale requires a valid number");
                     std::process::exit(2);
                 });
-                if opts.device_scale <= 0.0 {
+                if scale <= 0.0 {
                     eprintln!("mui-dev: --device-scale must be positive");
                     std::process::exit(2);
                 }
+                opts.device_scale = Some(scale);
             }
             "--device-frame" => {
                 opts.device_frame = Some(require_arg(&a, &mut it));
@@ -132,16 +207,21 @@ fn parse_args() -> CliOptions {
 
                        --minimized, -m       start minimized (don't steal focus)
                        --display N, -d N     place window on display N (0 = primary)
-                       --device <name>       enable simulator ({})
-                       --device-scale <s>    host UI scale factor (default 1.0)
-                       --device-frame <png>  optional PNG frame asset
+                       --device <name>       simulate a device: iphone-17-pro, iphone-16,
+                                             pixel-9-pro, galaxy-s21, ipad-pro-13-m4-m5…
+                                             (real frames, downloaded once and cached)
+                       --device-color <c>    the device's color (e.g. cosmic-orange)
+                       --list-devices        every device and its colors
+                       --device-scale <s>    host UI scale factor (default: fit the display)
+                       --device-frame <png>  frame PNG for a placeholder profile ({})
                        --landscape           start in landscape orientation
 
                      hot-reload: edit + save <file.mui> and the window updates in place.
 
                      simulator controls (when --device is active):
                        CmdOrCtrl+Shift+R     rotate device
-                       CmdOrCtrl+1/2/3       scale 100% / 75% / 50%",
+                       CmdOrCtrl+1/2/3       scale 100% / 75% / 50%
+                       CmdOrCtrl+0           fit the display",
                     PROFILE_NAMES.join(", ")
                 );
                 std::process::exit(0);
@@ -260,20 +340,29 @@ fn apply_sim_window_size(
     }
 }
 
-/// Enable (or re-enable) the device simulator after a rotation or scale change.
-fn enable_sim(
-    app_ptr: *mut mocida::sys::UIApp,
-    profile: &DeviceProfile,
-    frame_path: Option<&str>,
-    scale: f32,
-    orientation: DeviceOrientation,
-) {
+/// Enable (or re-enable) the device simulator after a device, rotation or
+/// scale change.
+fn enable_sim(app_ptr: *mut mocida::sys::UIApp, sim: &Sim, scale: f32, orientation: DeviceOrientation) {
     // Safety: `app_ptr` is the live app and outlives this temporary Runtime view.
     // `from_raw` sets `drop_app: false`, so the Runtime's Drop is a no-op here.
     let mut rt = unsafe { Runtime::from_raw(app_ptr) };
-    if let Err(e) = rt.enable_device_simulator(profile, frame_path, scale, orientation) {
+    let result = match &sim.frames {
+        Some((frame, mask)) => mui_runtime::device_simulator::enable_frames(&mut rt, &sim.profile, frame, mask, scale, orientation),
+        None => rt.enable_device_simulator(&sim.profile, sim.legacy_frame.as_deref(), scale, orientation),
+    };
+    if let Err(e) = result {
         eprintln!("mui-dev: simulator enable failed: {e}");
     }
+}
+
+/// Window title: the device, its color and the orientation.
+fn sim_title(app_ptr: *mut mocida::sys::UIApp, sim: &Sim, orientation: DeviceOrientation) {
+    let ori = match orientation {
+        DeviceOrientation::Portrait => "Portrait",
+        DeviceOrientation::Landscape => "Landscape",
+    };
+    let title = std::ffi::CString::new(format!("{} — Simulator ({ori})", sim.label)).unwrap_or_default();
+    unsafe { mocida::sys::UIApp_SetWindowTitle(app_ptr, title.as_ptr()) };
 }
 
 fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
@@ -348,13 +437,11 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
 
     // Simulator state shared between setup and the on_tick closure.
     // `None` when --device was not passed.
-    let sim_profile: Option<&'static DeviceProfile> = None;
-    let sim_frame_path: Option<Option<String>> = None;
-
-    let sim_profile = Rc::new(Cell::new(sim_profile));
-    let sim_frame_path = Rc::new(RefCell::new(sim_frame_path));
+    let sim_state: Rc<RefCell<Option<Sim>>> = Rc::new(RefCell::new(None));
     let sim_orientation = Rc::new(Cell::new(DeviceOrientation::Portrait));
     let sim_scale = Rc::new(Cell::new(1.0f32));
+    // Explicit --device-scale / Ctrl+1-3 pin the scale; otherwise it fits the display.
+    let sim_fit = Rc::new(Cell::new(opts.device_scale.is_none()));
 
     // Pending menu action from the `extern "C"` callback. Boxed so it has a
     // stable heap address we can hand to the C callback as a raw pointer.
@@ -363,12 +450,12 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
     let sim_action_ptr: *const AtomicU32 = Box::as_ref(&sim_action);
 
     if let Some(name) = &opts.device {
-        let Some(profile) = mui_runtime::device_profiles::lookup(name) else {
-            eprintln!(
-                "mui-dev: unknown device profile '{name}'\n\nSupported profiles: {}",
-                PROFILE_NAMES.join(", ")
-            );
-            std::process::exit(2);
+        let sim = match sim_for(name, opts.device_color.as_deref(), opts.device_frame.as_deref()) {
+            Ok(sim) => sim,
+            Err(e) => {
+                eprintln!("mui-dev: {e}");
+                std::process::exit(2);
+            }
         };
 
         let orientation = if opts.landscape {
@@ -376,29 +463,37 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
         } else {
             DeviceOrientation::Portrait
         };
-        let scale = opts.device_scale;
+        let scale = opts.device_scale.unwrap_or_else(|| fit_scale(&sim.profile, orientation));
 
         // Lock the window to device frame dimensions — no resize, no maximize.
-        apply_sim_window_size(app.as_ptr(), profile, orientation, scale);
-
-        // Enable the C-side device simulator with the optional frame PNG.
-        let frame_path = opts.device_frame.as_deref();
-        enable_sim(app.as_ptr(), profile, frame_path, scale, orientation);
+        apply_sim_window_size(app.as_ptr(), &sim.profile, orientation, scale);
+        enable_sim(app.as_ptr(), &sim, scale, orientation);
 
         // The simulator window floats above other windows, like iOS Simulator.
         unsafe { mocida::sys::UIApp_SetAlwaysOnTop(1) };
+        sim_title(app.as_ptr(), &sim, orientation);
 
-        // Title shows the device family and a hint for the rotate shortcut.
-        let _ = app.set_window_title(&format!("{} — Simulator", profile.name));
-
-        // ── Menu bar: "Simulator > Device" ─────────────────────────────────
+        // ── Menu bar: "Simulator" ──────────────────────────────────────────
         // Works as the macOS app menu on macOS and is tracked (with shortcuts)
         // on all platforms via SDL's accelerator system.
+        // iPhones, Android phones, then tablets, split by separators.
+        let mut devices = Menu::new("Device");
+        let mut group = ("", "");
+        for (i, id) in MENU_DEVICES.iter().enumerate() {
+            let Some(d) = device_frames::lookup(id) else { continue };
+            if !group.0.is_empty() && group != (d.os, d.kind) {
+                devices = devices.separator();
+            }
+            group = (d.os, d.kind);
+            devices = devices.item(d.name, None, SIM_DEVICE_BASE + i as u32);
+        }
         Menu::new("Simulator")
+            .submenu(devices)
             .submenu(
-                Menu::new("Device")
+                Menu::new("View")
                     .item("Rotate", Some("CmdOrCtrl+Shift+R"), SIM_ROTATE)
                     .separator()
+                    .item("Fit the Display", Some("CmdOrCtrl+0"), SIM_SCALE_FIT)
                     .item("Scale 100%", Some("CmdOrCtrl+1"), SIM_SCALE_100)
                     .item("Scale 75%", Some("CmdOrCtrl+2"), SIM_SCALE_75)
                     .item("Scale 50%", Some("CmdOrCtrl+3"), SIM_SCALE_50),
@@ -414,16 +509,14 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
             )
         };
 
+        println!(
+            "mui-dev: simulating {}  (Simulator menu: devices; Ctrl+Shift+R = rotate, Ctrl+0-3 = scale)",
+            sim.label
+        );
         // Stash simulator state for the on_tick closure.
-        sim_profile.set(Some(profile));
-        *sim_frame_path.borrow_mut() = Some(opts.device_frame.clone());
+        *sim_state.borrow_mut() = Some(sim);
         sim_orientation.set(orientation);
         sim_scale.set(scale);
-
-        println!(
-            "mui-dev: simulator active — {name}  \
-             (Ctrl+Shift+R = rotate, Ctrl+1/2/3 = scale)"
-        );
     }
 
     // ── Font + first build ───────────────────────────────────────────────────
@@ -460,10 +553,10 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
         let last_size = Rc::new(Cell::new((0i32, 0i32, 0i32, 0i32)));
 
         // Clone Rc handles for the closure.
-        let sim_profile_tick = sim_profile.clone();
-        let sim_frame_path_tick = sim_frame_path.clone();
+        let sim_tick = sim_state.clone();
         let sim_orientation_tick = sim_orientation.clone();
         let sim_scale_tick = sim_scale.clone();
+        let sim_fit_tick = sim_fit.clone();
 
         println!(
             "mui-dev: watching {p} (+{} imported file(s)) for changes — edit + save to hot-reload",
@@ -474,50 +567,42 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
         );
 
         app.on_tick(move || {
-            // (0) Simulator menu action (rotate / scale) ─────────────────────
+            // (0) Simulator menu action (device / rotate / scale) ───────────
             // Safety: sim_action_ptr is valid for the entire run() lifetime.
             let action = unsafe { (*sim_action_ptr).swap(0, Ordering::AcqRel) };
-            if action != 0 {
-                if let Some(profile) = sim_profile_tick.get() {
-                    let fp_guard = sim_frame_path_tick.borrow();
-                    let fp = fp_guard.as_ref().and_then(|o| o.as_deref());
-                    let mut ori = sim_orientation_tick.get();
-                    let mut scale = sim_scale_tick.get();
-
-                    match action {
-                        SIM_ROTATE => {
-                            ori = ori.toggle();
-                            sim_orientation_tick.set(ori);
-                        }
-                        SIM_SCALE_100 => {
-                            scale = 1.00;
-                            sim_scale_tick.set(scale);
-                        }
-                        SIM_SCALE_75 => {
-                            scale = 0.75;
-                            sim_scale_tick.set(scale);
-                        }
-                        SIM_SCALE_50 => {
-                            scale = 0.50;
-                            sim_scale_tick.set(scale);
-                        }
-                        _ => {}
+            if action != 0 && sim_tick.borrow().is_some() {
+                let mut ori = sim_orientation_tick.get();
+                match action {
+                    SIM_ROTATE => ori = ori.toggle(),
+                    SIM_SCALE_FIT => sim_fit_tick.set(true),
+                    SIM_SCALE_100 | SIM_SCALE_75 | SIM_SCALE_50 => {
+                        sim_fit_tick.set(false);
+                        sim_scale_tick.set(match action {
+                            SIM_SCALE_100 => 1.0,
+                            SIM_SCALE_75 => 0.75,
+                            _ => 0.5,
+                        });
                     }
-
-                    apply_sim_window_size(app_ptr, profile, ori, scale);
-                    enable_sim(app_ptr, profile, fp, scale, ori);
-
-                    // Update title to reflect current orientation.
-                    let ori_label = match ori {
-                        DeviceOrientation::Portrait => "Portrait",
-                        DeviceOrientation::Landscape => "Landscape",
-                    };
-                    let title = std::ffi::CString::new(format!(
-                        "{} — Simulator ({})",
-                        profile.name, ori_label
-                    ))
-                    .unwrap_or_default();
-                    unsafe { mocida::sys::UIApp_SetWindowTitle(app_ptr, title.as_ptr()) };
+                    id if id >= SIM_DEVICE_BASE && ((id - SIM_DEVICE_BASE) as usize) < MENU_DEVICES.len() => {
+                        match sim_for(MENU_DEVICES[(id - SIM_DEVICE_BASE) as usize], None, None) {
+                            Ok(sim) => {
+                                println!("mui-dev: simulating {}", sim.label);
+                                *sim_tick.borrow_mut() = Some(sim);
+                            }
+                            Err(e) => eprintln!("mui-dev: {e}"),
+                        }
+                    }
+                    _ => {}
+                }
+                sim_orientation_tick.set(ori);
+                if let Some(sim) = sim_tick.borrow().as_ref() {
+                    if sim_fit_tick.get() {
+                        sim_scale_tick.set(fit_scale(&sim.profile, ori));
+                    }
+                    let scale = sim_scale_tick.get();
+                    apply_sim_window_size(app_ptr, &sim.profile, ori, scale);
+                    enable_sim(app_ptr, sim, scale, ori);
+                    sim_title(app_ptr, sim, ori);
                 }
             }
 
