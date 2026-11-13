@@ -24,6 +24,7 @@
 //   click SEL | click X Y [right|middle]     dclick / rclick / hover likewise
 //   scroll SEL DY                            wheel over the widget (+ = up)
 //   drag X1 Y1 X2 Y2
+//   mousedown X Y / mouseup X Y              press / release (with move X Y between: a slow drag)
 //   key [ctrl+][shift+][alt+][cmd+]NAME      e.g. key cmd+s, key Escape
 //   keydown NAME / keyup NAME                hold / release a key (UIInput state)
 //   text STRING                              text input (rest of the line)
@@ -439,6 +440,12 @@ static void Auto_Exec(AutoCtx* ctx, UIApp* app, const char* l) {
             Auto_Out(ctx, "ok %.0f,%.0f", x, y);
             ctx->waitUntil = now + 50;   // let the host tick react
         }
+    } else if ((!SDL_strcmp(cmd, "mousedown") || !SDL_strcmp(cmd, "mouseup")) &&
+               SDL_sscanf(rest, "%f %f", &x, &y) == 2) {
+        const int down = cmd[5] == 'd';
+        Auto_Mouse(app, SDL_EVENT_MOUSE_MOTION, x, y, 0, 0);
+        Auto_Mouse(app, down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP, x, y, SDL_BUTTON_LEFT, 1);
+        Auto_Out(ctx, "ok");
     } else if (!SDL_strcmp(cmd, "drag") &&
                SDL_sscanf(rest, "%f %f %f %f", &x, &y, &x2, &y2) == 4) {
         Auto_Mouse(app, SDL_EVENT_MOUSE_MOTION, x, y, 0, 0);
