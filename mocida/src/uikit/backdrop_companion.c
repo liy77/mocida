@@ -22,7 +22,7 @@ extern void* UIBackdropComposition_AttachToWindow(HWND hwnd, void* swapchain,
 extern void  UIBackdropComposition_Resize(void* handle, int w, int h);
 extern void  UIBackdropComposition_Destroy(void* handle);
 
-static void* g_comp = NULL; // single instance (OndaEngine is single-window)
+static void* g_comp = NULL; // single instance (Mocidad is single-window)
 
 static HWND sdl_hwnd(SDL_Window* w) {
     if (!w) return NULL;

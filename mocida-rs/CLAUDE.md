@@ -47,7 +47,7 @@ Rust relink — see `../CLAUDE.md` §2 for the DLL build/copy steps.
 > single *aborted* build — `cargo`'s incremental artifacts can go inconsistent and
 > produce a binary that **contradicts the source** (classic symptom: `for`-loops in
 > the UI silently render nothing even though the lists are populated). It is not a
-> code bug. Fix with `cargo clean -p mui-runtime -p onda-launcher` and rebuild. When a
+> code bug. Fix with `cargo clean -p mui-runtime -p mocidad-launcher` and rebuild. When a
 > rendering bug makes no sense given your diff, clean-rebuild FIRST.
 
 ## Architecture

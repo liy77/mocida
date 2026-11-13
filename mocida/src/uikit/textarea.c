@@ -389,7 +389,7 @@ UITextArea* UITextArea_SetLineSpacing(UITextArea* ta, float spacing) {
 
 UITextArea* UITextArea_SetBgColor    (UITextArea* ta, UIColor color) { if (ta) ta->bgColor = color;   return ta; }
 
-// Wallpaper drawn cover-fit behind the text (e.g. OndaEngine's editor background).
+// Wallpaper drawn cover-fit behind the text (e.g. Mocidad's editor background).
 // Stores an owned copy of the path; the texture is (re)loaded lazily at render time
 // (where the SDL_Renderer is available). Passing NULL/"" clears it.
 UITextArea* UITextArea_SetBgImage(UITextArea* ta, const char* path) {

@@ -17,7 +17,7 @@
 //
 // This preserves rounded corners, the system drop shadow, edge-resize and the
 // traffic-light (close / minimize / zoom) buttons in the top-left. Because the
-// traffic-lights are still there, OndaEngine hides its OWN min/max/close buttons
+// traffic-lights are still there, Mocidad hides its OWN min/max/close buttons
 // on macOS (UIWindow_IsMacOS() drives a host signal) and offsets the top bar so
 // menus don't sit under the lights.
 
@@ -64,7 +64,7 @@ extern "C" void UIWindow_ApplyNativeDecorations(SDL_Window* window) {
         // offset is instead expressed as `paddingTop: 28` on the
         // app's toolbar via box_spacing_reactive — see toolbar.mui.)
         // Keep the standard traffic-light buttons visible (default), so the
-        // user gets native close/minimize/zoom. OndaEngine suppresses its own
+        // user gets native close/minimize/zoom. Mocidad suppresses its own
         // window-control buttons on macOS via UIWindow_IsMacOS().
         [[win standardWindowButton:NSWindowCloseButton]       setHidden:NO];
         [[win standardWindowButton:NSWindowMiniaturizeButton] setHidden:NO];

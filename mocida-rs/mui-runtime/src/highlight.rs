@@ -56,7 +56,7 @@ fn keywords(lang: &str) -> &'static [&'static str] {
             "view", "App", "signal", "mut", "if", "else", "for", "in", "import", "from", "true",
             "false", "Window", "Screen",
         ],
-        // JSON (incl. onda.project) + KSON (copper config): strings/numbers come
+        // JSON (incl. mocidad.project) + KSON (copper config): strings/numbers come
         // from the shared lexer; only the literals need a keyword color.
         "json" | "kson" => &["true", "false", "null"],
         // TOML (incl. Cargo.toml / Cargo.lock): # comments + strings/numbers from

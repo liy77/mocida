@@ -1,7 +1,7 @@
 // titlebar_native.c — keep native OS window decorations (rounded corners +
 // drop shadow + Aero-snap) on a CUSTOM-TITLEBAR window.
 //
-// OndaEngine / any App(titlebar: custom) app paints its own title bar. To do
+// Mocidad / any App(titlebar: custom) app paints its own title bar. To do
 // that the window is created SDL_WINDOW_BORDERLESS on Windows/Linux, which on
 // Win11 strips the DWM frame and therefore the *rounded corners* and the
 // *drop shadow* (square, flat window). This file asks the compositor to put

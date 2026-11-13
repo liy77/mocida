@@ -1,14 +1,14 @@
 # CLAUDE.md — mocida workspace (agent operating guide)
 
 Authoritative guide for working on **mocida** (the C UI toolkit), its **Rust
-bindings + runtime** (`mocida-rs`), and the **OndaEngine** editor that consumes
+bindings + runtime** (`mocida-rs`), and the **Mocidad** editor that consumes
 them. Read this first. It is written to make non-trivial UI/runtime tasks (new
 widgets, editor features, debugging "impossible" bugs) fast and safe.
 
 Companion docs:
 - `mocida-rs/CLAUDE.md` — the Rust FFI + wrapper internals (ownership, trampolines, signals).
 - `mocida/README.md`, `mocida/docs/` — the C library API surface.
-- OndaEngine: `C:\Users\hcsbr\Documents\OndaEngine\CLAUDE.md` — the editor/host.
+- Mocidad: `C:\Users\hcsbr\Documents\mocidad-engine\CLAUDE.md` — the editor/host.
 
 Chat replies default to **Brazilian Portuguese** (user `rodrigo.mcu@gmail.com`);
 code, comments, docs and commit messages stay in **English**.
@@ -22,17 +22,17 @@ mocida (C, SDL3)            real rendering + event dispatch + widgets
   └─ mocida-sys  (Rust)     raw bindgen FFI over the C headers
       └─ mocida  (Rust)     safe idiomatic wrappers (ownership, callbacks)
           └─ mui-runtime    interprets .mui markup → builds a live widget tree
-              └─ onda-launcher (host)  OndaEngine's app: owns signals, file I/O, LSP
+              └─ mocidad-launcher (host)  Mocidad's app: owns signals, file I/O, LSP
 ```
 
 mocida does ALL rendering and input. The Rust side never re-implements widgets —
-it wraps them. OndaEngine's UI is authored in `.mui`; the host and `.mui`
+it wraps them. Mocidad's UI is authored in `.mui`; the host and `.mui`
 communicate **only through signals**.
 
 Paths (this machine):
 - C library: `C:\Users\hcsbr\Documents\mocida\mocida`
 - Rust workspace: `C:\Users\hcsbr\Documents\mocida\mocida-rs` (`mocida-sys`, `mocida`, `mui-runtime`, `mui-dev`)
-- Editor: `C:\Users\hcsbr\Documents\OndaEngine` (`onda.mui`, `ui/*.mui`, `onda-launcher/`)
+- Editor: `C:\Users\hcsbr\Documents\Mocidad` (`mocidad.mui`, `ui/*.mui`, `mocidad-launcher/`)
 
 ---
 
@@ -57,7 +57,7 @@ $env:MOCIDA_LIB_DIR     = "C:\Users\hcsbr\Documents\mocida\mocida\build\win32\re
 | `mocida/src/uikit/*.inc` (e.g. `window_widgets.inc`) | **`touch` the `.c` that `#include`s it** (usually `window.c`), then rebuild DLL. The build skips the `.inc` otherwise — silent stale binary. |
 | `mocida/src/headers/**/*.h` | rebuild DLL **and** `cargo clean -p mocida-sys` (regen bindgen) before `cargo build`. |
 | `mocida-rs/**` (wrapper / `mui-runtime`) | `cargo build --release` (host). |
-| `onda.mui`, embedded `ui/*.mui` | `cargo build --release` (they're `include_str!`-baked). |
+| `mocidad.mui`, embedded `ui/*.mui` | `cargo build --release` (they're `include_str!`-baked). |
 | disk-loaded `ui/*.mui` (`color_picker.mui`, `agents.mui`, `git_panel.mui`) | nothing — relaunch picks them up in dev. (NOT in `EMBEDDED_COMPONENTS`; the standalone bundle build would miss them — add them there before shipping.) |
 
 **Build the DLL + deploy** (from `mocida/mocida`):
@@ -66,12 +66,12 @@ $env:MOCIDA_LIB_DIR     = "C:\Users\hcsbr\Documents\mocida\mocida\build\win32\re
 (Get-Item .\src\uikit\window.c).LastWriteTime = Get-Date
 python build.py --release --shared --no-tests --no-demo
 $src = ".\build\win32\release-shared\mocida.dll"
-Copy-Item $src "C:\Users\hcsbr\Documents\OndaEngine\onda-launcher\target\release\mocida.dll"      -Force
-Copy-Item $src "C:\Users\hcsbr\Documents\OndaEngine\onda-launcher\target\release\deps\mocida.dll" -Force
+Copy-Item $src "C:\Users\hcsbr\Documents\mocidad-engine\mocidad-launcher\target\release\mocida.dll"      -Force
+Copy-Item $src "C:\Users\hcsbr\Documents\mocidad-engine\mocidad-launcher\target\release\deps\mocida.dll" -Force
 ```
-The DLL must be staged next to `onda-launcher.exe` **and** in `deps/`.
+The DLL must be staged next to `MocidadEngine.exe` **and** in `deps/`.
 
-**Build the host** (from `OndaEngine/onda-launcher`): `cargo build --release`.
+**Build the host** (from `mocidad-engine/mocidad-launcher`): `cargo build --release`.
 
 ### ⚠️ Incremental-build corruption (read this before chasing ghosts)
 Many rapid `cargo build`s in a row — especially after a **failed/aborted build**
@@ -80,7 +80,7 @@ inconsistent. Symptom: **"impossible" runtime breakage that doesn't match the
 source** — most notably `for`-loops silently rendering nothing (file tree empty,
 recent-projects empty) even though the data is present and seeded.
 
-This is NOT a code bug. **Fix: `cargo clean -p mui-runtime -p onda-launcher` then
+This is NOT a code bug. **Fix: `cargo clean -p mui-runtime -p mocidad-launcher` then
 rebuild.** When a rendering bug makes no sense given the diff, do a clean rebuild
 FIRST, before reverting code or blaming the DB.
 
@@ -158,9 +158,9 @@ it doesn't eat editor clicks while hidden.
 
 ---
 
-## 5. GUI testing harness (OndaEngine)
+## 5. GUI testing harness (Mocidad)
 
-Driver: `C:\Users\hcsbr\Documents\OndaEngine\_drive.ps1` (DPI-aware SendInput).
+Driver: `C:\Users\hcsbr\Documents\mocidad-engine\_drive.ps1` (DPI-aware SendInput).
 `. .\_drive.ps1` then: `Get-Hwnd`, `Front $h`, `Place $h` (1290×760), `Shot $h <png>`,
 `Crop <src> <dst> x y w h scale`, `[Win]::Click(x,y)`, `[Win]::ScanKey(scancode,ctrl)`,
 `[Win]::TypeText("...")`.
@@ -188,12 +188,12 @@ Driver: `C:\Users\hcsbr\Documents\OndaEngine\_drive.ps1` (DPI-aware SendInput).
 ## 6. Debugging playbook (in order)
 
 1. **Rendering breakage that contradicts the source** (empty lists, missing widgets,
-   but data is present) → **clean rebuild** (`cargo clean -p mui-runtime -p onda-launcher`).
+   but data is present) → **clean rebuild** (`cargo clean -p mui-runtime -p mocidad-launcher`).
    Incremental corruption is the usual cause (§2).
 2. **Is the data there?** Add a one-line `eprintln!` in the host where the signal is
    set/seeded (e.g. print `recent.len()`, `file_tree.len()`). Data present but rendered
    empty ⇒ runtime/build problem; data absent ⇒ host/IO/DB problem.
-3. **DB suspected?** `onda.sqlite` integrity: `python -c "import sqlite3; print(sqlite3.connect('onda.sqlite').execute('PRAGMA integrity_check').fetchone())"`.
+3. **DB suspected?** `mocidad.sqlite` integrity: `python -c "import sqlite3; print(sqlite3.connect('mocidad.sqlite').execute('PRAGMA integrity_check').fetchone())"`.
    It rarely is — list rendering is filesystem/seed driven, not the DB.
 4. **Silent crash (no Rust panic in stderr)** = C segfault. Suspect a use-after-free
    in a reactive subscription firing on a widget freed by a structural rebuild (§3),
@@ -209,7 +209,7 @@ Driver: `C:\Users\hcsbr\Documents\OndaEngine\_drive.ps1` (DPI-aware SendInput).
 
 - Adding a widget/prop usually touches 3 layers across 2 repos: the C widget +
   header, the `mocida` wrapper (+ `mocida-sys` regen on header change), and
-  `mui-runtime`'s `build_*`. For OndaEngine features add the host signal wiring too.
+  `mui-runtime`'s `build_*`. For Mocidad features add the host signal wiring too.
 - "port" means **bindings + idiomatic wrappers**, never a Rust reimplementation.
 - `mocida_alloc.h` is intentionally not wrapped (mimalloc macros, no public API).
 - Persistent agent memory: `C:\Users\hcsbr\.claude\projects\C--Users-hcsbr\memory\`
