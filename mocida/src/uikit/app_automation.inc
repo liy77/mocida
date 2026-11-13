@@ -554,6 +554,11 @@ static void Auto_Exec(AutoCtx* ctx, UIApp* app, const char* l) {
         ui_menu_bar_trigger((uint32_t)SDL_atoi(rest));
         Auto_Out(ctx, "ok");
         ctx->waitUntil = now + 30;
+    } else if (!SDL_strcmp(cmd, "resize") && SDL_sscanf(rest, "%f %f", &x, &y) == 2) {
+        // Points, like the rest; the window's min size still applies.
+        SDL_SetWindowSize(app->window->sdlWindow, (int)x, (int)y);
+        Auto_Out(ctx, "ok %.0fx%.0f", x, y);
+        ctx->waitUntil = now + 150;
     } else if (!SDL_strcmp(cmd, "log")) {
         Auto_Out(ctx, "%s", rest);
     } else if (!SDL_strcmp(cmd, "quit")) {

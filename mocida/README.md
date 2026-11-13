@@ -98,7 +98,7 @@ tools/mocida-ctl 'click "Create New Project…"' 'click tip:"Add object"' \
 tools/mocida-ctl quit
 ```
 
-Selectors match text, button labels, placeholders, tooltips and ids: `"Run"` (exact), `~"Assets"` (contains), `tip:` / `text:` / `id:` / `type:` / `img:`, and `#2` to pick the 2nd match. Commands include `click`, `dclick`, `rclick`, `hover`, `scroll`, `key`, `text`, `find`, `tree`, `expect`, `expect-not`, `waitfor`, `waitfor-not`, `shot`, `menu` and `quit`. On macOS, `key cmd+…` goes through the menu bar like AppKit does. `MOCIDA_SCRIPT=file` replays the same commands from a file. The full reference is in [`src/uikit/app_automation.inc`](src/uikit/app_automation.inc).
+Selectors match text, button labels, placeholders, tooltips and ids: `"Run"` (exact), `~"Assets"` (contains), `tip:` / `text:` / `id:` / `type:` / `img:`, and `#2` to pick the 2nd match. Commands include `click`, `dclick`, `rclick`, `hover`, `scroll`, `key`, `text`, `find`, `tree`, `expect`, `expect-not`, `waitfor`, `waitfor-not`, `shot`, `menu`, `resize W H` and `quit`. On macOS, `key cmd+…` goes through the menu bar like AppKit does. `MOCIDA_SCRIPT=file` replays the same commands from a file. The full reference is in [`src/uikit/app_automation.inc`](src/uikit/app_automation.inc).
 
 ---
 
