@@ -654,6 +654,10 @@ def main(argv=None):
     else:
         err("neither 'ninja' nor 'make' found in PATH. Run setup.py.")
         return 1
+    # A configure that failed leaves CMakeCache.txt but no build files.
+    build_file = "build.ninja" if generator == "Ninja" else "Makefile"
+    if not (build_dir / build_file).exists():
+        needs_configure = True
 
     configure_cmd = ["emcmake", "cmake"] if args.web else ["cmake"]
     configure_args = []
