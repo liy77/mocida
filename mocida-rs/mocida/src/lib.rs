@@ -64,6 +64,7 @@ pub mod file_dialog;
 pub mod file_drop;
 pub mod glass;
 pub mod image;
+pub mod input;
 pub mod menu_bar;
 pub mod mouse_area;
 pub mod overlay;

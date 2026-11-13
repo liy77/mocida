@@ -25,6 +25,7 @@
 //   scroll SEL DY                            wheel over the widget (+ = up)
 //   drag X1 Y1 X2 Y2
 //   key [ctrl+][shift+][alt+][cmd+]NAME      e.g. key cmd+s, key Escape
+//   keydown NAME / keyup NAME                hold / release a key (UIInput state)
 //   text STRING                              text input (rest of the line)
 //   find SEL                                 list every match with bounds
 //   tree [~"filter"]                         list labeled visible widgets
@@ -467,6 +468,9 @@ static void Auto_Exec(AutoCtx* ctx, UIApp* app, const char* l) {
             HandleEvent(app, &e);
             Auto_Out(ctx, "ok");
         }
+    } else if ((!SDL_strcmp(cmd, "keydown") || !SDL_strcmp(cmd, "keyup")) && *rest) {
+        UIInput_SetKey(rest, cmd[3] == 'd');
+        Auto_Out(ctx, "ok");
     } else if (!SDL_strcmp(cmd, "key") && *rest) {
         if (Auto_Key(app, rest)) Auto_Out(ctx, "ok");
         else Auto_Out(ctx, "error: unknown key '%s'", rest);

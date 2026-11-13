@@ -25,6 +25,8 @@
 #include <uikit/asset.h>
 #include <uikit/walker.h>
 #include <uikit/menu_bar.h>
+#include <uikit/input.h>
+#include <uikit/sound.h>
 #ifdef _WIN32
 #include <uikit/webview_dcomp.h>
 #endif

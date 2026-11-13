@@ -1,3 +1,6 @@
+#include <uikit/input.h>
+/* input.c: feeds window events into the polled key / mouse state. */
+void UIInput__OnEvent(const SDL_Event* e);
 #include <SDL3/SDL.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1975,6 +1978,7 @@ void UIApp_RunOneFrame(UIApp* app, Uint32 dtMs) {
                 app->window->visible = 0;
                 app->runInBackground = 0;
             }
+            UIInput__OnEvent(&e);
             HandleEvent(app, &e);
         }
     }
