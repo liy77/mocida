@@ -659,9 +659,12 @@ static SDL_Texture* IconTexture(SDL_Renderer* r, int i, int px) {
 // "iPhone 17 Pro  ·  Portrait  ·  75%", rendered at the window's density.
 static void DrawLabel(SDL_Renderer* r, UIWindow* window, UIDeviceSimulatorState* state, float maxW) {
     char text[256];
+    // Named after the screen as shown: some frames (iPads) stand sideways.
+    int sw = 0, sh = 0;
+    GetDeviceSize(state, &sw, &sh);
     snprintf(text, sizeof(text), "%s  \xC2\xB7  %s  \xC2\xB7  %d%%",
              state->profile.name ? state->profile.name : "Device",
-             state->orientation == UI_DEVICE_ORIENTATION_LANDSCAPE ? "Landscape" : "Portrait",
+             sw > sh ? "Landscape" : "Portrait",
              (int)(state->hostScale * 100.0f + 0.5f));
     const float d = SDL_clamp(SDL_GetWindowPixelDensity(window->sdlWindow), 1.0f, 3.0f);
     if (!g_labelTex || strcmp(text, g_labelText) != 0) {
