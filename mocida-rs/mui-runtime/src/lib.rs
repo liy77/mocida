@@ -4934,15 +4934,17 @@ fn handler_apply_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn 
         PropValue::Handler(h) => h,
         _ => return None,
     };
-    let int_pair: Option<(HandlerAction, Rc<RefCell<Signal<i32>>>)> = handler
-        .action()
+    let int_sets: Vec<(HandlerAction, Rc<RefCell<Signal<i32>>>)> = handler
+        .actions()
+        .into_iter()
         .filter(|a| {
             matches!(
                 a,
                 HandlerAction::AddAssign { .. } | HandlerAction::SetInt { .. }
             )
         })
-        .and_then(|a| ctx.signal(a.name()).cloned().map(|s| (a, s)));
+        .filter_map(|a| ctx.signal(a.name()).cloned().map(|s| (a, s)))
+        .collect();
     type StrSet = (
         StrAction,
         Rc<RefCell<Signal<String>>>,
@@ -4992,7 +4994,7 @@ fn handler_apply_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn 
     } else {
         None
     };
-    if int_pair.is_none() && str_sets.is_empty() && screen_raw.is_none() {
+    if int_sets.is_empty() && str_sets.is_empty() && screen_raw.is_none() {
         return None;
     }
     let trace_raw = trace_handlers_on().then(|| format!("{prop}: {}", handler.raw));
@@ -5003,13 +5005,8 @@ fn handler_apply_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn 
         if let Some(raw) = &screen_raw {
             apply_screen_actions(raw);
         }
-        if let Some((a, sig)) = &int_pair {
-            let next = {
-                let cur = sig.borrow().get();
-                a.apply(cur)
-            };
-            let _ = sig.borrow_mut().set(next);
-        }
+        // String sets first: a counter bump in the same handler (`kind = t ;
+        // n += 1`) must see the values it acts on when the host reacts to it.
         for (a, target, src) in &str_sets {
             match a {
                 StrAction::SetLit { value, .. } => {
@@ -5023,6 +5020,13 @@ fn handler_apply_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn 
                 }
                 StrAction::TwoWay { .. } => {}
             }
+        }
+        for (a, sig) in &int_sets {
+            let next = {
+                let cur = sig.borrow().get();
+                a.apply(cur)
+            };
+            let _ = sig.borrow_mut().set(next);
         }
     }))
 }

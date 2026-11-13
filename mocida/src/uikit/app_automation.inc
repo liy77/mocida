@@ -54,6 +54,7 @@ typedef struct {
     const char* alt;     // placeholder / image source
     const char* tip;     // tooltip attached to this widget
     int         depth;
+    SDL_FRect   clip;    // visible region (enclosing Scroll viewports)
 } AutoNode;
 
 static AutoNode* g_autoNodes;
@@ -69,7 +70,7 @@ static UIChildren* Auto_Children(UIWidgetBase* base) {
     return NULL;
 }
 
-static void Auto_Push(UIWidget* w, UIWidgetBase* base, int depth) {
+static void Auto_Push(UIWidget* w, UIWidgetBase* base, int depth, SDL_FRect clip) {
     if (g_autoCount == g_autoCap) {
         g_autoCap = g_autoCap ? g_autoCap * 2 : 256;
         g_autoNodes = (AutoNode*)realloc(g_autoNodes, sizeof(AutoNode) * (size_t)g_autoCap);
@@ -78,6 +79,7 @@ static void Auto_Push(UIWidget* w, UIWidgetBase* base, int depth) {
     SDL_zerop(n);
     n->w = w;
     n->depth = depth;
+    n->clip = clip;
     const char* t = base->__widget_type;
     n->type = !strncmp(t, "@uikit/", 7) ? t + 7 : t;
     if (!strcmp(t, UI_WIDGET_TEXT)) {
@@ -94,7 +96,7 @@ static void Auto_Push(UIWidget* w, UIWidgetBase* base, int depth) {
     }
 }
 
-static void Auto_Walk(UIChildren* c, int depth) {
+static void Auto_Walk(UIChildren* c, int depth, SDL_FRect clip) {
     if (!c) return;
     for (int i = 0; i < c->count; i++) {
         UIWidget* w = c->children[i];
@@ -102,15 +104,19 @@ static void Auto_Walk(UIChildren* c, int depth) {
         UIWidgetBase* base = (UIWidgetBase*)w->data;
         if (!base->__widget_type) continue;
         if (!strcmp(base->__widget_type, UI_WIDGET_TOOLTIP)) continue;
-        Auto_Push(w, base, depth);
+        Auto_Push(w, base, depth, clip);
         if (!strcmp(base->__widget_type, UI_WIDGET_SCROLL)) {
+            // Content outside the viewport is scrolled out of view.
+            const SDL_FRect vp = { w->x, w->y, w->width ? *w->width : 0.0f, w->height ? *w->height : 0.0f };
+            SDL_FRect inner;
+            if (!SDL_GetRectIntersectionFloat(&clip, &vp, &inner)) inner = (SDL_FRect){ 0, 0, 0, 0 };
             UIWidget* content = ((UIScroll*)base)->content;
             if (content && content->data && content->visible) {
-                Auto_Push(content, (UIWidgetBase*)content->data, depth + 1);
-                Auto_Walk(Auto_Children((UIWidgetBase*)content->data), depth + 2);
+                Auto_Push(content, (UIWidgetBase*)content->data, depth + 1, inner);
+                Auto_Walk(Auto_Children((UIWidgetBase*)content->data), depth + 2, inner);
             }
         } else {
-            Auto_Walk(Auto_Children(base), depth + 1);
+            Auto_Walk(Auto_Children(base), depth + 1, clip);
         }
     }
 }
@@ -119,7 +125,8 @@ static void Auto_Walk(UIChildren* c, int depth) {
 static void Auto_Collect(UIApp* app) {
     g_autoCount = 0;
     UIChildren* root = app->window ? app->window->children : NULL;
-    Auto_Walk(root, 0);
+    const SDL_FRect screen = { 0, 0, (float)app->window->width, (float)app->window->height };
+    Auto_Walk(root, 0, screen);
     if (!root) return;
     for (int i = 0; i < root->count; i++) {
         UIWidget* w = root->children[i];
@@ -140,13 +147,13 @@ static void Auto_Bounds(const UIWidget* w, float* x, float* y, float* bw, float*
     *bh = w->height ? *w->height : 0.0f;
 }
 
-static int Auto_OnScreen(UIApp* app, const UIWidget* w) {
+static int Auto_OnScreen(const AutoNode* n) {
     float x, y, bw, bh;
-    Auto_Bounds(w, &x, &y, &bw, &bh);
+    Auto_Bounds(n->w, &x, &y, &bw, &bh);
     if (bw <= 0.0f || bh <= 0.0f) return 0;
     const float cx = x + bw * 0.5f, cy = y + bh * 0.5f;
-    return cx >= 0.0f && cy >= 0.0f &&
-           cx < (float)app->window->width && cy < (float)app->window->height;
+    return cx >= n->clip.x && cy >= n->clip.y &&
+           cx < n->clip.x + n->clip.w && cy < n->clip.y + n->clip.h;
 }
 
 typedef struct {
@@ -233,7 +240,7 @@ static AutoNode* Auto_Find(UIApp* app, const AutoSelector* sel, int* total) {
     int count = 0;
     for (int i = 0; i < g_autoCount; i++) {
         AutoNode* n = &g_autoNodes[i];
-        if (!Auto_OnScreen(app, n->w) || !Auto_NodeMatches(n, sel)) continue;
+        if (!Auto_OnScreen(n) || !Auto_NodeMatches(n, sel)) continue;
         if (++count == sel->index) hit = n;
     }
     if (total) *total = count;
@@ -480,7 +487,7 @@ static void Auto_Exec(AutoCtx* ctx, UIApp* app, const char* l) {
         int shown = 0;
         for (int i = 0; i < g_autoCount; i++) {
             AutoNode* n = &g_autoNodes[i];
-            if (!Auto_OnScreen(app, n->w)) continue;
+            if (!Auto_OnScreen(n)) continue;
             if (filtered ? !Auto_NodeMatches(n, &sel)
                          : !((n->text && *n->text) || n->tip || n->w->id ||
                              (n->alt && *n->alt))) continue;
@@ -707,4 +714,31 @@ static void Control_Step(UIApp* app) { (void)app; }
 static void Automation_Step(UIApp* app) {
     Script_Step(app);
     Control_Step(app);
+}
+
+// ---- text focus (used by hosts to route Edit ▸ Undo) ---------------------
+
+static int Auto_TextFocused(UIChildren* c) {
+    if (!c) return 0;
+    for (int i = 0; i < c->count; i++) {
+        UIWidget* w = c->children[i];
+        if (!w || !w->data || !w->visible) continue;
+        UIWidgetBase* base = (UIWidgetBase*)w->data;
+        if (!base->__widget_type) continue;
+        if (!strcmp(base->__widget_type, UI_WIDGET_TEXTFIELD) && ((UITextField*)base)->focused) return 1;
+        if (!strcmp(base->__widget_type, UI_WIDGET_TEXTAREA) && ((UITextArea*)base)->focused) return 1;
+        UIChildren* kids = Auto_Children(base);
+        if (!strcmp(base->__widget_type, UI_WIDGET_SCROLL)) {
+            UIWidget* content = ((UIScroll*)base)->content;
+            if (content && content->data && content->visible) {
+                kids = Auto_Children((UIWidgetBase*)content->data);
+            }
+        }
+        if (Auto_TextFocused(kids)) return 1;
+    }
+    return 0;
+}
+
+int UIApp_TextHasFocusG(void) {
+    return g_currentApp && g_currentApp->window && Auto_TextFocused(g_currentApp->window->children);
 }

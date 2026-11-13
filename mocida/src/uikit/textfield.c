@@ -276,7 +276,7 @@ UITextField* UITextField_OnChange(UITextField* tf, UITextFieldChangedCallback cb
 UITextField* UITextField_OnSubmit(UITextField* tf, UITextFieldSubmitCallback cb, void* userdata) {
     if (!tf) return tf;
     tf->onSubmit = cb;
-    tf->userdata = userdata;
+    tf->submitUserdata = userdata;
     return tf;
 }
 
@@ -763,7 +763,7 @@ void UITextField_DispatchKeyDown(UIChildren* children, SDL_Window* win,
                 break;
             case SDL_SCANCODE_RETURN:
             case SDL_SCANCODE_KP_ENTER:
-                if (tf->onSubmit) tf->onSubmit(tf, tf->text, tf->userdata);
+                if (tf->onSubmit) tf->onSubmit(tf, tf->text, tf->submitUserdata);
                 break;
             case SDL_SCANCODE_ESCAPE:
                 SetFocused(tf, win, 0);

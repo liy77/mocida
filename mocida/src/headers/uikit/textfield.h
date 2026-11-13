@@ -73,7 +73,9 @@ struct UITextField {
 
     UITextFieldChangedCallback onChange; /**< Fires on every textual change. */
     UITextFieldSubmitCallback  onSubmit; /**< Fires on Enter (textfield is single-line). */
-    void* userdata;                      /**< Opaque pointer forwarded to onChange / onSubmit. */
+    void* userdata;                      /**< Opaque pointer forwarded to onChange. */
+    void* submitUserdata;                /**< Opaque pointer forwarded to onSubmit (separate, so
+                                          *   both callbacks can carry their own state). */
 };
 
 UITextField* UITextField_Create     (const char* initialText, float fontSize);

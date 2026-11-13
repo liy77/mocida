@@ -622,6 +622,13 @@ void UIApp_SendEditKey(UIApp* app, int scancode, int shift);
 /** UIApp_SendEditKey on the current app. */
 void UIApp_SendEditKeyG(int scancode, int shift);
 
+/**
+ * 1 when a visible TextField / TextArea of the current app has keyboard
+ * focus. Lets a host route Edit ▸ Undo to the text being edited, or to its
+ * own document history otherwise.
+ */
+int UIApp_TextHasFocusG(void);
+
 #ifdef MOCIDA_WEB
 void UIApp_RunOneFrame(UIApp* app, Uint32 dtMs);
 void UIApp_RunWeb(UIApp* app);

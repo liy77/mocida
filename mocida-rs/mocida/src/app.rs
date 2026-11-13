@@ -572,6 +572,12 @@ pub fn send_edit_command(cmd: EditCommand) {
     unsafe { sys::UIApp_SendEditKeyG(scancode, shift) };
 }
 
+/// `true` while a visible text field / text area has keyboard focus — route
+/// Edit ▸ Undo to the text then, and to the host's own history otherwise.
+pub fn text_has_focus() -> bool {
+    unsafe { sys::UIApp_TextHasFocusG() != 0 }
+}
+
 /// Minimizes the current app's window to the taskbar.
 pub fn window_minimize() {
     unsafe { sys::UIApp_MinimizeG() };
