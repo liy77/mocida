@@ -173,20 +173,23 @@ static void RenderWidget_Glass(UIWindow* window, UIWidget* el,
                 DrawGlassBackdropBlur(window->sdlRenderer, g_tempRect1, effBlur);
             }
 
-            // thin/regular/thick nudge the painted opacity a little.
+            // thin/regular/thick nudge the painted opacity a little (glass only).
             float thick = (g->thickness == UI_GLASS_THIN)  ? 0.8f
                         : (g->thickness == UI_GLASS_THICK) ? 1.25f
                         :                                     1.0f;
 
             UIColor fillC = g->tint;
-            fillC.a *= effTintOp * thick * op;
+            if (glassOn) {
+                fillC.a *= effTintOp * thick * op;
+            } else {
+                // Translucent Popups OFF → opaque panel color, no see-through.
+                fillC.a = op;
+            }
             if (fillC.a > 1.0f) fillC.a = 1.0f;
 
-            // macOS vibrancy-style top highlight: a thin strip of lighter tint
-            // at the top of the panel where the imaginary light source hits.
-            // This replaces the uniform border with the characteristic "glow"
-            // seen on AppKit materials.
-            if (g->radius >= 1.0f) {
+            // macOS vibrancy-style top highlight — glass only (solid panels skip
+            // the glow so they read as flat chrome).
+            if (glassOn && g->radius >= 1.0f) {
                 SDL_FRect topGlow = g_tempRect1;
                 topGlow.h = SDL_max(1.0f, g->radius * 0.6f);
                 if (topGlow.h > g_tempRect1.h * 0.25f) topGlow.h = g_tempRect1.h * 0.25f;
@@ -194,18 +197,21 @@ static void RenderWidget_Glass(UIWindow* window, UIWidget* el,
                 DrawRoundedRectFill(window->sdlRenderer, topGlow, glowC, g->radius);
             }
 
-            // Very subtle perimeter edge so the panel still separates from
-            // similarly-toned backdrops.
-            UIColor edgeC = (UIColor){ 255, 255, 255, 0.08f * op };
+            // Tint fill + edge. fillC MUST be painted — a prior change passed a
+            // fully transparent fill here, so Glass{} never covered the content
+            // behind it (Translucent Popups OFF still looked see-through).
+            UIColor edgeC = glassOn
+                ? (UIColor){ 255, 255, 255, 0.08f * op }
+                : (UIColor){ 255, 255, 255, 0.12f * op };
             DrawRoundedRectWithBorder(window->sdlRenderer, g_tempRect1,
-                                      (UIColor){0,0,0,0.0f}, g->radius, 1, edgeC);
+                                      fillC, g->radius, 1, edgeC);
 
             // Subtle grain for Acrylic / Vibrancy HUD / Liquid Glass — the
             // macOS vibrancy look has a fine surface texture that keeps the
             // panel from looking like a flat plastic overlay.
             const int supportsNoise =
                 (UIBackdropMaterial_SupportedProps(g->material) & UI_GLASS_PROP_NOISE) != 0;
-            if (supportsNoise && g->noise > 0.001f) {
+            if (glassOn && supportsNoise && g->noise > 0.001f) {
                 int nw = (int)(g_tempRect1.w * 0.5f + 0.5f);
                 int nh = (int)(g_tempRect1.h * 0.5f + 0.5f);
                 if (nw < 4) nw = 4;
