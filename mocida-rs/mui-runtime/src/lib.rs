@@ -3765,7 +3765,7 @@ fn build_canvas(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
     let w = dim_prop(ctx, el, "width").unwrap_or(400.0);
     let h = dim_prop(ctx, el, "height").unwrap_or(35.0);
 
-    let tab_w = style::f32_prop(el, "tabWidth").unwrap_or(150.0);
+    let tab_w_static = style::f32_prop(el, "tabWidth").unwrap_or(150.0);
     let tab_h = style::f32_prop(el, "tabHeight").unwrap_or(33.0);
     let overlap = style::f32_prop(el, "overlap").unwrap_or(11.0);
     let radius = style::f32_prop(el, "radius").unwrap_or(9.0);
@@ -3784,7 +3784,7 @@ fn build_canvas(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
     let inactive_hover = style::color_prop(el, "inactiveHoverColor")
         .map(to_color)
         .unwrap_or_else(|| Color::rgb(0x3a, 0x3a, 0x3e));
-    let accent_c = style::color_prop(el, "accentColor")
+    let accent_fallback = style::color_prop(el, "accentColor")
         .map(to_color)
         .unwrap_or_else(|| Color::rgb(0x35, 0x74, 0xf0));
 
@@ -3812,6 +3812,20 @@ fn build_canvas(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
         .and_then(|n| ctx.signal(&n))
         .map(|s| s.borrow().as_ptr());
 
+    // Live `tabWidth:` — browser-style shrinking. Prefer an int signal (host
+    // updates `tab_w` as the window / tab count changes); fall back to the
+    // authored constant when the prop is a literal.
+    let tab_w_sig = find_prop(el, "tabWidth")
+        .and_then(|p| match &p.value {
+            PropValue::Expr(e) => Some(names_read(e)),
+            _ => None,
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .find(|n| ctx.signal(n).is_some())
+        .and_then(|n| ctx.signal(&n))
+        .map(|s| s.borrow().as_ptr());
+
     let label_c = style::color_prop(el, "labelColor")
         .map(to_color)
         .unwrap_or_else(|| Color::rgb(0x9d, 0xa0, 0xa8));
@@ -3827,9 +3841,9 @@ fn build_canvas(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
     let font_size = style::f32_prop(el, "fontSize").unwrap_or(11.5);
 
 
-    // Parsed per-tab (active, dirty) flags + the raw signal bytes they came from.
+    // Parsed per-tab (active, dirty, chip accent) + the raw signal bytes.
     let mut tabs_raw: Vec<u8> = Vec::new();
-    let mut tabs: Vec<(bool, bool)> = Vec::new();
+    let mut tabs: Vec<(bool, bool, Color)> = Vec::new();
 
     let canvas = Canvas::new(w, h)?.on_frame(move |d| {
         let cw = d.width();
@@ -3838,6 +3852,13 @@ fn build_canvas(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
         // the spare strip height as a gap above) and fuse into the content below.
         let base_y = ch;
         let top_y = (base_y - tab_h).max(0.0);
+        let tab_w = match tab_w_sig {
+            Some(p) => {
+                let v = unsafe { mocida::sys::UISignal_GetInt(p) as f32 };
+                if v >= 48.0 { v } else { tab_w_static }
+            }
+            None => tab_w_static,
+        };
 
         // Background bar (whole strip).
         d.set_fill(bar_c);
@@ -3857,14 +3878,20 @@ fn build_canvas(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
             tabs_raw.extend_from_slice(raw);
             tabs.clear();
             // Each row: `flag\x1Flabel\x1Fdirty\x1F#rrggbb\x1Fmocida://icon`
-            // (flag a|i, dirty d|""); only the flags drive the drawing.
+            // (flag a|i, dirty d|""); chip color is the per-type theme accent.
             if !raw.is_empty() {
                 for row in raw.split(|&c| c == b'\n') {
                     let mut it = row.split(|&c| c == 0x1f);
                     let active = it.next().is_some_and(|f| f.first() == Some(&b'a'));
                     let _label = it.next();
                     let dirty = it.next().is_some_and(|f| f.first() == Some(&b'd'));
-                    tabs.push((active, dirty));
+                    let chip = it
+                        .next()
+                        .and_then(|b| std::str::from_utf8(b).ok())
+                        .and_then(parse_hex_color)
+                        .map(to_color)
+                        .unwrap_or(accent_fallback);
+                    tabs.push((active, dirty, chip));
                 }
             }
         }
@@ -3939,13 +3966,17 @@ fn build_canvas(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
                 }
             }
         }
-        // Pass 2: the active tab — the page surface itself (no accent bar).
+        // Pass 2: the active tab — the page surface itself, with a thin
+        // per-type accent underline (scene gold, rust orange, …).
         if let Some(ai) = active_idx {
             let x = leading + (ai as f32) * tab_w - scroll_x;
             tab_path(d, x);
             d.set_fill(active_c);
             d.fill();
-            let _ = accent_c;
+            let chip = tabs[ai].2;
+            let accent_h = 2.0_f32;
+            d.set_fill(chip);
+            d.fill_rect(x + 10.0, base_y - accent_h, (tab_w - 20.0).max(8.0), accent_h);
         }
 
         // Pass 3: close mark (or the unsaved dot). Icon and filename are real
@@ -3953,7 +3984,7 @@ fn build_canvas(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
         let close_box = 16.0_f32;
         let pad_right = 8.0_f32;
         let _ = (font_size, &font_family, label_c);
-        for (i, &(_, dirty)) in tabs.iter().enumerate() {
+        for (i, &(_, dirty, _)) in tabs.iter().enumerate() {
             let x = leading + (i as f32) * tab_w - scroll_x;
             if x + tab_w < -2.0 || x > cw + 2.0 {
                 continue;

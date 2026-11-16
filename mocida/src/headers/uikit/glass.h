@@ -160,5 +160,9 @@ void  UIGlass_SetGlobalEnabled   (int on);     /* default: 1 (on) */
 int   UIGlass_GetGlobalEnabled   (void);
 void  UIGlass_SetGlobalBlurScale (float scale); /* default: 1.0 */
 float UIGlass_GetGlobalBlurScale (void);
+/* Multiplies each Glass widget's tintOpacity. Subtle intensity raises this so
+ * weak blur still reads as frost; Strong lowers it so heavy blur shows through. */
+void  UIGlass_SetGlobalTintScale (float scale); /* default: 1.0 */
+float UIGlass_GetGlobalTintScale (void);
 
 #endif // UIKIT_GLASS_H

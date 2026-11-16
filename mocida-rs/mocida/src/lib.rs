@@ -106,7 +106,8 @@ pub use error::{Error, Result};
 pub use event::Event;
 pub use file_drop::FileDrop;
 pub use glass::{
-    set_glass_blur_scale, set_glass_enabled, BackdropMaterial, Glass, GlassThickness, VibrancyState,
+    set_glass_blur_scale, set_glass_enabled, set_glass_tint_scale, BackdropMaterial, Glass,
+    GlassThickness, VibrancyState,
 };
 pub use image::{FillMode, Image, ImageLoadState};
 pub use mouse_area::{MouseArea, MouseAreaEvent, MouseEvent};

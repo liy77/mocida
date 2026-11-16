@@ -227,8 +227,11 @@ void UIGlass_Destroy(UIGlass* g) {
 // ---- global glass controls (live) ----
 static int   g_glassGlobalEnabled   = 1;
 static float g_glassGlobalBlurScale = 1.0f;
+static float g_glassGlobalTintScale = 1.0f;
 
 void  UIGlass_SetGlobalEnabled(int on)         { g_glassGlobalEnabled = on ? 1 : 0; }
 int   UIGlass_GetGlobalEnabled(void)           { return g_glassGlobalEnabled; }
 void  UIGlass_SetGlobalBlurScale(float scale)  { g_glassGlobalBlurScale = (scale < 0.0f) ? 0.0f : scale; }
 float UIGlass_GetGlobalBlurScale(void)         { return g_glassGlobalBlurScale; }
+void  UIGlass_SetGlobalTintScale(float scale)  { g_glassGlobalTintScale = (scale < 0.0f) ? 0.0f : scale; }
+float UIGlass_GetGlobalTintScale(void)         { return g_glassGlobalTintScale; }

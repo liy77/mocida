@@ -1413,10 +1413,13 @@ void DrawGlassBackdropBlur(SDL_Renderer* r, SDL_FRect rect, float blurPx) {
     }
 
     // Progressive halving — more passes = wider blur (scaled by blurPx).
-    int passes = (int)(blurPx / 5.0f);
+    // Cap at 12 so Glass Intensity Strong (blur×~2) is visibly heavier than
+    // Medium; the old cap of 6 made Medium and Strong identical for typical
+    // dialog blur values (~34 px).
+    int passes = (int)(blurPx / 4.0f);
     if (passes < 1) passes = 1;
-    if (passes > 6) passes = 6;
-    SDL_Texture* levels[7] = { 0 };
+    if (passes > 12) passes = 12;
+    SDL_Texture* levels[12] = { 0 };
     int nLevels = 0;
     SDL_Texture* cur = cap;
     int dw = sw, dh = sh;

@@ -159,8 +159,12 @@ static void RenderWidget_Glass(UIWindow* window, UIWidget* el,
             // the intensity / "power" knob.
             const int   glassOn    = UIGlass_GetGlobalEnabled();
             const float blurScale  = UIGlass_GetGlobalBlurScale();
+            const float tintScale  = UIGlass_GetGlobalTintScale();
             const float effBlur    = glassOn ? (g->blurPx * blurScale) : 0.0f;
-            const float effTintOp  = glassOn ? g->tintOpacity : 1.0f;
+            // Tint scale keeps Subtle frosted (more opaque) and lets Strong show
+            // more of the blurred backdrop instead of a solid wash.
+            float effTintOp = glassOn ? (g->tintOpacity * tintScale) : 1.0f;
+            if (effTintOp > 1.0f) effTintOp = 1.0f;
 
             // Real backdrop blur of the app content behind the panel (the in-app
             // "vibrancy"). Skipped for window-wide OS materials (Mica/KDE-window)

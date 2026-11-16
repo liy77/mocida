@@ -294,3 +294,10 @@ pub fn set_glass_enabled(on: bool) {
 pub fn set_glass_blur_scale(scale: f32) {
     unsafe { sys::UIGlass_SetGlobalBlurScale(scale) };
 }
+
+/// Global tint-opacity multiplier applied to every `Glass` widget's
+/// `tintOpacity`. Subtle intensity raises this so weak blur still reads as
+/// frost; Strong lowers it so heavy blur shows through.
+pub fn set_glass_tint_scale(scale: f32) {
+    unsafe { sys::UIGlass_SetGlobalTintScale(scale) };
+}
