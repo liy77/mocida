@@ -23,6 +23,7 @@ pub fn is_supported(lang: &str) -> bool {
             | "crm"
             | "mui"
             | "json"
+            | "scene"
             | "toml"
             | "kson"
             | "sh"
@@ -56,9 +57,10 @@ fn keywords(lang: &str) -> &'static [&'static str] {
             "view", "App", "signal", "mut", "if", "else", "for", "in", "import", "from", "true",
             "false", "Window", "Screen",
         ],
-        // JSON (incl. mocidad.project) + KSON (copper config): strings/numbers come
-        // from the shared lexer; only the literals need a keyword color.
-        "json" | "kson" => &["true", "false", "null"],
+        // JSON / .scene (mocidad.scene) + KSON: strings/numbers from the shared
+        // lexer; only the literals need a keyword color. Object keys are coloured
+        // as ATTR when followed by `:` (see the string rule below).
+        "json" | "scene" | "kson" => &["true", "false", "null"],
         // TOML (incl. Cargo.toml / Cargo.lock): # comments + strings/numbers from
         // the lexer; only the booleans (+ inf/nan) get a keyword color.
         "toml" => &["true", "false", "inf", "nan"],
@@ -226,6 +228,8 @@ pub fn spans(text: &str, lang: &str) -> Vec<(usize, usize, Color)> {
         // appears to "break". Real multi-line Rust strings are rare; stopping at
         // the newline is the robust editor choice (a stray quote only mis-colors
         // its own line). The escape skip also can't jump over a newline.
+        // JSON / .scene / KSON: a string followed by `:` is an object key → ATTR
+        // (purple), so keys stand out from string values (soft orange).
         if c == b'"' {
             let s = i;
             i += 1;
@@ -239,7 +243,15 @@ pub fn spans(text: &str, lang: &str) -> Vec<(usize, usize, Color)> {
             if i < n && b[i] == b'"' {
                 i += 1; // consume the closing quote (but never the newline)
             }
-            out.push((s, i, STRING));
+            let mut is_key = false;
+            if matches!(lang, "json" | "kson" | "scene") {
+                let mut j = i;
+                while j < n && (b[j] == b' ' || b[j] == b'\t') {
+                    j += 1;
+                }
+                is_key = j < n && b[j] == b':';
+            }
+            out.push((s, i, if is_key { ATTR } else { STRING }));
             continue;
         }
         // Char literal vs Rust lifetime. `'a` / `'static` are lifetimes (no
