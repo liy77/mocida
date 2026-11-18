@@ -1,4 +1,5 @@
 #include <uikit/window.h>
+#include <uikit/upscale.h>
 #include <uikit/button.h>
 #include <uikit/mouse_area.h>
 #include <uikit/container.h>
@@ -626,6 +627,9 @@ int UIWindow_Render(UIWindow* window) {
         }
         if (g_shotRequest) { SDL_free(g_shotRequest); g_shotRequest = NULL; }
     }
+
+    // MetalFX spatial upscale, when the game selected that mode.
+    UIUpscale_ApplyFrame(window->sdlRenderer);
 
     // Present final frame
     SDL_RenderPresent(window->sdlRenderer);

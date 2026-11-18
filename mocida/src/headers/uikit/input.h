@@ -32,6 +32,31 @@ float UIInput_PadAxis(int axis);
 /** The connected gamepad's name, or "" (for picking button labels). */
 const char* UIInput_PadName(void);
 
+/**
+ * Scales every later rumble. `scale` is 0..1 (0 is off, 1 is full).
+ * The value is clamped. Returns the scale that was stored.
+ */
+float UIInput_SetRumbleScale(float scale);
+
+/** The scale from `UIInput_SetRumbleScale` (1 until changed). */
+float UIInput_RumbleScale(void);
+
+/**
+ * Vibrates the connected gamepad.
+ *
+ * `low` / `high` are the heavy and light motors, 0..1.
+ * `left_trigger` / `right_trigger` are the trigger motors, 0..1
+ * (Xbox-style pads; other pads ignore them).
+ * `duration_ms` is how long the effect lasts. 0 stops it now.
+ *
+ * The stored scale is applied on top of these intensities.
+ * Returns 1 when a pad accepted the effect.
+ */
+int UIInput_Rumble(float low, float high, float left_trigger, float right_trigger, int duration_ms);
+
+/** Stops every motor. */
+void UIInput_StopRumble(void);
+
 /** Marks `name` held or released as if its key event had arrived. */
 void UIInput_SetKey(const char* name, int down);
 

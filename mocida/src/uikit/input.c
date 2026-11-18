@@ -4,6 +4,20 @@ static Uint8 g_keys[SDL_SCANCODE_COUNT];
 static Uint8 g_mouse[8];
 static SDL_Gamepad* g_pad = NULL;
 static int g_padTried = 0;
+static float g_rumbleScale = 1.0f;
+
+static float Clamp01(float v) {
+    if (v < 0.0f) return 0.0f;
+    if (v > 1.0f) return 1.0f;
+    return v;
+}
+
+static Uint16 Motor(float intensity) {
+    float v = Clamp01(intensity) * g_rumbleScale;
+    if (v <= 0.0f) return 0;
+    if (v >= 1.0f) return 0xFFFF;
+    return (Uint16)(v * 65535.0f);
+}
 
 static SDL_Scancode ScancodeOf(const char* name) {
     if (!name || !*name) return SDL_SCANCODE_UNKNOWN;
@@ -50,6 +64,7 @@ void UIInput__OnEvent(const SDL_Event* e) {
             break;
         case SDL_EVENT_GAMEPAD_REMOVED:
             if (g_pad && SDL_GetGamepadID(g_pad) == e->gdevice.which) {
+                SDL_RumbleGamepad(g_pad, 0, 0, 0);
                 SDL_CloseGamepad(g_pad);
                 g_pad = NULL;
             }
@@ -92,4 +107,31 @@ float UIInput_PadAxis(int axis) {
 const char* UIInput_PadName(void) {
     const char* n = g_pad ? SDL_GetGamepadName(g_pad) : NULL;
     return n ? n : "";
+}
+
+float UIInput_SetRumbleScale(float scale) {
+    g_rumbleScale = Clamp01(scale);
+    return g_rumbleScale;
+}
+
+float UIInput_RumbleScale(void) {
+    return g_rumbleScale;
+}
+
+int UIInput_Rumble(float low, float high, float left_trigger, float right_trigger, int duration_ms) {
+    if (!UIInput_PollGamepad() || !g_pad) return 0;
+    if (duration_ms < 0) duration_ms = 0;
+    const int body = SDL_RumbleGamepad(
+        g_pad, Motor(low), Motor(high), (Uint32)duration_ms) ? 1 : 0;
+    const int triggers = SDL_RumbleGamepadTriggers(
+        g_pad, Motor(left_trigger), Motor(right_trigger), (Uint32)duration_ms) ? 1 : 0;
+    SDL_UpdateJoysticks();
+    return body || triggers;
+}
+
+void UIInput_StopRumble(void) {
+    if (!g_pad) return;
+    SDL_RumbleGamepad(g_pad, 0, 0, 0);
+    SDL_RumbleGamepadTriggers(g_pad, 0, 0, 0);
+    SDL_UpdateJoysticks();
 }

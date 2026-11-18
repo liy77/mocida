@@ -303,7 +303,22 @@ struct Built {
 }
 
 fn build(source: &str, path: Option<&str>) -> Result<Built, Box<dyn std::error::Error>> {
-    build_seeded(source, path, &std::collections::HashMap::new())
+    build_seeded(source, path, &platform_seed())
+}
+
+/// macOS keeps the native traffic lights, so the Windows chrome must start hidden.
+fn with_platform(mut seed: std::collections::HashMap<String, String>) -> std::collections::HashMap<String, String> {
+    seed.extend(platform_seed());
+    seed
+}
+
+fn platform_seed() -> std::collections::HashMap<String, String> {
+    let os = mui_runtime::platform::os();
+    let mut seed = std::collections::HashMap::new();
+    seed.insert("is_macos".into(), if os == "macos" { "1" } else { "0" }.into());
+    seed.insert("is_windows".into(), if os == "windows" { "1" } else { "0" }.into());
+    seed.insert("is_linux".into(), if os == "linux" { "1" } else { "0" }.into());
+    seed
 }
 
 /// Like [`build`] but seeds signal values from `seed`, so a rebuild triggered by
@@ -630,7 +645,7 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
                     SIM_RESTART => {
                         // Start the app over: a fresh build, every signal back to its initial value.
                         let src = std::fs::read_to_string(&watch_path).unwrap_or_else(|_| source_cell.borrow().clone());
-                        match build_seeded(&src, watch_path.to_str(), &HashMap::new()) {
+                        match build_seeded(&src, watch_path.to_str(), &platform_seed()) {
                             Ok(built) => {
                                 unsafe { mocida::sys::UIApp_SetChildren(app_ptr, built.children.into_raw()) };
                                 *reactive_slot.borrow_mut() = Some(built.reactive);
@@ -669,7 +684,7 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
                                 println!("mui-dev: simulating {}", sim.label);
                                 *sim_tick.borrow_mut() = Some(sim);
                                 // Rebuild so `Platform.*` checks see the new device.
-                                let seed = reactive_slot.borrow().as_ref().map(|r| r.values()).unwrap_or_default();
+                                let seed = with_platform(reactive_slot.borrow().as_ref().map(|r| r.values()).unwrap_or_default());
                                 let src = source_cell.borrow().clone();
                                 if let Ok(built) = build_seeded(&src, watch_path.to_str(), &seed) {
                                     unsafe { mocida::sys::UIApp_SetChildren(app_ptr, built.children.into_raw()) };
@@ -704,11 +719,11 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
             };
             if cur_size.0 > 0 && cur_size.1 > 0 && cur_size != last_size.get() {
                 last_size.set(cur_size);
-                let seed = reactive_slot
+                let seed = with_platform(reactive_slot
                     .borrow()
                     .as_ref()
                     .map(|r| r.values())
-                    .unwrap_or_default();
+                    .unwrap_or_default());
                 let src = source_cell.borrow().clone();
                 if let Ok(built) = build_seeded(&src, watch_path.to_str(), &seed) {
                     let raw = built.children.into_raw();
@@ -724,11 +739,11 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
                 .map(|r| r.take_dirty())
                 .unwrap_or(false);
             if dirty_signal {
-                let seed = reactive_slot
+                let seed = with_platform(reactive_slot
                     .borrow()
                     .as_ref()
                     .map(|r| r.values())
-                    .unwrap_or_default();
+                    .unwrap_or_default());
                 let src = source_cell.borrow().clone();
                 match build_seeded(&src, watch_path.to_str(), &seed) {
                     Ok(built) => {

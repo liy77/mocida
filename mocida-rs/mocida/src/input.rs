@@ -45,6 +45,31 @@ pub fn pad_name() -> String {
     }
 }
 
+/// Scales later rumbles. `scale` is 0..1. Returns the stored scale.
+pub fn set_rumble_scale(scale: f32) -> f32 {
+    unsafe { sys::UIInput_SetRumbleScale(scale) }
+}
+
+/// The scale applied on top of every rumble intensity.
+pub fn rumble_scale() -> f32 {
+    unsafe { sys::UIInput_RumbleScale() }
+}
+
+/// Vibrates the connected pad.
+///
+/// `low` and `high` are the heavy and light motors, 0..1.
+/// `left_trigger` and `right_trigger` are the trigger motors, 0..1.
+/// `duration_ms` is how long it lasts; 0 stops it.
+/// Returns whether a pad accepted the effect.
+pub fn rumble(low: f32, high: f32, left_trigger: f32, right_trigger: f32, duration_ms: i32) -> bool {
+    unsafe { sys::UIInput_Rumble(low, high, left_trigger, right_trigger, duration_ms) != 0 }
+}
+
+/// Stops every rumble motor.
+pub fn stop_rumble() {
+    unsafe { sys::UIInput_StopRumble() };
+}
+
 /// Holds or releases `name` as if its key event had arrived.
 pub fn set_key(name: &str, down: bool) {
     if let Ok(c) = CString::new(name) {

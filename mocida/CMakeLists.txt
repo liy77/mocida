@@ -364,6 +364,8 @@ if(APPLE)
         # which AppKit refreshes synchronously. See cursor_cocoa.mm.
         list(APPEND MOCIDA_SOURCES_OBJCXX
             "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/cursor_cocoa.mm")
+        list(APPEND MOCIDA_SOURCES_OBJCXX
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/metalfx.mm")
     endif()
 endif()
 
@@ -467,7 +469,7 @@ if(APPLE)
         target_compile_definitions(mocida PRIVATE MOCIDA_HAS_WKWEBVIEW=1)
         # CoreText: direct font-family -> file resolution in font.c.
         target_link_libraries(mocida PUBLIC "-framework WebKit" "-framework Cocoa"
-            "-framework CoreText")
+            "-framework CoreText" "-framework Metal" "-framework MetalFX" "-framework QuartzCore")
         message(STATUS "Mocida: macOS UIWebView backend = WKWebView (webview_cocoa.mm)")
     endif()
 endif()
