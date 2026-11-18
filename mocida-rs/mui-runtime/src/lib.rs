@@ -4913,6 +4913,12 @@ fn apply_text_font(mut text: Text, el: &Element) -> Result<Text> {
             text = text.font_family(&path)?;
         }
     }
+    if let Some(ls) = style::f32_prop(el, "letterSpacing") {
+        text = text.letter_spacing(ls);
+    }
+    if let Some(lh) = style::f32_prop(el, "lineHeight") {
+        text = text.line_height(lh);
+    }
     Ok(text)
 }
 

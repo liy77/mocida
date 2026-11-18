@@ -53,6 +53,11 @@ static void mocida_web_loop(void) {
 
     UIApp_RunOneFrame(s_webApp, dtMs);
     if (!s_webApp) return;
+    // The browser canvas is the window. A desktop "hidden" flag must not
+    // cancel the page loop, or the first frame leaves a blank canvas.
+    if (!s_webApp->window->visible) {
+        s_webApp->window->visible = 1;
+    }
     if (!s_webApp->window->visible && !s_webApp->runInBackground) {
         emscripten_cancel_main_loop();
         s_webApp = NULL;

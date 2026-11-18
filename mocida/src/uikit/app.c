@@ -1797,8 +1797,10 @@ void UIApp_ShowWindow(UIApp* app) {
     // MOCIDA_WINDOW_HIDDEN=1 (tests, headless runs) never puts a window on
     // screen: such a process is a background app that can't take the
     // keyboard, so a visible window would only be in the way.
+#if !defined(MOCIDA_WEB)
     const char* hidden = SDL_getenv("MOCIDA_WINDOW_HIDDEN");
     if (hidden && hidden[0] == '1') return;
+#endif
     SDL_ShowWindow(app->window->sdlWindow);
 }
 

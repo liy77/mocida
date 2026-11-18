@@ -755,7 +755,8 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
             }
 
             // Compute the bounding box of the laid-out lines.
-            const float lineH = twid->fontSize * 1.25f;
+            const float lineMul = twid->lineHeight > 0.0f ? twid->lineHeight : 1.25f;
+            const float lineH = twid->fontSize * lineMul;
             float maxLineW = 0.0f;
             for (int li = 0; li < twid->__linesLen; li++) {
                 if (!twid->__lineTextures[li]) continue;
@@ -1024,6 +1025,57 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
                         } else {
                             surf = TTF_RenderText_Blended(font, twid->text,
                                                           twid->textLength, sc);
+                        }
+                    } else if (twid->letterSpacing != 0.0f) {
+                        // SDL_ttf has no tracking. Draw one glyph at a time
+                        // and add letterSpacing (in logical px, scaled) after
+                        // each advance so "MOCIDAD" can breathe like the site.
+                        const float extra = twid->letterSpacing * ss;
+                        int totalW = 0, maxH = 0, count = 0;
+                        const char* p = twid->text;
+                        const char* end = twid->text + twid->textLength;
+                        while (p < end) {
+                            const char* start = p;
+                            int bytes = 1;
+                            unsigned char c = (unsigned char)*p;
+                            if (c < 0x80) bytes = 1;
+                            else if ((c & 0xE0) == 0xC0) bytes = 2;
+                            else if ((c & 0xF0) == 0xE0) bytes = 3;
+                            else if ((c & 0xF8) == 0xF0) bytes = 4;
+                            if (start + bytes > end) bytes = (int)(end - start);
+                            int gw = 0, gh = 0;
+                            TTF_GetStringSize(font, start, (size_t)bytes, &gw, &gh);
+                            totalW += gw;
+                            if (gh > maxH) maxH = gh;
+                            count++;
+                            p = start + bytes;
+                        }
+                        if (count > 1) totalW += (int)(extra * (count - 1));
+                        if (totalW < 1) totalW = 1;
+                        if (maxH < 1) maxH = (int)(twid->fontSize * ss);
+                        surf = SDL_CreateSurface(totalW, maxH, SDL_PIXELFORMAT_RGBA32);
+                        if (surf) {
+                            SDL_FillSurfaceRect(surf, NULL, 0);
+                            int x = 0;
+                            p = twid->text;
+                            while (p < end) {
+                                const char* start = p;
+                                int bytes = 1;
+                                unsigned char c = (unsigned char)*p;
+                                if (c < 0x80) bytes = 1;
+                                else if ((c & 0xE0) == 0xC0) bytes = 2;
+                                else if ((c & 0xF0) == 0xE0) bytes = 3;
+                                else if ((c & 0xF8) == 0xF0) bytes = 4;
+                                if (start + bytes > end) bytes = (int)(end - start);
+                                SDL_Surface* glyph = TTF_RenderText_Blended(font, start, (size_t)bytes, sc);
+                                if (glyph) {
+                                    SDL_Rect d = { x, 0, glyph->w, glyph->h };
+                                    SDL_BlitSurface(glyph, NULL, surf, &d);
+                                    x += glyph->w + (int)extra;
+                                    SDL_DestroySurface(glyph);
+                                }
+                                p = start + bytes;
+                            }
                         }
                     } else {
                         surf = TTF_RenderText_Blended(font, twid->text,

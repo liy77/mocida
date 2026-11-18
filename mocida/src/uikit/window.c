@@ -856,8 +856,17 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
         return NULL;
     }
 
-    // Create window with simpler flags to avoid compatibility issues
+    // Create window with simpler flags to avoid compatibility issues.
+    // The web canvas is not a desktop window: HiDPI and resize flags make
+    // SDL create a surface the browser never presents.
+#if defined(MOCIDA_WEB)
+    uint32_t window_flags = 0;
+    // Software never presents to the browser canvas. GLES2 does.
+    SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengles2");
+    SDL_SetHint(SDL_HINT_EMSCRIPTEN_CANVAS_SELECTOR, "#canvas");
+#else
     uint32_t window_flags = SDL_WINDOW_RESIZABLE;
+#endif
 
     // HiDPI / Retina: request a pixel-dense drawable so the renderer draws at the
     // display's native resolution instead of point size (which macOS then upscales,
@@ -954,7 +963,11 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
     const char* __envHidden  = SDL_getenv("MOCIDA_WINDOW_HIDDEN");
     const int   __wantDisplay = __envDisplay ? SDL_atoi(__envDisplay) : 0;
     const int   __wantMin     = (__envMin && __envMin[0] == '1');
+#if defined(MOCIDA_WEB)
+    const int   __wantHidden  = 0;
+#else
     const int   __wantHidden  = (__envHidden && __envHidden[0] == '1');
+#endif
     if (__wantDisplay > 0 || __wantHidden) window_flags |= SDL_WINDOW_HIDDEN;
     if (__wantMin)         window_flags |= SDL_WINDOW_MINIMIZED;
 

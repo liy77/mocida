@@ -393,8 +393,8 @@ static void Emscripten_DestroyWindow(SDL_VideoDevice *_this, SDL_Window *window)
 
         Emscripten_UnregisterEventHandlers(data);
 
-        // We can't destroy the canvas, so resize it to zero instead
-        emscripten_set_canvas_element_size(data->canvas_id, 0, 0);
+        // Zeroing the canvas leaves the page blank if the window is
+        // destroyed while the browser loop is still presenting. Leave it.
         SDL_free(data->canvas_id);
 
         SDL_free(window->internal);

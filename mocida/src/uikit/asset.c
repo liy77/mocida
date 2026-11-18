@@ -15,6 +15,16 @@ static int BuildCandidates(const char* path,
                            char buf3[ASSET_PATH_BUF],
                            const char* out[3]) {
     if (!path) return 0;
+    // A user-supplied path may not climb out of the asset folder, embed a
+    // null, or point at a device. The loader only accepts a relative name.
+    if (path[0] == '/' || path[0] == '\\') {
+        return 0;
+    }
+    for (const char* p = path; *p; p++) {
+        if (p[0] == '.' && p[1] == '.' && (p[2] == '/' || p[2] == '\\' || p[2] == '\0')) {
+            return 0;
+        }
+    }
     // Resolve a mocida:// virtual path to its real file first; non-virtual
     // paths pass straight through.
     path = UIApp_ResolveBundle(path);
@@ -30,10 +40,8 @@ static int BuildCandidates(const char* path,
         int w2 = snprintf(buf2, ASSET_PATH_BUF, "%s%s", base, path);
         if (w2 > 0 && w2 < ASSET_PATH_BUF) out[n++] = buf2;
 
-        // SDL_GetBasePath already ends with a separator, so "../" works
-        // both on Windows and Unix.
-        int w3 = snprintf(buf3, ASSET_PATH_BUF, "%s../%s", base, path);
-        if (w3 > 0 && w3 < ASSET_PATH_BUF) out[n++] = buf3;
+        // Stay inside the binary folder. A "../" candidate would let a
+        // crafted name read the directory above the app.
     }
 
     return n;

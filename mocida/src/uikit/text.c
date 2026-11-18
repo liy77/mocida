@@ -23,6 +23,8 @@ UIText* UIText_Create(char* text, float fontSize) {
     }
 
     uiText->fontSize = fontSize;
+    uiText->letterSpacing = 0.0f;
+    uiText->lineHeight = 0.0f;
     // Default font: a system path on desktop, the first bundled font on iOS
     // (UIGetDefaultFontPath handles the platform difference; may be NULL on
     // iOS if no font was shipped / UISearchFonts hasn't run yet).
@@ -151,6 +153,22 @@ UIText* UIText_SetBackground(UIText* text, UIRectangle* backgroundRect) {
     }
 
     text->background = backgroundRect;
+    return text;
+}
+
+UIText* UIText_SetLetterSpacing(UIText* text, float px) {
+    if (text == NULL) return text;
+    if (text->letterSpacing == px) return text;
+    text->letterSpacing = px;
+    UIText_DestroyTexture(text);
+    return text;
+}
+
+UIText* UIText_SetLineHeight(UIText* text, float multiple) {
+    if (text == NULL) return text;
+    if (multiple < 0.0f) multiple = 0.0f;
+    if (text->lineHeight == multiple) return text;
+    text->lineHeight = multiple;
     return text;
 }
 

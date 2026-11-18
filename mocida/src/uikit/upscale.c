@@ -34,7 +34,12 @@ static int ModeOk(int mode) {
     return mode >= UI_UPSCALE_OFF && mode <= UI_UPSCALE_METALFX;
 }
 
+#if defined(__APPLE__) && !defined(MOCIDA_WEB)
 int UIUpscale_MetalFXSupported(void);
+#else
+int UIUpscale_MetalFXSupported(void) { return 0; }
+void UIUpscale_ApplyFrame(SDL_Renderer* renderer) { (void)renderer; }
+#endif
 
 int UIUpscale_Mode(void) {
     return g_mode;

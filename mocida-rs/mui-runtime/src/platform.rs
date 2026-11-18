@@ -9,7 +9,7 @@
 //! Members: `os` (`macos`, `windows`, `linux`, `ios`, `android`, or a console:
 //! `playstation`, `xbox`, `switch`), `device` (a simulated device's id, else
 //! the os), and `isMobile`, `isTouch`, `isDesktop`, `isConsole`, `isIOS`,
-//! `isAndroid`, `isMacOS`, `isWindows`, `isLinux` (`1` / `0`, so both
+//! `isAndroid`, `isMacOS`, `isWindows`, `isLinux`, `isWeb` (`1` / `0`, so both
 //! `if Platform.isTouch` and `Platform.isTouch == true` work).
 //!
 //! A simulator sets `MOCIDA_PLATFORM` (the os), `MOCIDA_PLATFORM_DEVICE` and
@@ -50,7 +50,14 @@ pub fn member(field: &str) -> Option<String> {
     let console = matches!(os.as_str(), "playstation" | "xbox" | "switch");
     Some(match field {
         "os" => os,
-        "device" => env("MOCIDA_PLATFORM_DEVICE").unwrap_or(os),
+        "isWeb" => flag(cfg!(target_arch = "wasm32")),
+        "device" => env("MOCIDA_PLATFORM_DEVICE").unwrap_or_else(|| {
+            if cfg!(target_arch = "wasm32") {
+                "phone".to_string()
+            } else {
+                os
+            }
+        }),
         "isMobile" => flag(mobile),
         "isConsole" => flag(console),
         "isDesktop" => flag(!mobile && !console && os != "web"),

@@ -277,7 +277,7 @@ fn require_arg(flag: &str, it: &mut impl Iterator<Item = String>) -> String {
 
 fn main() -> ExitCode {
     let opts = parse_args();
-    if opts.path.is_none() {
+    if opts.path.is_none() && !cfg!(target_os = "emscripten") {
         eprintln!("mui-dev: missing <file.mui> (try --help)");
         return ExitCode::from(2);
     }
@@ -449,7 +449,16 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
     let path = opts.path;
     let (label, source) = match &path {
         Some(p) => (p.clone(), std::fs::read_to_string(p)?),
-        None => ("<built-in sample>".to_string(), DEFAULT_SAMPLE.to_string()),
+        None => {
+            #[cfg(target_os = "emscripten")]
+            {
+                ("site.mui".to_string(), include_str!("../../../../OndaEngine/site/site.mui").to_string())
+            }
+            #[cfg(not(target_os = "emscripten"))]
+            {
+                ("<built-in sample>".to_string(), DEFAULT_SAMPLE.to_string())
+            }
+        }
     };
 
     // Resolve window + bundle config from the document's `App() { }` block, then

@@ -103,6 +103,8 @@ typedef struct UIText {
     float paddingBottom;       /**< Inner bottom padding. */
 
     float fontSize;            /**< Font size in points. */
+    float letterSpacing;       /**< Extra pixels between glyphs. 0 = the font's own advance. */
+    float lineHeight;          /**< Line box as a multiple of fontSize. 0 = 1.25. */
     char* fontFamily;          /**< Heap-owned font path (.ttf / .otf). */
 
     int fontStyle;             /**< Bitmask of FontStyle flags (Bold | Italic | ...). */
@@ -235,6 +237,15 @@ UIText* UIText_SetFontStyle(UIText* text, int fontStyle);
  * (e.g. scaling against UIScreen_GetSize()).
  */
 UIText* UIText_SetFontSize(UIText* text, float fontSize);
+
+/** Extra pixels added after every glyph. Negative tightens the run. */
+UIText* UIText_SetLetterSpacing(UIText* text, float px);
+
+/**
+ * Line box as a multiple of the font size. 1.0 is tight, 1.5 is the
+ * cinematic body copy. 0 restores the default 1.25.
+ */
+UIText* UIText_SetLineHeight(UIText* text, float multiple);
 
 /**
  * Measures one line of UTF-8 text in logical points with the same font

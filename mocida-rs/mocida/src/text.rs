@@ -149,6 +149,18 @@ impl Text {
     /// Sets the font size in points. Invalidates the cached glyph texture
     /// so it re-rasterizes — useful for responsive sizing against
     /// [`crate::Screen`].
+    /// Extra pixels between glyphs. Negative tightens the run.
+    pub fn letter_spacing(self, px: f32) -> Self {
+        unsafe { sys::UIText_SetLetterSpacing(self.ptr, px); }
+        self
+    }
+
+    /// Line box as a multiple of the font size. 0 restores the default.
+    pub fn line_height(self, multiple: f32) -> Self {
+        unsafe { sys::UIText_SetLineHeight(self.ptr, multiple); }
+        self
+    }
+
     pub fn font_size(self, size: f32) -> Self {
         unsafe {
             sys::UIText_SetFontSize(self.ptr, size);

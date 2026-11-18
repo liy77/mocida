@@ -364,8 +364,10 @@ if(APPLE)
         # which AppKit refreshes synchronously. See cursor_cocoa.mm.
         list(APPEND MOCIDA_SOURCES_OBJCXX
             "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/cursor_cocoa.mm")
-        list(APPEND MOCIDA_SOURCES_OBJCXX
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/metalfx.mm")
+        if(NOT MOCIDA_WEB)
+            list(APPEND MOCIDA_SOURCES_OBJCXX
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/metalfx.mm")
+        endif()
     endif()
 endif()
 

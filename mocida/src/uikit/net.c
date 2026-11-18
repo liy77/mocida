@@ -2,11 +2,27 @@
 #include <uikit/debug.h>
 
 #include <SDL3/SDL.h>
+#if !defined(MOCIDA_WEB)
 #include <curl/curl.h>
+#endif
 
 #include <stdio.h>
 #include <string.h>
 
+#if defined(MOCIDA_WEB)
+int UINet_Reachable(const char* url) { (void)url; return 0; }
+int UINet_Get(const char* url, void** out_data, int* out_size) {
+    (void)url;
+    if (out_data) *out_data = NULL;
+    if (out_size) *out_size = 0;
+    return 0;
+}
+int UINet_Download(const char* url, const char* path) { (void)url; (void)path; return 0; }
+float UINet_Progress(void) { return 0.0f; }
+int UINet_BytesDone(void) { return 0; }
+int UINet_BytesTotal(void) { return 0; }
+const char* UINet_Error(void) { return "HTTP is not linked in the web build"; }
+#else
 static float g_progress = 1.0f;
 static int g_done = 0;
 static int g_total = 0;
@@ -54,7 +70,18 @@ static int ProgressCb(void* ud, curl_off_t dl_total, curl_off_t dl_now, curl_off
     return 0;
 }
 
+static int UrlAllowed(const char* url) {
+    if (!url || !url[0]) return 0;
+    if (SDL_strncmp(url, "https://", 8) != 0 && SDL_strncmp(url, "http://", 7) != 0) return 0;
+    if (SDL_strstr(url, "..") || SDL_strstr(url, "\r") || SDL_strstr(url, "\n")) return 0;
+    return 1;
+}
+
 static CURL* Begin(const char* url) {
+    if (!UrlAllowed(url)) {
+        SDL_strlcpy(g_error, "only http and https URLs are accepted", sizeof(g_error));
+        return NULL;
+    }
     NetInit();
     g_error[0] = 0;
     g_progress = 0.0f;
@@ -67,6 +94,9 @@ static CURL* Begin(const char* url) {
     }
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 3L);
+    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "Mocidad/1.0");
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 12L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L);
@@ -156,3 +186,4 @@ float UINet_Progress(void) { return g_progress; }
 int UINet_BytesDone(void) { return g_done; }
 int UINet_BytesTotal(void) { return g_total; }
 const char* UINet_Error(void) { return g_error; }
+#endif

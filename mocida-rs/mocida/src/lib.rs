@@ -69,6 +69,7 @@ pub mod menu_bar;
 pub mod mouse_area;
 pub mod net;
 pub mod upscale;
+pub mod web;
 pub mod overlay;
 pub mod popup;
 pub mod profile;

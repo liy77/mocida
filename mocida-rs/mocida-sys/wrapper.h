@@ -28,6 +28,7 @@
 #include <uikit/input.h>
 #include <uikit/net.h>
 #include <uikit/upscale.h>
+#include <uikit/web.h>
 #include <uikit/sound.h>
 #ifdef _WIN32
 #include <uikit/webview_dcomp.h>

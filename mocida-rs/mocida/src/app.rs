@@ -514,8 +514,19 @@ impl App {
     }
 
     /// Runs the main loop until the window closes. Blocks.
+    ///
+    /// On the web this hands the frame to the browser. The desktop loop
+    /// never returns there, so the canvas stays blank.
     pub fn run(&mut self) {
         unsafe {
+            #[cfg(target_os = "emscripten")]
+            {
+                extern "C" {
+                    fn UIApp_RunWeb(app: *mut sys::UIApp);
+                }
+                UIApp_RunWeb(self.ptr);
+            }
+            #[cfg(not(target_os = "emscripten"))]
             sys::UIApp_Run(self.ptr);
         }
     }
