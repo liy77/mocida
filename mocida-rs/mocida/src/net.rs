@@ -6,6 +6,14 @@ use std::path::Path;
 
 use mocida_sys as sys;
 
+unsafe extern "C" {
+    fn free(ptr: *mut std::ffi::c_void);
+}
+
+fn libc_free(ptr: *mut u8) {
+    unsafe { free(ptr as *mut _) };
+}
+
 /// True when `url` answers.
 pub fn reachable(url: &str) -> bool {
     let Ok(c) = CString::new(url) else { return false };
@@ -25,7 +33,7 @@ pub fn get(url: &str) -> Result<Vec<u8>, String> {
         return Ok(Vec::new());
     }
     let bytes = unsafe { std::slice::from_raw_parts(data as *const u8, size.max(0) as usize) }.to_vec();
-    unsafe { mocida_sys::SDL_free(data as *mut _) };
+    unsafe { libc_free(data as *mut _) };
     Ok(bytes)
 }
 

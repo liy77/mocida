@@ -303,7 +303,35 @@ struct Built {
 }
 
 fn build(source: &str, path: Option<&str>) -> Result<Built, Box<dyn std::error::Error>> {
-    build_seeded(source, path, &platform_seed())
+    build_seeded(source, path, &shot_seed())
+}
+
+/// Headless screenshots (`MOCIDAD_BENCH_SCREEN=editor`) start on the editor
+/// so a script can click the toolbar without going through the welcome screen.
+fn shot_seed() -> std::collections::HashMap<String, String> {
+    let mut seed = platform_seed();
+    if std::env::var("MOCIDAD_BENCH_SCREEN").as_deref() == Ok("editor") {
+        seed.insert("phase".into(), "editor".into());
+        seed.insert("show_editor".into(), "1".into());
+        seed.insert("show_menu".into(), "0".into());
+        seed.insert("show_newproject".into(), "0".into());
+        seed.insert("project_name".into(), "Platformer".into());
+        seed.insert(
+            "store_providers".into(),
+            [
+                "kenney\u{1}Kenney\u{1}1\u{1}Free CC0 packs",
+                "ambientcg\u{1}ambientCG\u{1}0\u{1}PBR materials",
+                "sketchfab\u{1}Sketchfab\u{1}0\u{1}3D models",
+                "opengameart\u{1}OpenGameArt\u{1}0\u{1}Community art",
+                "itch\u{1}itch.io\u{1}0\u{1}Indie packs",
+                "fab\u{1}Fab\u{1}0\u{1}Epic marketplace",
+            ]
+            .join("\n"),
+        );
+        seed.insert("store_blurb".into(), "Free CC0 packs. Sprites, tiles, UI, audio and 3D.".into());
+        seed.insert("store_status".into(), "6 stores".into());
+    }
+    seed
 }
 
 /// macOS keeps the native traffic lights, so the Windows chrome must start hidden.

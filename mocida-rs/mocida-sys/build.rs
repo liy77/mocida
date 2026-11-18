@@ -28,6 +28,11 @@ fn main() {
     let is_web = target == "wasm32-unknown-emscripten";
 
     println!("cargo:rerun-if-changed=wrapper.h");
+    if let Ok(dir) = std::env::var("MOCIDA_INCLUDE_DIR") {
+        println!("cargo:rerun-if-changed={dir}/uikit/net.h");
+        println!("cargo:rerun-if-changed={dir}/uikit/upscale.h");
+        println!("cargo:rerun-if-changed={dir}/uikit/input.h");
+    }
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=MOCIDA_INCLUDE_DIR");
     println!("cargo:rerun-if-env-changed=MOCIDA_LIB_DIR");
