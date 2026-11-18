@@ -35,6 +35,7 @@ typedef struct FontCacheEntry {
     char *path;
     float size;
     TTF_Font *font;
+    TTF_Font *fallback;
     struct FontCacheEntry *next;
 } FontCacheEntry;
 
@@ -1220,7 +1221,11 @@ void UIWindow_Destroy(UIWindow* window) {
     // Free font cache
     FontCacheEntry *e = g_fontCache;
     while (e) {
-        TTF_CloseFont(e->font);
+        if (e->font) {
+            if (e->fallback) TTF_RemoveFallbackFont(e->font, e->fallback);
+            TTF_CloseFont(e->font);
+        }
+        if (e->fallback) TTF_CloseFont(e->fallback);
         free(e->path);
         FontCacheEntry *n = e->next;
         free(e);

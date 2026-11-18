@@ -323,6 +323,15 @@ static TTF_Font* CanvasGetFont(const char* family, float size) {
     if (!TTF_WasInit() && !TTF_Init()) return NULL;
     TTF_Font* font = TTF_OpenFont(path, size);
     if (!font) return NULL;
+#ifdef _WIN32
+    {
+        TTF_Font* fb = TTF_OpenFont("C:\\Windows\\Fonts\\seguisym.ttf", size);
+        if (fb) {
+            TTF_SetFontHinting(fb, TTF_HINTING_LIGHT);
+            TTF_AddFallbackFont(font, fb);
+        }
+    }
+#endif
     if (s_fontCacheCount >= s_fontCacheCap) {
         int nc = s_fontCacheCap ? s_fontCacheCap * 2 : 8;
         CanvasFontCacheEntry* grown =
