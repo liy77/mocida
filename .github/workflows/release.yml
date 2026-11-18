@@ -20,6 +20,7 @@ on:
   push:
     tags:
       - "v*"
+      - "nightly*"
   workflow_dispatch:
     inputs:
       tag:
@@ -62,12 +63,14 @@ jobs:
             echo "Release $TAG already exists — build jobs will clobber assets."
           else
             echo "Creating draft release $TAG ..."
+            EXTRA=()
+            case "$TAG" in nightly*) EXTRA+=(--prerelease) ;; esac
             if [ -f CHANGELOG.md ]; then
               gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-                --title "Mocida $TAG" --draft --notes-file CHANGELOG.md
+                --title "Mocida $TAG" --draft "${EXTRA[@]}" --notes-file CHANGELOG.md
             else
               gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-                --title "Mocida $TAG" --draft --generate-notes
+                --title "Mocida $TAG" --draft "${EXTRA[@]}" --generate-notes
             fi
           fi
 
