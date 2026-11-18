@@ -3314,11 +3314,19 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                     for (int st = 0; st < stops && st < 16; st++) {
                         const float gx = codeBaseX + st * stepW;
                         const float midY = ytop + lineH * 0.5f;
-                        // Small `>|` Godot tab marker inside the indent stop
-                        SDL_FRect bar = { gx + 7.0f, midY - 3.5f, 1.2f, 7.0f };
-                        SDL_FRect tip = { gx + 3.5f, midY - 0.8f, 3.0f, 1.6f };
-                        DrawRoundedRectFill(window->sdlRenderer, bar, guideC, 0.0f);
+                        // Godot-style `>|` tab arrow inside the indent stop
+                        SDL_FRect c1  = { gx + 2.0f, midY - 2.6f, 2.0f, 1.3f };
+                        SDL_FRect c2  = { gx + 3.6f, midY - 1.3f, 2.0f, 1.3f };
+                        SDL_FRect tip = { gx + 5.0f, midY - 0.6f, 1.6f, 1.2f };
+                        SDL_FRect c3  = { gx + 3.6f, midY + 0.0f, 2.0f, 1.3f };
+                        SDL_FRect c4  = { gx + 2.0f, midY + 1.3f, 2.0f, 1.3f };
+                        SDL_FRect bar = { gx + 8.0f, midY - 3.6f, 1.2f, 7.2f };
+                        DrawRoundedRectFill(window->sdlRenderer, c1,  guideC, 0.0f);
+                        DrawRoundedRectFill(window->sdlRenderer, c2,  guideC, 0.0f);
                         DrawRoundedRectFill(window->sdlRenderer, tip, guideC, 0.0f);
+                        DrawRoundedRectFill(window->sdlRenderer, c3,  guideC, 0.0f);
+                        DrawRoundedRectFill(window->sdlRenderer, c4,  guideC, 0.0f);
+                        DrawRoundedRectFill(window->sdlRenderer, bar, guideC, 0.0f);
                     }
                 }
             }
@@ -3549,16 +3557,31 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
             }
         }
 
-        // Godot 4.6-style syntax-colored Minimap on the right edge of the code editor
+        // Expand clip to the full TextArea bounds so the Minimap, Vertical Scrollbar,
+        // and Horizontal Scrollbar span the entire height/bottom of the editor pane.
+        {
+            SDL_Rect fullClip = {
+                (int)(bounds.x + ta->borderWidth),
+                (int)(bounds.y + ta->borderWidth),
+                (int)(bounds.w - 2.0f * ta->borderWidth),
+                (int)(bounds.h - 2.0f * ta->borderWidth)
+            };
+            FlushRenderBatch(window->sdlRenderer);
+            TA_CLIP_TO(fullClip);
+        }
+
+        // Godot 4.6-style syntax-colored Minimap + Vertical Scrollbar + Horizontal Scrollbar
         if (ta->showLineNumbers && !showPlaceholder && ta->linesLen > 0 && bounds.w > 340.0f) {
+            const float sbW = 10.0f;
+            const float sbX = bounds.x + bounds.w - ta->borderWidth - sbW;
             const float mmW = 74.0f;
-            const float mmX = bounds.x + bounds.w - ta->borderWidth - mmW - 2.0f;
-            const float mmTop = bounds.y + ta->paddingTop;
-            const float mmH = bounds.h - ta->paddingTop - ta->paddingBottom;
+            const float mmX = sbX - mmW;
+            const float mmTop = bounds.y + ta->borderWidth;
+            const float mmH = bounds.h - 2.0f * ta->borderWidth;
 
             SDL_FRect mmBg = { mmX, mmTop, mmW, mmH };
             DrawRoundedRectFill(window->sdlRenderer, mmBg,
-                                (UIColor){ 23, 27, 33, 0.82f * op }, 0.0f);
+                                (UIColor){ 23, 27, 33, 0.90f * op }, 0.0f);
             SDL_FRect mmSep = { mmX, mmTop, 1.0f, mmH };
             DrawRoundedRectFill(window->sdlRenderer, mmSep,
                                 (UIColor){ 255, 255, 255, 0.06f * op }, 0.0f);
@@ -3645,6 +3668,45 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                         SDL_FRect br = { bx, ry, bw, rowBarH };
                         DrawRoundedRectFill(window->sdlRenderer, br, barC, 0.0f);
                     }
+                }
+            }
+
+            // Vertical Scrollbar on the right edge (next to the minimap)
+            {
+                SDL_FRect sbTrack = { sbX, mmTop, sbW, mmH };
+                DrawRoundedRectFill(window->sdlRenderer, sbTrack,
+                                    (UIColor){ 19, 23, 28, 0.95f * op }, 0.0f);
+                SDL_FRect sbSep = { sbX, mmTop, 1.0f, mmH };
+                DrawRoundedRectFill(window->sdlRenderer, sbSep,
+                                    (UIColor){ 255, 255, 255, 0.05f * op }, 0.0f);
+
+                const float viewH = bounds.h - (ta->paddingTop + ta->paddingBottom);
+                const float contentH = (float)totalLines * lineH;
+                float ratio = (contentH > viewH && contentH > 0.0f)
+                    ? (viewH / contentH)
+                    : SDL_clamp((float)totalLines / 55.0f, 0.22f, 0.75f);
+                float thumbH = SDL_clamp(mmH * ratio, 28.0f, mmH - 8.0f);
+                float maxScroll = (contentH > viewH) ? (contentH - viewH) : 0.0f;
+                float frac = (maxScroll > 0.0f) ? SDL_clamp(ta->scrollY / maxScroll, 0.0f, 1.0f) : 0.0f;
+                float thumbY = mmTop + 4.0f + frac * (mmH - 8.0f - thumbH);
+                SDL_FRect sbThumb = { sbX + 2.0f, thumbY, sbW - 4.0f, thumbH };
+                DrawRoundedRectFill(window->sdlRenderer, sbThumb,
+                                    (UIColor){ 136, 146, 162, 0.62f * op }, 3.0f);
+            }
+
+            // Horizontal Scrollbar pill at the bottom of the code area (Godot 4.6 style)
+            {
+                const float hsbX = bounds.x + ta->paddingLeft + gutterW + 4.0f;
+                const float hsbMaxW = mmX - hsbX - 8.0f;
+                const float hsbH = 7.0f;
+                const float hsbY = bounds.y + bounds.h - ta->borderWidth - hsbH - 2.0f;
+                if (hsbMaxW > 80.0f) {
+                    SDL_FRect hTrack = { hsbX, hsbY, hsbMaxW, hsbH };
+                    DrawRoundedRectFill(window->sdlRenderer, hTrack,
+                                        (UIColor){ 19, 23, 28, 0.55f * op }, 3.5f);
+                    SDL_FRect hThumb = { hsbX + 2.0f, hsbY + 1.0f, hsbMaxW * 0.36f, hsbH - 2.0f };
+                    DrawRoundedRectFill(window->sdlRenderer, hThumb,
+                                        (UIColor){ 136, 146, 162, 0.58f * op }, 2.5f);
                 }
             }
         }

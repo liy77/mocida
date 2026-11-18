@@ -1046,6 +1046,23 @@ void UITextArea_DispatchMouseDown(UIChildren* children, SDL_Window* win,
     SetFocused(ta, win, 1);
     UIWidget_SetFocus(hitW, 1);
 
+    // Minimap + Vertical Scrollbar click/drag on the right edge (84px wide)
+    if (ta->showLineNumbers && hitW->width && *hitW->width > 340.0f &&
+        hitW->height && *hitW->height > 0.0f &&
+        x >= hitW->x + *hitW->width - 86.0f) {
+        ta->mouseSelecting = 2;
+        const float lineH = ta->fontSize * ta->lineSpacing;
+        const float viewH = *hitW->height - (ta->paddingTop + ta->paddingBottom);
+        const float contentH = (float)ta->linesLen * lineH;
+        float maxScroll = contentH - viewH;
+        if (maxScroll < 0.0f) maxScroll = 0.0f;
+        float frac = (y - hitW->y) / *hitW->height;
+        if (frac < 0.0f) frac = 0.0f;
+        if (frac > 1.0f) frac = 1.0f;
+        ta->scrollY = frac * maxScroll;
+        return;
+    }
+
     const float lx = x - (hitW->x + ta->paddingLeft + ta->__gutterW);
     const float ly = y - (hitW->y + ta->paddingTop) + ta->scrollY;
     int pos = CaretFromLocalXY(ta, lx, ly);
@@ -1095,6 +1112,20 @@ void UITextArea_DispatchMouseMotion(UIChildren* children, float x, float y) {
         UITextArea* ta = AsTextArea(w);
         if (ta) {
             if (!ta->mouseSelecting) continue;
+            if (ta->mouseSelecting == 2) {
+                if (w->height && *w->height > 0.0f) {
+                    const float lineH = ta->fontSize * ta->lineSpacing;
+                    const float viewH = *w->height - (ta->paddingTop + ta->paddingBottom);
+                    const float contentH = (float)ta->linesLen * lineH;
+                    float maxScroll = contentH - viewH;
+                    if (maxScroll < 0.0f) maxScroll = 0.0f;
+                    float frac = (y - w->y) / *w->height;
+                    if (frac < 0.0f) frac = 0.0f;
+                    if (frac > 1.0f) frac = 1.0f;
+                    ta->scrollY = frac * maxScroll;
+                }
+                continue;
+            }
             const float lx = x - (w->x + ta->paddingLeft + ta->__gutterW);
             const float ly = y - (w->y + ta->paddingTop) + ta->scrollY;
             int pos = CaretFromLocalXY(ta, lx, ly);
