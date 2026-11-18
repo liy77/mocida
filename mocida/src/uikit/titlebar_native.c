@@ -97,6 +97,21 @@ void UIWindow_ApplyNativeDecorations(SDL_Window* window) {
     HWND hwnd = titlebar_hwnd(window);
     if (!hwnd) return;
 
+    // Ensure borderless window has WS_SYSMENU | WS_MINIMIZEBOX so the Windows
+    // taskbar displays its icon (WM_SETICON / RT_GROUP_ICON) and supports taskbar minimize.
+    LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_SYSMENU | WS_MINIMIZEBOX);
+
+    // If the executable carries an embedded RT_GROUP_ICON resource (#1), apply it
+    // to both the window instance and class so the taskbar and Alt-Tab show it immediately.
+    HICON hIcon = LoadIconW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(1));
+    if (hIcon) {
+        SendMessageW(hwnd, WM_SETICON, ICON_BIG,   (LPARAM)hIcon);
+        SendMessageW(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
+        SetClassLongPtrW(hwnd, GCLP_HICON,   (LONG_PTR)hIcon);
+        SetClassLongPtrW(hwnd, GCLP_HICONSM, (LONG_PTR)hIcon);
+    }
+
     // Match the dark UI so any OS-drawn edge tints correctly (the shadow + the
     // 1px frame). Harmless if already set by the backdrop path.
     BOOL dark = TRUE;

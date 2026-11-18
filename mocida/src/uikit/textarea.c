@@ -1050,16 +1050,28 @@ void UITextArea_DispatchMouseDown(UIChildren* children, SDL_Window* win,
     if (ta->showLineNumbers && hitW->width && *hitW->width > 340.0f &&
         hitW->height && *hitW->height > 0.0f &&
         x >= hitW->x + *hitW->width - 86.0f) {
-        ta->mouseSelecting = 2;
         const float lineH = ta->fontSize * ta->lineSpacing;
         const float viewH = *hitW->height - (ta->paddingTop + ta->paddingBottom);
-        const float contentH = (float)ta->linesLen * lineH;
+        const float contentH = (float)ta->linesLen * lineH + viewH * 0.5f;
         float maxScroll = contentH - viewH;
         if (maxScroll < 0.0f) maxScroll = 0.0f;
-        float frac = (y - hitW->y) / *hitW->height;
-        if (frac < 0.0f) frac = 0.0f;
-        if (frac > 1.0f) frac = 1.0f;
-        ta->scrollY = frac * maxScroll;
+        if (x < hitW->x + *hitW->width - 12.0f) {
+            // Clicked on the Minimap: scroll to the clicked line on the minimap
+            ta->mouseSelecting = 2;
+            const float clickedLine = (y - hitW->y) / 2.6f;
+            const float visLines = (lineH > 0.0f) ? (viewH / lineH) : 20.0f;
+            float targetY = (clickedLine - visLines * 0.35f) * lineH;
+            if (targetY < 0.0f) targetY = 0.0f;
+            if (targetY > maxScroll) targetY = maxScroll;
+            ta->scrollY = targetY;
+        } else {
+            // Clicked on the Vertical Scrollbar track/thumb
+            ta->mouseSelecting = 3;
+            float frac = (y - hitW->y - 14.0f) / (*hitW->height - 28.0f);
+            if (frac < 0.0f) frac = 0.0f;
+            if (frac > 1.0f) frac = 1.0f;
+            ta->scrollY = frac * maxScroll;
+        }
         return;
     }
 
@@ -1112,17 +1124,26 @@ void UITextArea_DispatchMouseMotion(UIChildren* children, float x, float y) {
         UITextArea* ta = AsTextArea(w);
         if (ta) {
             if (!ta->mouseSelecting) continue;
-            if (ta->mouseSelecting == 2) {
+            if (ta->mouseSelecting == 2 || ta->mouseSelecting == 3) {
                 if (w->height && *w->height > 0.0f) {
                     const float lineH = ta->fontSize * ta->lineSpacing;
                     const float viewH = *w->height - (ta->paddingTop + ta->paddingBottom);
-                    const float contentH = (float)ta->linesLen * lineH;
+                    const float contentH = (float)ta->linesLen * lineH + viewH * 0.5f;
                     float maxScroll = contentH - viewH;
                     if (maxScroll < 0.0f) maxScroll = 0.0f;
-                    float frac = (y - w->y) / *w->height;
-                    if (frac < 0.0f) frac = 0.0f;
-                    if (frac > 1.0f) frac = 1.0f;
-                    ta->scrollY = frac * maxScroll;
+                    if (ta->mouseSelecting == 2) {
+                        const float clickedLine = (y - w->y) / 2.6f;
+                        const float visLines = (lineH > 0.0f) ? (viewH / lineH) : 20.0f;
+                        float targetY = (clickedLine - visLines * 0.35f) * lineH;
+                        if (targetY < 0.0f) targetY = 0.0f;
+                        if (targetY > maxScroll) targetY = maxScroll;
+                        ta->scrollY = targetY;
+                    } else {
+                        float frac = (y - w->y - 14.0f) / (*w->height - 28.0f);
+                        if (frac < 0.0f) frac = 0.0f;
+                        if (frac > 1.0f) frac = 1.0f;
+                        ta->scrollY = frac * maxScroll;
+                    }
                 }
                 continue;
             }

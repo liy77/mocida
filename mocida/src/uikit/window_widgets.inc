@@ -3125,8 +3125,8 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                 ta->__lastCaretPos = ta->caretPos;
             }
             // Always clamp to the valid range so neither a wheel scroll nor a
-            // caret move can push the content off either end.
-            const float contentH = ta->linesLen * lineH;
+            // caret move can push the content off either end (allow 0.5x viewH overscroll past end).
+            const float contentH = ta->linesLen * lineH + viewH * 0.5f;
             float maxScroll = contentH - viewH;
             if (maxScroll < 0.0f) maxScroll = 0.0f;
             if (ta->scrollY > maxScroll) ta->scrollY = maxScroll;
@@ -3672,6 +3672,8 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
             }
 
             // Vertical Scrollbar on the right edge (next to the minimap)
+            float mx = 0.0f, my = 0.0f;
+            SDL_GetMouseState(&mx, &my);
             {
                 SDL_FRect sbTrack = { sbX, mmTop, sbW, mmH };
                 DrawRoundedRectFill(window->sdlRenderer, sbTrack,
@@ -3681,17 +3683,21 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                                     (UIColor){ 255, 255, 255, 0.05f * op }, 0.0f);
 
                 const float viewH = bounds.h - (ta->paddingTop + ta->paddingBottom);
-                const float contentH = (float)totalLines * lineH;
-                float ratio = (contentH > viewH && contentH > 0.0f)
-                    ? (viewH / contentH)
-                    : SDL_clamp((float)totalLines / 55.0f, 0.22f, 0.75f);
-                float thumbH = SDL_clamp(mmH * ratio, 28.0f, mmH - 8.0f);
+                const float contentH = (float)totalLines * lineH + viewH * 0.5f;
+                float ratio = (contentH > 0.0f)
+                    ? SDL_clamp(viewH / contentH, 0.10f, 0.55f)
+                    : 0.45f;
+                float thumbH = SDL_clamp(mmH * ratio, 32.0f, mmH * 0.55f);
                 float maxScroll = (contentH > viewH) ? (contentH - viewH) : 0.0f;
                 float frac = (maxScroll > 0.0f) ? SDL_clamp(ta->scrollY / maxScroll, 0.0f, 1.0f) : 0.0f;
                 float thumbY = mmTop + 4.0f + frac * (mmH - 8.0f - thumbH);
+                int sbHot = (ta->mouseSelecting == 3) ||
+                            (mx >= sbX && mx <= sbX + sbW && my >= mmTop && my <= mmTop + mmH);
+                UIColor thumbCol = sbHot
+                    ? (UIColor){ 176, 188, 206, 0.85f * op }
+                    : (UIColor){ 136, 146, 162, 0.62f * op };
                 SDL_FRect sbThumb = { sbX + 2.0f, thumbY, sbW - 4.0f, thumbH };
-                DrawRoundedRectFill(window->sdlRenderer, sbThumb,
-                                    (UIColor){ 136, 146, 162, 0.62f * op }, 3.0f);
+                DrawRoundedRectFill(window->sdlRenderer, sbThumb, thumbCol, 3.0f);
             }
 
             // Horizontal Scrollbar pill at the bottom of the code area (Godot 4.6 style)
@@ -3701,12 +3707,15 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                 const float hsbH = 7.0f;
                 const float hsbY = bounds.y + bounds.h - ta->borderWidth - hsbH - 2.0f;
                 if (hsbMaxW > 80.0f) {
+                    int hsbHot = (mx >= hsbX && mx <= hsbX + hsbMaxW && my >= hsbY - 3.0f && my <= hsbY + hsbH + 3.0f);
+                    UIColor hThumbCol = hsbHot
+                        ? (UIColor){ 176, 188, 206, 0.82f * op }
+                        : (UIColor){ 136, 146, 162, 0.58f * op };
                     SDL_FRect hTrack = { hsbX, hsbY, hsbMaxW, hsbH };
                     DrawRoundedRectFill(window->sdlRenderer, hTrack,
                                         (UIColor){ 19, 23, 28, 0.55f * op }, 3.5f);
                     SDL_FRect hThumb = { hsbX + 2.0f, hsbY + 1.0f, hsbMaxW * 0.36f, hsbH - 2.0f };
-                    DrawRoundedRectFill(window->sdlRenderer, hThumb,
-                                        (UIColor){ 136, 146, 162, 0.58f * op }, 2.5f);
+                    DrawRoundedRectFill(window->sdlRenderer, hThumb, hThumbCol, 2.5f);
                 }
             }
         }

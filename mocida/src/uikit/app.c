@@ -631,6 +631,24 @@ static UICursor PickHoverCursorImpl(UIChildren* children, float x, float y, bool
                     return UI_CURSOR_POINTER;
                 }
             }
+            // Over the right-hand Minimap + Vertical Scrollbar, or bottom Horizontal Scrollbar -> pointer cursor
+            if (ta->showLineNumbers && w->width && *w->width > 340.0f &&
+                w->height && *w->height > 0.0f) {
+                if (x >= w->x + *w->width - 86.0f) {
+                    return UI_CURSOR_POINTER;
+                }
+                if (y >= w->y + *w->height - 14.0f &&
+                    x >= w->x + ta->paddingLeft + ta->__gutterW) {
+                    return UI_CURSOR_POINTER;
+                }
+            }
+            // Over the left line-number / code-folding gutter -> pointer over chevron, default arrow over numbers
+            if (ta->showLineNumbers && x < w->x + ta->paddingLeft + ta->__gutterW) {
+                if (x >= w->x + ta->paddingLeft + ta->__gutterW - 18.0f) {
+                    return UI_CURSOR_POINTER;
+                }
+                return UI_CURSOR_DEFAULT;
+            }
             return ta->cursor;
         }
         if (!strcmp(type, UI_WIDGET_TEXT)) {
@@ -1114,6 +1132,13 @@ UIApp* UIApp_Create(const char* title, int width, int height) {
                 UIApp_SetWindowTitle(app, UIApp_GetBundleName());
             }
         }
+    }
+
+    // Auto-apply window icon from app.bundle ("icon" or "mocidad-icon.png") if present.
+    if (UIApp_ResolveBundle("icon")) {
+        UIApp_SetWindowIcon(app, "mocida://icon");
+    } else if (UIApp_ResolveBundle("mocidad-icon.png")) {
+        UIApp_SetWindowIcon(app, "mocida://mocidad-icon.png");
     }
 
     /* Register tree dumper so a crash report includes the widget tree. */
