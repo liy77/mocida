@@ -8,7 +8,11 @@
 #include <uikit/rect.h>
 #include <SDL3_ttf/SDL_ttf.h>
 #include <string.h>
+#define _USE_MATH_DEFINES
 #include <math.h>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 #define UI_PATH_INITIAL_CAP 64
 #define UI_STATE_INITIAL_CAP 8

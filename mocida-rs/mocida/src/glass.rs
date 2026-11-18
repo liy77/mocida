@@ -84,7 +84,8 @@ impl BackdropMaterial {
             Err(_) => return BackdropMaterial::Auto,
         };
         let raw = unsafe { sys::UIBackdrop_FromString(c.as_ptr()) };
-        Self::from_raw(raw.0)
+        #[allow(clippy::unnecessary_cast)]
+        Self::from_raw(raw.0 as u32)
     }
 
     /// 1:1 from the raw enum value (out-of-range → [`Auto`](Self::Auto)).
@@ -110,7 +111,7 @@ impl BackdropMaterial {
 
     #[inline]
     pub(crate) fn raw(self) -> sys::UIBackdropMaterial {
-        sys::UIBackdropMaterial(self as u32)
+        sys::UIBackdropMaterial(self as _)
     }
 
     /// True for window-wide materials (Mica / Mica Alt / KDE blur-window).
@@ -181,7 +182,7 @@ impl Glass {
 
     /// Material thickness preset.
     pub fn thickness(self, thickness: GlassThickness) -> Self {
-        unsafe { sys::UIGlass_SetThickness(self.ptr, sys::UIGlassThickness(thickness as u32)) };
+        unsafe { sys::UIGlass_SetThickness(self.ptr, sys::UIGlassThickness(thickness as _)) };
         self
     }
 
@@ -205,7 +206,7 @@ impl Glass {
 
     /// AppKit vibrancy state (ignored by non-vibrancy materials).
     pub fn vibrancy_state(self, state: VibrancyState) -> Self {
-        unsafe { sys::UIGlass_SetVibrancyState(self.ptr, sys::UIVibrancyState(state as u32)) };
+        unsafe { sys::UIGlass_SetVibrancyState(self.ptr, sys::UIVibrancyState(state as _)) };
         self
     }
 

@@ -6,14 +6,15 @@
 
 use mocida::Color;
 
-/// One dark theme (VS Code "Dark+"-ish). Uncolored text keeps the area's
-/// default `textColor`, so only these token classes get a span.
-const COMMENT: Color = Color::rgb(0x6A, 0x99, 0x55); // green
-const STRING: Color = Color::rgb(0xCE, 0x91, 0x78); // soft orange
-const NUMBER: Color = Color::rgb(0xB5, 0xCE, 0xA8); // light green
-const KEYWORD: Color = Color::rgb(0x56, 0x9C, 0xD6); // blue
-const TYPE: Color = Color::rgb(0x4E, 0xC9, 0xB0); // teal
-const ATTR: Color = Color::rgb(0xC5, 0x86, 0xC0); // purple (annotations / props)
+/// Godot 4.6 Script Editor Dark theme palette. Uncolored text keeps the area's
+/// default `textColor` (`#e0e6f0`), so only these token classes get a span.
+const COMMENT: Color = Color::rgb(0x6D, 0x78, 0x88); // muted slate
+const STRING: Color = Color::rgb(0xFF, 0xED, 0xA1); // warm yellow (#FFEDA1)
+const NUMBER: Color = Color::rgb(0xA1, 0xFF, 0xE0); // mint cyan (#A1FFE0)
+const KEYWORD: Color = Color::rgb(0xFF, 0x70, 0x85); // coral-pink (#FF7085)
+const TYPE: Color = Color::rgb(0x8E, 0xFF, 0xDA); // mint/aquamarine (#8EFFDA)
+const FUNC_CALL: Color = Color::rgb(0x57, 0xB3, 0xFF); // sky-blue (#57B3FF)
+const ATTR: Color = Color::rgb(0xFF, 0xB3, 0x73); // warm amber (annotations / props)
 
 /// Languages we highlight. Anything else → no highlighting.
 pub fn is_supported(lang: &str) -> bool {
@@ -21,6 +22,7 @@ pub fn is_supported(lang: &str) -> bool {
         lang,
         "rs" | "crs"
             | "crm"
+            | "gd"
             | "mui"
             | "json"
             | "scene"
@@ -38,20 +40,17 @@ pub fn is_supported(lang: &str) -> bool {
 fn keywords(lang: &str) -> &'static [&'static str] {
     match lang {
         "rs" => &[
-            // keywords (uppercase std types like Vec/Option are coloured as
-            // Type by the Type-case rule, so they're intentionally not listed)
             "fn", "let", "mut", "const", "static", "async", "await", "unsafe", "extern", "struct",
             "enum", "union", "impl", "trait", "type", "pub", "use", "mod", "crate", "super",
             "self", "if", "else", "match", "for", "while", "loop", "in", "continue", "break",
             "return", "where", "as", "ref", "move", "dyn", "box", "macro", "yield", "try",
-            // primitive types (lowercase → need to be listed to get a colour)
-            "bool", "char", "str", "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32",
-            "u64", "u128", "usize", "f32", "f64", "true", "false",
+            "true", "false",
         ],
-        "crs" | "crm" => &[
-            "func", "let", "mut", "struct", "enum", "trait", "impl", "import", "from", "if",
-            "else", "match", "for", "while", "loop", "return", "break", "continue", "as", "in",
-            "pub", "const", "unsafe", "self", "true", "false", "vec",
+        "crs" | "crm" | "gd" => &[
+            "func", "var", "let", "mut", "class", "struct", "enum", "trait", "impl", "import",
+            "from", "if", "elif", "else", "match", "for", "while", "loop", "return", "break",
+            "continue", "as", "in", "and", "or", "not", "pub", "public", "const", "static",
+            "unsafe", "self", "true", "false", "vec", "extends", "signal",
         ],
         "mui" => &[
             "view", "App", "signal", "mut", "if", "else", "for", "in", "import", "from", "true",
@@ -380,21 +379,49 @@ pub fn spans(text: &str, lang: &str) -> Vec<(usize, usize, Color)> {
             }
             // not a raw string ('r' is a normal identifier) — fall through
         }
-        // Identifier / keyword / Type. A trailing `!` marks a macro call.
+        // Identifier / keyword / Type / Function call. A trailing `!` marks a macro call.
         if c == b'_' || c.is_ascii_alphabetic() {
             let s = i;
             while i < n && is_ident(b[i]) {
                 i += 1;
             }
             let word = &text[s..i];
+            let is_builtin_type = matches!(
+                word,
+                "int"
+                    | "float"
+                    | "bool"
+                    | "str"
+                    | "void"
+                    | "char"
+                    | "i8"
+                    | "i16"
+                    | "i32"
+                    | "i64"
+                    | "i128"
+                    | "isize"
+                    | "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "u128"
+                    | "usize"
+                    | "f32"
+                    | "f64"
+                    | "json"
+            );
             if kw.contains(&word) {
                 out.push((s, i, KEYWORD));
-            } else if lang == "rs" && i < n && b[i] == b'!' {
+            } else if is_builtin_type {
+                out.push((s, i, TYPE));
+            } else if matches!(lang, "rs" | "crs" | "crm") && i < n && b[i] == b'!' {
                 // macro invocation: `println!`, `vec!`, … — colour name + bang
                 i += 1;
-                out.push((s, i, ATTR));
+                out.push((s, i, FUNC_CALL));
             } else if word.as_bytes()[0].is_ascii_uppercase() {
                 out.push((s, i, TYPE));
+            } else if i < n && b[i] == b'(' {
+                out.push((s, i, FUNC_CALL));
             }
             continue;
         }

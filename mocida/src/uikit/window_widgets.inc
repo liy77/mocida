@@ -2926,6 +2926,7 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
         // line number in the current font, plus left/right breathing room. The
         // renderer caches it in __gutterW so click hit-testing lands correctly.
         float gutterW = 0.0f;
+        int charAdvW = (int)(ta->fontSize * 0.6f);
         if (ta->showLineNumbers) {
             int hardLines = 1;
             for (int i = 0; i < ta->textLen; i++) if (ta->text[i] == '\n') hardLines++;
@@ -2933,7 +2934,8 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
             int dw = 0, dh = 0;
             TTF_GetStringSize(font, "0", 1, &dw, &dh);
             if (dw <= 0) dw = (int)(ta->fontSize * 0.6f);
-            gutterW = (float)(dw * digits) + 16.0f;
+            charAdvW = dw;
+            gutterW = (float)(dw * digits) + 30.0f;
         }
         ta->__gutterW = gutterW;
 
@@ -3173,6 +3175,19 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
         // the left margin. They scroll with the text and only mark hard line
         // starts; soft-wrapped continuation rows get no number, like a code
         // editor. Only visible rows are rendered.
+        int activeCaretLine = -1;
+        if (ta->linesLen > 0) {
+            int pos = ta->caretPos;
+            if (pos < 0) pos = 0;
+            if (pos > ta->textLen) pos = ta->textLen;
+            int lo = 0, hi = ta->linesLen - 1;
+            while (lo < hi) {
+                int mid = (lo + hi + 1) / 2;
+                if (ta->lineStarts[mid] <= pos) lo = mid; else hi = mid - 1;
+            }
+            activeCaretLine = lo;
+        }
+
         if (ta->showLineNumbers && gutterW > 0.0f && ta->linesLen > 0) {
             const float contentH = bounds.h - ta->paddingTop - ta->paddingBottom;
             SDL_Rect gclip = {
@@ -3181,20 +3196,12 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                 (int)(ta->paddingLeft + gutterW),
                 (int)contentH
             };
-            // Flush everything batched so far (the area's bg/border) under the
-            // CURRENT clip before the gutter clip narrows it — otherwise those
-            // draws resolve inside the gutter region for one frame (a white flash
-            // over the rest on rebuild).
             FlushRenderBatch(window->sdlRenderer);
             TA_CLIP_TO(gclip);
 
-            // Bake the digit colour WITHOUT the per-frame `op` (opacity is
-            // applied via SetTextureAlphaMod at draw time) so the cached
-            // line-number textures stay valid across frames. 0.45 = the gutter
-            // dimming.
             const SDL_Color gsc = {
                 (Uint8)ta->textColor.r, (Uint8)ta->textColor.g, (Uint8)ta->textColor.b,
-                (Uint8)SDL_clamp((int)(ta->textColor.a * 0.45f * 255.0f), 0, 255)
+                (Uint8)SDL_clamp((int)(ta->textColor.a * 0.48f * 255.0f), 0, 255)
             };
             const float top = bounds.y + ta->paddingTop;
             int lineNo = 0;
@@ -3205,21 +3212,48 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                 const float ytop = top + li * lineH - ta->scrollY;
                 if (ytop + lineH < top) continue;    // above the viewport
                 if (ytop > top + contentH) break;    // below the viewport
-                // Cached: rasterized once per number, NOT rebuilt every frame.
+                if (li == activeCaretLine) {
+                    SDL_FRect activeGutter = {
+                        bounds.x + ta->borderWidth, ytop,
+                        ta->paddingLeft + gutterW, lineH
+                    };
+                    DrawRoundedRectFill(window->sdlRenderer, activeGutter,
+                                        (UIColor){255, 255, 255, 0.04f * op}, 0.0f);
+                }
                 float nw = 0, nh = 0;
                 SDL_Texture* nt = GetLineNumTexture(window->sdlRenderer, rfont,
                                                     gsc, lineNo, &nw, &nh);
                 if (!nt) continue;
                 nw /= g_textSS; nh /= g_textSS;   // texture is g_textSS× — logical
-                SDL_FRect nd = {                     // right-aligned, 8px before text
-                    bounds.x + ta->paddingLeft + gutterW - 8.0f - nw, ytop, nw, nh
+                SDL_FRect nd = {                     // right-aligned, 20px before text (leaving room for fold chevron)
+                    bounds.x + ta->paddingLeft + gutterW - 20.0f - nw, ytop, nw, nh
                 };
                 SDL_SetTextureAlphaMod(nt, (Uint8)(op * 255.0f + 0.5f));
                 SDL_RenderTexture(window->sdlRenderer, nt, NULL, &nd);
                 SDL_SetTextureAlphaMod(nt, 255);   // reset (cached texture is shared)
+
+                // Draw Godot-style code fold chevron `▾` when line opens a block (`{` or `:`)
+                const int lStart = ta->lineStarts[li];
+                const int lLen   = ta->lineLengths[li];
+                int isFoldable = 0;
+                for (int k = lStart + lLen - 1; k >= lStart; k--) {
+                    char ch = ta->text[k];
+                    if (ch == ' ' || ch == '\t' || ch == '\r') continue;
+                    if (ch == '{' || ch == ':') isFoldable = 1;
+                    break;
+                }
+                if (isFoldable) {
+                    const float cx = bounds.x + ta->paddingLeft + gutterW - 11.0f;
+                    const float cy = ytop + lineH * 0.52f;
+                    UIColor chevC = (UIColor){ 180, 190, 205, 0.45f * op };
+                    SDL_FRect r1 = { cx - 3.0f, cy - 1.5f, 6.0f, 1.4f };
+                    SDL_FRect r2 = { cx - 1.8f, cy,        3.6f, 1.4f };
+                    SDL_FRect r3 = { cx - 0.7f, cy + 1.4f, 1.4f, 1.4f };
+                    DrawRoundedRectFill(window->sdlRenderer, r1, chevC, 0.0f);
+                    DrawRoundedRectFill(window->sdlRenderer, r2, chevC, 0.0f);
+                    DrawRoundedRectFill(window->sdlRenderer, r3, chevC, 0.0f);
+                }
             }
-            // Resolve the gutter numbers under the gutter clip before it's lifted,
-            // so they don't bleed into the text area on the next clip.
             FlushRenderBatch(window->sdlRenderer);
             SDL_SetRenderClipRect(window->sdlRenderer, NULL);
         }
@@ -3232,11 +3266,63 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
             (int)(bounds.w - (ta->paddingLeft + ta->paddingRight + gutterW)),
             (int)(bounds.h - (ta->paddingTop + ta->paddingBottom))
         };
-        // Flush whatever is still batched (the bg/border when there is no gutter
-        // to flush above) under the CURRENT clip before narrowing to the text box
-        // — otherwise those draws resolve inside clipR for a frame (a flash).
         FlushRenderBatch(window->sdlRenderer);
         TA_CLIP_TO(clipR);
+
+        // Godot 4.6-style active caret line highlight, column guide, and `>|` indent guides
+        if (ta->showLineNumbers && !showPlaceholder && ta->linesLen > 0) {
+            const float top = bounds.y + ta->paddingTop;
+            const float contentH = bounds.h - ta->paddingTop - ta->paddingBottom;
+            const float codeBaseX = bounds.x + ta->paddingLeft + gutterW;
+            if (activeCaretLine >= 0) {
+                const float ay = top + activeCaretLine * lineH - ta->scrollY;
+                if (ay + lineH >= top && ay <= top + contentH) {
+                    SDL_FRect hlLine = {
+                        codeBaseX, ay,
+                        bounds.w - (ta->paddingLeft + ta->paddingRight + gutterW),
+                        lineH
+                    };
+                    DrawRoundedRectFill(window->sdlRenderer, hlLine,
+                                        (UIColor){255, 255, 255, 0.04f * op}, 0.0f);
+                }
+            }
+            // Column 80 / 100 vertical guide line
+            const float colGuideX = codeBaseX + (float)(charAdvW * 88);
+            if (colGuideX < bounds.x + bounds.w - 84.0f) {
+                SDL_FRect cg = { colGuideX, top, 1.0f, contentH };
+                DrawRoundedRectFill(window->sdlRenderer, cg,
+                                    (UIColor){255, 255, 255, 0.035f * op}, 0.0f);
+            }
+            // Indentation guides (`>|` markers + vertical guide bars per 4-space indent stop)
+            const float stepW = (float)(charAdvW * 4);
+            if (stepW >= 12.0f) {
+                UIColor guideC = (UIColor){ 180, 192, 210, 0.11f * op };
+                for (int li = 0; li < ta->linesLen; li++) {
+                    const float ytop = top + li * lineH - ta->scrollY;
+                    if (ytop + lineH < top) continue;
+                    if (ytop > top + contentH) break;
+                    const int lStart = ta->lineStarts[li];
+                    const int lLen   = ta->lineLengths[li];
+                    int leadSpaces = 0;
+                    for (int k = 0; k < lLen; k++) {
+                        char ch = ta->text[lStart + k];
+                        if (ch == ' ') leadSpaces++;
+                        else if (ch == '\t') leadSpaces += 4;
+                        else break;
+                    }
+                    const int stops = leadSpaces / 4;
+                    for (int st = 0; st < stops && st < 16; st++) {
+                        const float gx = codeBaseX + st * stepW;
+                        const float midY = ytop + lineH * 0.5f;
+                        // Small `>|` Godot tab marker inside the indent stop
+                        SDL_FRect bar = { gx + 7.0f, midY - 3.5f, 1.2f, 7.0f };
+                        SDL_FRect tip = { gx + 3.5f, midY - 0.8f, 3.0f, 1.6f };
+                        DrawRoundedRectFill(window->sdlRenderer, bar, guideC, 0.0f);
+                        DrawRoundedRectFill(window->sdlRenderer, tip, guideC, 0.0f);
+                    }
+                }
+            }
+        }
 
         // Selection highlight - emit one rect per affected line.
         if (!showPlaceholder && ta->selAnchor >= 0 &&
@@ -3460,6 +3546,106 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                     1.5f, caretH
                 };
                 DrawRoundedRectFill(window->sdlRenderer, caretRect, cc, 0.0f);
+            }
+        }
+
+        // Godot 4.6-style syntax-colored Minimap on the right edge of the code editor
+        if (ta->showLineNumbers && !showPlaceholder && ta->linesLen > 0 && bounds.w > 340.0f) {
+            const float mmW = 74.0f;
+            const float mmX = bounds.x + bounds.w - ta->borderWidth - mmW - 2.0f;
+            const float mmTop = bounds.y + ta->paddingTop;
+            const float mmH = bounds.h - ta->paddingTop - ta->paddingBottom;
+
+            SDL_FRect mmBg = { mmX, mmTop, mmW, mmH };
+            DrawRoundedRectFill(window->sdlRenderer, mmBg,
+                                (UIColor){ 23, 27, 33, 0.82f * op }, 0.0f);
+            SDL_FRect mmSep = { mmX, mmTop, 1.0f, mmH };
+            DrawRoundedRectFill(window->sdlRenderer, mmSep,
+                                (UIColor){ 255, 255, 255, 0.06f * op }, 0.0f);
+
+            const float rowStep = 2.6f;
+            const float rowBarH = 1.6f;
+            const int maxMmLines = (int)(mmH / rowStep) + 1;
+            const int totalLines = ta->linesLen;
+            int startLine = 0;
+            if (totalLines > maxMmLines && lineH > 0.0f) {
+                const float maxScrollY = (totalLines * lineH) - mmH;
+                if (maxScrollY > 0.0f) {
+                    float frac = ta->scrollY / maxScrollY;
+                    if (frac < 0.0f) frac = 0.0f;
+                    if (frac > 1.0f) frac = 1.0f;
+                    startLine = (int)(frac * (float)(totalLines - maxMmLines));
+                }
+            }
+
+            // Viewport slider highlight box on the minimap
+            if (lineH > 0.0f) {
+                int visFirst = (int)(ta->scrollY / lineH) - startLine;
+                int visCount = (int)(mmH / lineH) + 1;
+                if (visFirst < 0) visFirst = 0;
+                float vpY = mmTop + visFirst * rowStep;
+                float vpH = visCount * rowStep;
+                if (vpH < 18.0f) vpH = 18.0f;
+                if (vpY + vpH > mmTop + mmH) vpH = (mmTop + mmH) - vpY;
+                if (vpH > 0.0f) {
+                    SDL_FRect vpRect = { mmX + 1.0f, vpY, mmW - 2.0f, vpH };
+                    DrawRoundedRectWithBorder(
+                        window->sdlRenderer, vpRect,
+                        (UIColor){ 255, 255, 255, 0.09f * op }, 2.0f, 1,
+                        (UIColor){ 255, 255, 255, 0.16f * op }
+                    );
+                }
+            }
+
+            // Render syntax-colored token bars per line
+            int spanCursor = 0;
+            UIColor defBarC = (UIColor){ 180, 192, 210, 0.62f * op };
+            for (int i = 0; i < maxMmLines && (startLine + i) < totalLines; i++) {
+                const int li = startLine + i;
+                const int lStart = ta->lineStarts[li];
+                const int lLen   = ta->lineLengths[li];
+                if (lLen <= 0) continue;
+                const float ry = mmTop + i * rowStep + 2.0f;
+                if (ry + rowBarH > mmTop + mmH) break;
+
+                // Advance spanCursor near lStart
+                while (spanCursor < ta->__hlSpanCount &&
+                       ta->__hlSpans[spanCursor].end <= lStart) {
+                    spanCursor++;
+                }
+
+                // Scan runs of non-whitespace characters along the line
+                int col = 0;
+                while (col < lLen && col < 96) {
+                    while (col < lLen && (ta->text[lStart + col] == ' ' || ta->text[lStart + col] == '\t')) {
+                        col++;
+                    }
+                    if (col >= lLen || col >= 96) break;
+                    int runStart = col;
+                    while (col < lLen && col < 96 &&
+                           ta->text[lStart + col] != ' ' && ta->text[lStart + col] != '\t') {
+                        col++;
+                    }
+                    int runEnd = col;
+                    int bytePos = lStart + runStart;
+                    UIColor barC = defBarC;
+                    for (int si = spanCursor; si < ta->__hlSpanCount; si++) {
+                        if (ta->__hlSpans[si].start >= lStart + lLen) break;
+                        if (bytePos >= ta->__hlSpans[si].start && bytePos < ta->__hlSpans[si].end) {
+                            barC = ta->__hlSpans[si].color;
+                            barC.a = 0.78f * op;
+                            break;
+                        }
+                    }
+                    float bx = mmX + 5.0f + (float)runStart * 0.68f;
+                    float bw = (float)(runEnd - runStart) * 0.68f;
+                    if (bw < 1.5f) bw = 1.5f;
+                    if (bx + bw > mmX + mmW - 3.0f) bw = (mmX + mmW - 3.0f) - bx;
+                    if (bw > 0.5f) {
+                        SDL_FRect br = { bx, ry, bw, rowBarH };
+                        DrawRoundedRectFill(window->sdlRenderer, br, barC, 0.0f);
+                    }
+                }
             }
         }
 
