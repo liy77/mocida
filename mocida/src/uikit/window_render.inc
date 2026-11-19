@@ -128,7 +128,15 @@ static void RenderScroll(UIWindow* window, UIWidget* el, UIScroll* s) {
     if (s->content) {
         s->content->x = viewport.x - s->scrollX;
         s->content->y = viewport.y - s->scrollY;
-        EnsureWidgetSize(s->content, s->contentW, s->contentH);
+        // Prefer the larger of last measured content vs viewport so a growing
+        // Stack (images finishing decode) is never laid out into a too-short box.
+        {
+            float wantW = s->contentW > viewport.w ? s->contentW : viewport.w;
+            float wantH = s->contentH > viewport.h ? s->contentH : viewport.h;
+            if (s->content->width && *s->content->width > wantW) wantW = *s->content->width;
+            if (s->content->height && *s->content->height > wantH) wantH = *s->content->height;
+            EnsureWidgetSize(s->content, wantW, wantH);
+        }
         RenderSingleWidget(window, s->content);
         // A flowing Stack reports the room its *visible* items took; items
         // hidden via `visible` take none, so track that instead of the
@@ -144,6 +152,9 @@ static void RenderScroll(UIWindow* window, UIWidget* el, UIScroll* s) {
                 if (horiz) s->contentW = extent;
                 else       s->contentH = extent;
             }
+        } else if (s->content->width && s->content->height) {
+            if (*s->content->width  > s->contentW) s->contentW = *s->content->width;
+            if (*s->content->height > s->contentH) s->contentH = *s->content->height;
         }
     }
 
@@ -446,6 +457,22 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
     }
     if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_CANVAS)) {
         RenderWidget_Canvas(window, el, base, op);
+        return;
+    }
+    if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_SCENE3D)) {
+        RenderWidget_Scene3D(window, el, base, op);
+        return;
+    }
+    if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_SEGMENTED)) {
+        RenderWidget_Segmented(window, el, base, op);
+        return;
+    }
+    if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_TABBAR)) {
+        RenderWidget_TabBar(window, el, base, op);
+        return;
+    }
+    if (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_NAVBAR)) {
+        RenderWidget_NavBar(window, el, base, op);
         return;
     }
 

@@ -9,8 +9,10 @@
 //! Members: `os` (`macos`, `windows`, `linux`, `ios`, `android`, or a console:
 //! `playstation`, `xbox`, `switch`), `device` (a simulated device's id, else
 //! the os), and `isMobile`, `isTouch`, `isDesktop`, `isConsole`, `isIOS`,
-//! `isAndroid`, `isMacOS`, `isWindows`, `isLinux`, `isWeb` (`1` / `0`, so both
-//! `if Platform.isTouch` and `Platform.isTouch == true` work).
+//! `isAndroid`, `isMacOS`, `isWindows`, `isLinux`, `isWeb`,
+//! `prefersReducedMotion` (`1` / `0`, so both `if Platform.isTouch` and
+//! `Platform.isTouch == true` work). On the web build, `isIOS` / `isAndroid`
+//! follow the live User-Agent so a phone visiting the listen site lights up.
 //!
 //! A simulator sets `MOCIDA_PLATFORM` (the os), `MOCIDA_PLATFORM_DEVICE` and
 //! `MOCIDA_PLATFORM_TOUCH` (`1` / `0`) before the view is built.
@@ -46,27 +48,68 @@ fn flag(on: bool) -> String {
 /// `Platform.<field>`, or None for an unknown member.
 pub fn member(field: &str) -> Option<String> {
     let os = os();
-    let mobile = matches!(os.as_str(), "ios" | "android");
+    // On the web build, prefer the live browser signal (phone/tablet/desktop)
+    // so `if Platform.isMobile` works for a phone visiting a listen page.
+    let web_device = if cfg!(target_arch = "wasm32") {
+        Some(mocida::web::device())
+    } else {
+        None
+    };
+    let mobile = match web_device.as_deref() {
+        Some("phone") | Some("tablet") => true,
+        Some(_) => false,
+        None => matches!(os.as_str(), "ios" | "android"),
+    };
+    let touch = env("MOCIDA_PLATFORM_TOUCH").map_or_else(
+        || {
+            if cfg!(target_arch = "wasm32") {
+                mocida::web::is_touch() || mobile
+            } else {
+                mobile
+            }
+        },
+        |v| v == "1" || v == "true",
+    );
+    // On the listen / WASM site, prefer live UA so `Platform.isIOS` /
+    // `isAndroid` light up for Safari and Chrome mobile visitors.
+    let ios = if cfg!(target_arch = "wasm32") {
+        mocida::web::is_ios() || os == "ios"
+    } else {
+        os == "ios"
+    };
+    let android = if cfg!(target_arch = "wasm32") {
+        mocida::web::is_android() || os == "android"
+    } else {
+        os == "android"
+    };
     let console = matches!(os.as_str(), "playstation" | "xbox" | "switch");
+    let reported_os = if ios {
+        "ios".to_string()
+    } else if android {
+        "android".to_string()
+    } else {
+        os.clone()
+    };
     Some(match field {
-        "os" => os,
+        "os" => reported_os,
         "isWeb" => flag(cfg!(target_arch = "wasm32")),
         "device" => env("MOCIDA_PLATFORM_DEVICE").unwrap_or_else(|| {
-            if cfg!(target_arch = "wasm32") {
-                "phone".to_string()
-            } else {
-                os
-            }
+            web_device.unwrap_or(os)
         }),
-        "isMobile" => flag(mobile),
+        "isMobile" => flag(mobile || ios || android),
         "isConsole" => flag(console),
-        "isDesktop" => flag(!mobile && !console && os != "web"),
-        "isTouch" => flag(env("MOCIDA_PLATFORM_TOUCH").map_or(mobile, |v| v == "1" || v == "true")),
-        "isIOS" => flag(os == "ios"),
-        "isAndroid" => flag(os == "android"),
-        "isMacOS" => flag(os == "macos"),
+        "isDesktop" => flag(!mobile && !ios && !android && !console && !cfg!(target_arch = "wasm32")),
+        "isTouch" => flag(touch),
+        "isIOS" => flag(ios),
+        "isAndroid" => flag(android),
+        "isMacOS" => flag(os == "macos" && !ios),
         "isWindows" => flag(os == "windows"),
         "isLinux" => flag(os == "linux"),
+        "prefersReducedMotion" => flag(if cfg!(target_arch = "wasm32") {
+            mocida::web::prefers_reduced_motion()
+        } else {
+            false
+        }),
         _ => return None,
     })
 }

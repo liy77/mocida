@@ -21,6 +21,8 @@
 #include <uikit/backdrop.h>
 #include <uikit/dialog.h>
 #include <uikit/tab.h>
+#include <uikit/chrome.h>
+#include <uikit/gesture.h>
 #include <uikit/theme.h>
 #include <uikit/popup.h>
 #include <uikit/sound.h>
@@ -28,6 +30,9 @@
 #include <uikit/file_drop.h>
 #include <uikit/file_dialog.h>
 #include <uikit/anim.h>
+#include <uikit/gpu.h>
+#include <uikit/shader.h>
+#include <uikit/scene3d.h>
 #include <uikit/clipboard.h>
 #include <uikit/cursor.h>
 #include <uikit/debug.h>
@@ -251,6 +256,19 @@ void UIApp_MinimizeG(void);        /**< Minimize to the taskbar. */
 void UIApp_ToggleMaximizeG(void);  /**< Maximize <-> restore (respects work area). */
 int  UIApp_IsMaximizedG(void);     /**< 1 if the window is currently maximized. */
 void UIApp_CloseG(void);           /**< Request quit (clean UIApp_Run teardown). */
+
+/**
+ * Open a URL / URI in the platform-correct way.
+ *
+ * - `http(s):` / `mailto:` → system browser (native) or `window.open` (web).
+ * - Internal forms (`docs:…`, `#…`, `/docs/…`, `mocidad://…`) → on web they
+ *   become a `#/docs/…` hash navigation so the same MUI app can deep-link;
+ *   on native they still go through `SDL_OpenURL` after normalization when
+ *   there is no in-app handler.
+ *
+ * Safe to call from any thread that owns the UI (MUI Link onClick, App.openUrl).
+ */
+void UIApp_OpenURL(const char* url);
 
 /**
  * Gets a property of the UIApp object.

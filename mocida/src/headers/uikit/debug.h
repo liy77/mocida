@@ -262,6 +262,9 @@ void UICrash_DumpReport(const char* reason);
 #define UI_CAT_VIDEO    "mocida.video"
 #define UI_CAT_SOUND    "mocida.sound"
 #define UI_CAT_WEBVIEW  "mocida.webview"
+#define UI_CAT_GFX      "mocida.gfx"
+#define UI_CAT_SHADER   "mocida.shader"
+#define UI_CAT_ANIM     "mocida.anim"
 
 #ifdef __cplusplus
 }

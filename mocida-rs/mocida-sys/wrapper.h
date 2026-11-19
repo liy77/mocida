@@ -30,6 +30,9 @@
 #include <uikit/upscale.h>
 #include <uikit/web.h>
 #include <uikit/sound.h>
+#include <uikit/gpu.h>
+#include <uikit/shader.h>
+#include <uikit/scene3d.h>
 #ifdef _WIN32
 #include <uikit/webview_dcomp.h>
 #endif

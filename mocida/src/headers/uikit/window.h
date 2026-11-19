@@ -118,6 +118,13 @@ void UIWindow_SetAAMode(int mode);
 int  UIWindow_GetAAMode(void);
 
 /**
+ * 1 when running the no-acceleration fallback (software renderer or
+ * `MOCIDA_LIGHT=1`): no SSAA, 1× text raster, hosts may lower target FPS.
+ * 0 when a real GPU/backend is in use — full quality path.
+ */
+int UIWindow_IsLightProfile(void);
+
+/**
  * History weight for the TAA pass (0..1). 0.5 by default.
  */
 void  UIWindow_SetTAABlend(float alpha);

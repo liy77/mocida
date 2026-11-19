@@ -42,13 +42,17 @@ use mocida::sys as msys;
 use mocida::text::by_ptr;
 use mocida::canvas::Canvas;
 use mocida::{
-    BackdropMaterial, Button, Checkbox, Children, Color, Cursor, Dialog, FillMode, FontStyle,
-    Glass, GlassThickness, Grid, GridView, HorizontalAlign, Image, ListView, MouseArea,
-    MouseAreaEvent, ProgressBar, RadioButton, Rectangle, Scroll, Shadow, Signal, Slider, Sound,
-    Spinner, Stack, StackAlign, StackJustify, StackOrientation, Switch, Text, TextArea, TextField,
-    TextHAlign, TextVAlign, VerticalAlign, VibrancyState, Video, WebView, Widget, WrapMode,
+    BackdropMaterial, BillboardMode, Button, Checkbox, Children, Color, Cursor, Dialog, FillMode,
+    FontStyle, GestureArea, GestureKind, GfxMode, Glass, GlassThickness, Grid, GridView,
+    HorizontalAlign, Image, ListView, MouseArea, MouseAreaEvent, NavBar, ProgressBar, RadioButton,
+    Rectangle, Scene3D, Scroll, SegmentedControl, Shadow, ShaderLang, ShaderLibrary, Signal, Slider,
+    Sound, Spinner, Stack, StackAlign, StackJustify, StackOrientation, Switch, TabBar, Text,
+    TextArea, TextField, TextHAlign, TextVAlign, VerticalAlign, VibrancyState, Video, WebView,
+    Widget, WrapMode,
 };
-use mui_syntax::ast::{Element, Handler, HandlerAction, MuiValue, Node, Prop, PropValue, View};
+use mui_syntax::ast::{
+    Element, Handler, HandlerAction, MuiValue, Node, Prop, PropValue, View,
+};
 use mui_syntax::loader::Registry;
 use mui_syntax::style::{self, Anchor, HAnchor, ReactiveEnv, Rgba, ShadowSpec, VAnchor};
 
@@ -517,6 +521,43 @@ pub fn window_config(doc: &mui_syntax::ast::Document, entry_view_name: &str) -> 
         cfg.titlebar = app.titlebar.clone();
     }
     cfg
+}
+
+/// Apply `App() { fonts: [FontFace(...), …] }` like CSS `@font-face`.
+///
+/// Resolves relative `src` paths against `base_dir` (the entry `.mui` directory
+/// or VFS root). Call after the window exists / TTF is up, before the first
+/// `Text(font: …)` build. Idempotent per face (last registration wins).
+pub fn apply_app_fonts(doc: &mui_syntax::ast::Document, base_dir: Option<&std::path::Path>) {
+    let Some(app) = doc.app.as_ref() else { return };
+    if app.fonts.is_empty() {
+        return;
+    }
+    mocida::text::search_fonts();
+    for face in &app.fonts {
+        let src = resolve_font_src(&face.src, base_dir);
+        if !mocida::text::register_font(&face.family, &src) {
+            eprintln!(
+                "mui: font face '{}' from '{}' failed to register",
+                if face.family.is_empty() {
+                    "(embedded name)"
+                } else {
+                    face.family.as_str()
+                },
+                src
+            );
+        }
+    }
+}
+
+fn resolve_font_src(src: &str, base_dir: Option<&std::path::Path>) -> String {
+    if src.starts_with("http://") || src.starts_with("https://") || src.starts_with('/') {
+        return src.to_string();
+    }
+    if let Some(base) = base_dir {
+        return base.join(src).to_string_lossy().replace('\\', "/");
+    }
+    src.to_string()
 }
 
 /// Request a custom (client-side) title bar BEFORE the app/window is created,
@@ -1289,19 +1330,32 @@ fn build_group(ctx: &mut Ctx, nodes: &[Node], layout: &mut Layout) -> Result<Opt
             Ok(Some(w))
         }
         _ => {
+            // Match the layout cursor's ROW_GAP so multi-widget `if`/`for`
+            // bodies don't pack Text lines on top of each other (spacing 0
+            // was the docs "text inside text" bug on the web host).
+            let gap = if absolute { 0.0 } else { layout::ROW_GAP };
             let mut stack = Stack::new(if horizontal {
                 StackOrientation::Horizontal
             } else {
                 StackOrientation::Vertical
             })?
-            .spacing(0.0);
+            .spacing(gap);
             if absolute {
                 stack = stack.free_layout(true);
             }
+            let n = built.len();
             for w in built {
                 stack.add(w)?;
             }
-            let (gw, gh) = (content_w.max(1.0), content_h.max(1.0));
+            // Recompute height with real inter-item gaps (placed_height already
+            // baked a trailing ROW_GAP per child — strip those, then add gap).
+            let gh = if horizontal {
+                content_h.max(1.0)
+            } else {
+                let stripped = (content_h - layout::ROW_GAP * n as f32).max(0.0);
+                (stripped + gap * n.saturating_sub(1) as f32).max(1.0)
+            };
+            let gw = content_w.max(1.0);
             layout.next_sized(gw, gh);
             Ok(Some(stack.into_widget_sized(gw, gh)?))
         }
@@ -1597,11 +1651,15 @@ fn build_element(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wid
             "GridView" => build_gridview(ctx, el, layout)?,
             "Text" => build_text(ctx, el, layout)?,
             "Button" => build_button(ctx, el, layout)?,
+            "Link" | "A" | "Hyperlink" => build_link(ctx, el, layout)?,
             "TextField" | "Input" | "TextInput" => build_textfield(ctx, el, layout)?,
             "TextArea" => build_textarea(ctx, el, layout)?,
             "Checkbox" => build_checkbox(ctx, el, layout)?,
             "RadioButton" | "Radio" => build_radio(ctx, el, layout)?,
             "Switch" => build_switch(ctx, el, layout)?,
+            "SegmentedControl" | "Segmented" => build_segmented(ctx, el, layout)?,
+            "TabBar" => build_tabbar(ctx, el, layout)?,
+            "NavBar" | "NavigationBar" => build_navbar(ctx, el, layout)?,
             "Slider" => build_slider(ctx, el, layout)?,
             "ProgressBar" => build_progressbar(ctx, el, layout)?,
             "Spinner" => build_spinner(ctx, el, layout)?,
@@ -1611,10 +1669,13 @@ fn build_element(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wid
                 build_painted_canvas(ctx, el, layout)?
             }
             "Canvas" | "TabBarCanvas" => build_canvas(ctx, el, layout)?,
+            "Scene3D" | "Scene25D" => build_scene3d(ctx, el, layout)?,
             "WebView" | "Webview" => build_webview(ctx, el, layout)?,
             "Dialog" => build_dialog(ctx, el, layout)?,
             "Popup" => build_popup(ctx, el, layout)?,
             "MouseArea" => build_mouse_area(ctx, el, layout)?,
+            "GestureArea" | "TapGesture" | "LongPressGesture" | "DragGesture" | "SwipeGesture"
+            | "SpatialTapGesture" => build_gesture_area(ctx, el, layout)?,
             "FileDrop" => build_filedrop(ctx, el, layout)?,
             _ if !el.children.is_empty() => build_stack(ctx, el, layout)?,
             other => build_placeholder(ctx, other, el, layout)?,
@@ -1675,6 +1736,9 @@ fn is_builtin(name: &str) -> bool {
             | "GridView"
             | "Text"
             | "Button"
+            | "Link"
+            | "A"
+            | "Hyperlink"
             | "TextField"
             | "Input"
             | "TextInput"
@@ -1683,6 +1747,15 @@ fn is_builtin(name: &str) -> bool {
             | "RadioButton"
             | "Radio"
             | "Switch"
+            | "SegmentedControl"
+            | "Segmented"
+            | "Segment"
+            | "TabBar"
+            | "TabItem"
+            | "NavBar"
+            | "NavigationBar"
+            | "NavItem"
+            | "NavBrand"
             | "Slider"
             | "ProgressBar"
             | "Spinner"
@@ -1690,6 +1763,11 @@ fn is_builtin(name: &str) -> bool {
             | "Video"
             | "Canvas"
             | "TabBarCanvas"
+            | "Scene3D"
+            | "Scene25D"
+            | "Sprite3D"
+            | "PointLight"
+            | "ShaderPass"
             | "WebView"
             | "Webview"
             | "Dialog"
@@ -1697,6 +1775,12 @@ fn is_builtin(name: &str) -> bool {
             | "Audio"
             | "Sound"
             | "MouseArea"
+            | "GestureArea"
+            | "TapGesture"
+            | "LongPressGesture"
+            | "DragGesture"
+            | "SwipeGesture"
+            | "SpatialTapGesture"
     )
 }
 
@@ -2594,12 +2678,19 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
     // would claim one line's height and overflow into the next item).
     // An explicit `width:` bounds the line; with `wrap:` set, a line wider
     // than that box wraps, adding to the height estimate.
-    let explicit_lines = label.lines().count().max(1);
+    //
+    // CRITICAL: C-side render uses `lineH = fontSize * lineHeight` (default
+    // 1.25 when unset). Layout MUST use the same multiplier, or wrapped /
+    // multi-line Text paints taller than its widget box and overlaps the
+    // next sibling — exactly the docs "text inside text" bug.
+    let line_mul = style::f32_prop(el, "lineHeight")
+        .filter(|v| *v > 0.0)
+        .unwrap_or(1.25);
+    let letter_sp = style::f32_prop(el, "letterSpacing").unwrap_or(0.0).max(0.0);
     let widest_line = label
         .lines()
-        .map(|ln| text_width(el, ln, size))
+        .map(|ln| text_width(el, ln, size) + letter_sp * ln.chars().count().saturating_sub(1) as f32)
         .fold(0.0_f32, f32::max);
-    let (_full_w, line_h) = text_extent(&label, size);
     let natural_w = if widest_line > 0.0 {
         widest_line
     } else {
@@ -2607,15 +2698,18 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
     };
     let wrap_mode = style::enum_member(el, "wrap").and_then(|s| wrap_from(&s));
     let w = dim_prop(ctx, el, "width").unwrap_or(natural_w);
+    let line_h = (size * line_mul).ceil();
     let h = dim_prop(ctx, el, "height").unwrap_or_else(|| {
-        if matches!(wrap_mode, Some(WrapMode::Word | WrapMode::Char)) && w > 0.0 && natural_w > w {
-            // Wrapping: each explicit line may wrap into several visual lines.
-            let wrapped = (natural_w / w).ceil().max(1.0);
-            line_h * (explicit_lines as f32) * wrapped
-        } else {
-            // No wrap: just the explicit line count.
-            line_h * (explicit_lines as f32)
-        }
+        let lines = match wrap_mode {
+            Some(WrapMode::Word) if w > 0.0 => {
+                estimate_wrapped_lines(el, &label, size, w, letter_sp, false)
+            }
+            Some(WrapMode::Char) if w > 0.0 => {
+                estimate_wrapped_lines(el, &label, size, w, letter_sp, true)
+            }
+            _ => label.lines().count().max(1) as f32,
+        };
+        (line_h * lines).max(line_h)
     });
     let mut text = Text::new(&label, size)?.color(color);
     // Gradient fill: `gradientFrom:`/`gradientTo:` (aliases `gradientTop:`/
@@ -2727,6 +2821,148 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
         ctx.reactive._subs.extend(new_subs);
     }
 
+    Ok(apply_anchor(widget, style::anchor(el)))
+}
+
+/// Resolve a Link `to`/`href` into an optional in-app docs topic + the URL to
+/// hand to [`mocida::app::open_url`] (web hash rewrite / system browser).
+fn resolve_link_href(raw: &str) -> (Option<String>, String) {
+    let s = raw.trim();
+    if s.is_empty() {
+        return (None, String::new());
+    }
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("mailto:")
+        || lower.starts_with("tel:")
+    {
+        return (None, s.to_string());
+    }
+    if let Some(rest) = s.strip_prefix("docs:") {
+        let topic = rest.trim().trim_start_matches('/').to_string();
+        return (Some(topic.clone()), format!("docs:{topic}"));
+    }
+    if let Some(rest) = s.strip_prefix("mocidad://guide/") {
+        let topic = rest.trim().trim_end_matches('/').to_string();
+        return (Some(topic.clone()), format!("docs:{topic}"));
+    }
+    if let Some(rest) = s.strip_prefix("mocidad://api/") {
+        // API resources land on the packages / engine-api docs surface.
+        let topic = match rest.trim() {
+            "blocks" => "packages".to_string(),
+            other => other.to_string(),
+        };
+        return (Some(topic.clone()), format!("docs:{topic}"));
+    }
+    if let Some(rest) = s.strip_prefix("mocidad://") {
+        let topic = rest.trim().trim_end_matches('/').to_string();
+        return (Some(topic.clone()), format!("docs:{topic}"));
+    }
+    if let Some(rest) = s.strip_prefix("#/docs/") {
+        let topic = rest.trim().to_string();
+        return (Some(topic.clone()), format!("docs:{topic}"));
+    }
+    if let Some(rest) = s.strip_prefix("#docs/") {
+        let topic = rest.trim().to_string();
+        return (Some(topic.clone()), format!("docs:{topic}"));
+    }
+    if let Some(rest) = s.strip_prefix("/docs/") {
+        let topic = rest.trim().to_string();
+        return (Some(topic.clone()), format!("docs:{topic}"));
+    }
+    if s.starts_with('#') {
+        let topic = s.trim_start_matches('#').trim_start_matches('/').to_string();
+        return (Some(topic.clone()), format!("docs:{topic}"));
+    }
+    // Bare topic id (install, api-ctx, …) — treat as internal docs link.
+    if !s.contains("://") && !s.contains('.') {
+        return (Some(s.to_string()), format!("docs:{s}"));
+    }
+    (None, s.to_string())
+}
+
+/// `Link("Install", to: "docs:install")` / `Link("https://…")` /
+/// `Link("MCP guide", href: "mocidad://guide/mcp")`.
+///
+/// Chrome-less underlined button that looks like link text. On click:
+/// 1. Internal `docs:` / `mocidad://` / `#/docs/…` → sets `docs_topic` (+
+///    `page = "docs"`, closes `docs_nav`) when those signals exist.
+/// 2. Always calls [`mocida::app::open_url`] so web gets a hash deep-link and
+///    http(s) opens in the system / browser tab.
+fn build_link(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
+    let label = el
+        .positional
+        .as_ref()
+        .map(|e| render_text_expr(e, ctx))
+        .unwrap_or_default();
+    let href = prop_string_value(ctx, el, "to")
+        .or_else(|| prop_string_value(ctx, el, "href"))
+        .or_else(|| prop_string_value(ctx, el, "url"))
+        .unwrap_or_else(|| label.clone());
+    let size = style::f32_prop(el, "size")
+        .or_else(|| style::f32_prop(el, "fontSize"))
+        .unwrap_or(15.0);
+    let link_color = color_eval(ctx, el, "color")
+        .or_else(|| style::color_prop(el, "textColor"))
+        .unwrap_or(Rgba {
+            r: 0x7e,
+            g: 0xb6,
+            b: 0xff,
+            a: 0xff,
+        });
+
+    let natural_w = text_width(el, &label, size) + 4.0;
+    let (_fw, line_h) = text_extent(&label, size);
+    let w = dim_prop(ctx, el, "width").unwrap_or(natural_w.max(24.0));
+    let h = dim_prop(ctx, el, "height").unwrap_or((line_h + 4.0).max(20.0));
+
+    let mut button = Button::new(&label, size)?;
+    // Transparent fill — reads as text, not a chrome button.
+    let clear = Color::rgba(0, 0, 0, 0.0);
+    button = button.colors(clear, to_color(link_color));
+    button = button.border_width(0.0).radius(0.0);
+    button = button.cursor(Cursor::Pointer);
+    button = button.text_align(1); // left
+    button = button.text_inset(0.0);
+    let mut bits = style::font_style_bits(el);
+    if bits == 0 {
+        bits = FontStyle::UNDERLINE.bits();
+    }
+    button = button.font_style(FontStyle::from_bits(bits));
+    if let Some(fam) = style::font_family(el) {
+        if let Some(path) = mocida::text::get_font(&fam) {
+            button = button.font_family(&path)?;
+        }
+    }
+
+    let (topic, open) = resolve_link_href(&href);
+    let docs_topic = ctx.string_signal("docs_topic").cloned();
+    let page = ctx.string_signal("page").cloned();
+    let docs_nav = ctx.string_signal("docs_nav").cloned();
+    let mut user_click = handler_apply_closure(ctx, el, "onClick");
+    button = button.on_click(move |_btn| {
+        if let Some(ref t) = topic {
+            if let Some(ref sig) = docs_topic {
+                let _ = sig.borrow_mut().set(t.clone());
+            }
+            if let Some(ref sig) = page {
+                let _ = sig.borrow_mut().set("docs".to_string());
+            }
+            if let Some(ref sig) = docs_nav {
+                let _ = sig.borrow_mut().set("0".to_string());
+            }
+        }
+        if !open.is_empty() {
+            mocida::app::open_url(&open);
+        }
+        if let Some(ref mut f) = user_click {
+            f();
+        }
+    });
+
+    let (x, y) = place(el, layout, w, h);
+    let widget = button.into_widget_sized(w, h)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
 }
 
@@ -3428,6 +3664,349 @@ fn build_radio(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
 /// `Switch(value:, label:, …)` — boolean toggle (pill). Full style: track
 /// colors (`offColor`/`onColor`/`color` + `knobColor`), `borderColor`/
 /// `borderWidth`, `animMs`, `cursor`, `width`/`height`, and an optional caption.
+/// Wire `selected:` / `onChange: { |i| sel = i }` for chrome index widgets.
+fn wire_index_selection(
+    ctx: &Ctx,
+    el: &Element,
+    on_change_prop: &str,
+    mut apply: impl FnMut(i32) + 'static,
+) -> Box<dyn FnMut(i32)> {
+    let mut user = handler_apply_closure(ctx, el, on_change_prop);
+    let two_way = find_prop(el, on_change_prop)
+        .and_then(|p| match &p.value {
+            PropValue::Handler(h) => parse_str_actions(h)
+                .into_iter()
+                .find_map(|a| match a {
+                    StrAction::TwoWay { name } => Some(name),
+                    _ => None,
+                }),
+            _ => None,
+        })
+        .and_then(|name| ctx.signal(&name).cloned());
+    let selected_name = find_prop(el, "selected")
+        .and_then(|p| match &p.value {
+            PropValue::Expr(e) => match &e.kind {
+                ExprKind::Ident(n) => Some(n.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .and_then(|n| ctx.signal(&n).cloned());
+    Box::new(move |idx| {
+        if let Some(sig) = &two_way {
+            if let Ok(mut g) = sig.try_borrow_mut() {
+                let _ = g.set(idx);
+            }
+        } else if let Some(sig) = &selected_name {
+            if let Ok(mut g) = sig.try_borrow_mut() {
+                let _ = g.set(idx);
+            }
+        }
+        apply(idx);
+        if let Some(f) = user.as_mut() {
+            f();
+        }
+    })
+}
+
+fn chrome_child_title(ctx: &Ctx, child: &Element) -> String {
+    child
+        .positional
+        .as_ref()
+        .map(|e| render_text_expr(e, ctx))
+        .filter(|s| !s.is_empty())
+        .or_else(|| prop_string_value(ctx, child, "title"))
+        .or_else(|| prop_string_value(ctx, child, "label"))
+        .unwrap_or_default()
+}
+
+/// `SegmentedControl(selected:, onChange:) { Segment("A", symbol: "★") … }`
+fn build_segmented(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
+    let mut sc = SegmentedControl::new()?;
+    let selected = dim_prop(ctx, el, "selected").unwrap_or(0.0) as i32;
+
+    for node in &el.children {
+        let Node::Element(child) = node else {
+            continue;
+        };
+        if !matches!(child.name.as_str(), "Segment" | "SegmentItem" | "Item") {
+            continue;
+        }
+        let title = chrome_child_title(ctx, child);
+        let icon = prop_string_value(ctx, child, "icon").or_else(|| prop_string_value(ctx, child, "src"));
+        let symbol = prop_string_value(ctx, child, "symbol").or_else(|| prop_string_value(ctx, child, "glyph"));
+        let _ = sc.add_segment(
+            &title,
+            icon.as_deref(),
+            symbol.as_deref(),
+        )?;
+    }
+
+    if let (Some(track), Some(sel), Some(text), Some(sel_text)) = (
+        style::color_prop(el, "background").or_else(|| style::color_prop(el, "trackColor")),
+        style::color_prop(el, "selectedBackground").or_else(|| style::color_prop(el, "selectedColor")),
+        style::color_prop(el, "textColor"),
+        style::color_prop(el, "selectedTextColor"),
+    ) {
+        sc = sc.colors(to_color(track), to_color(sel), to_color(text), to_color(sel_text));
+    }
+    if let Some(bc) = style::color_prop(el, "borderColor") {
+        sc = sc.border(to_color(bc), style::f32_prop(el, "borderWidth").unwrap_or(1.0));
+    }
+    if let Some(r) = style::f32_prop(el, "radius") {
+        sc = sc.radius(r);
+    }
+    if let Some(ms) = style::f32_prop(el, "animMs") {
+        sc = sc.anim_ms(ms as i32);
+    }
+    if let Some(sz) = style::f32_prop(el, "iconSize") {
+        sc = sc.icon_size(sz);
+    }
+    if let Some(fam) = prop_string_value(ctx, el, "font")
+        .or_else(|| style::font_family(el).map(|s| s.to_string()))
+    {
+        let path = mocida::text::get_font(&fam).unwrap_or(fam);
+        sc = sc.font(&path, style::f32_prop(el, "fontSize").unwrap_or(13.0))?;
+    }
+    if let Some(c) = style::enum_member(el, "cursor") {
+        sc = sc.cursor(cursor_from(&c));
+    }
+
+    sc.set_selected(selected);
+    let mut on_idx = wire_index_selection(ctx, el, "onChange", move |_i| {});
+    sc = sc.on_change(move |i| on_idx(i));
+
+    let sptr = sc.as_ptr();
+    let selected_name = match find_prop(el, "selected").map(|p| &p.value) {
+        Some(PropValue::Expr(e)) => match &e.kind {
+            ExprKind::Ident(n) => Some(n.clone()),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(name) = selected_name {
+        if let Some(sig) = ctx.reactive.signals.get(&name).cloned() {
+            let ptr = sptr;
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |s: &Signal<i32>| {
+                unsafe { mocida::sys::UISegmentedControl_SetSelected(ptr, s.get()) };
+            }) {
+                ctx.reactive._subs.push(sub);
+            }
+        }
+    }
+
+    let w = dim_prop(ctx, el, "width").unwrap_or(ctx.avail_w.max(200.0));
+    let h = dim_prop(ctx, el, "height").unwrap_or(36.0);
+    let _ = layout;
+    Ok(sc.into_widget_sized(w, h)?)
+}
+
+/// `TabBar(selected:, onChange:) { TabItem("Home", symbol: "⌂") … }`
+fn build_tabbar(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
+    let mut tb = TabBar::new()?;
+    let selected = dim_prop(ctx, el, "selected").unwrap_or(0.0) as i32;
+
+    for node in &el.children {
+        let Node::Element(child) = node else {
+            continue;
+        };
+        if !matches!(child.name.as_str(), "TabItem" | "Tab" | "Item") {
+            continue;
+        }
+        let title = chrome_child_title(ctx, child);
+        let icon = prop_string_value(ctx, child, "icon").or_else(|| prop_string_value(ctx, child, "src"));
+        let symbol = prop_string_value(ctx, child, "symbol").or_else(|| prop_string_value(ctx, child, "glyph"));
+        let _ = tb.add_item(&title, icon.as_deref(), symbol.as_deref())?;
+    }
+
+    if let (Some(bar), Some(sel), Some(unsel)) = (
+        style::color_prop(el, "background").or_else(|| style::color_prop(el, "barColor")),
+        style::color_prop(el, "selectedColor").or_else(|| style::color_prop(el, "selectedTint")),
+        style::color_prop(el, "textColor").or_else(|| style::color_prop(el, "unselectedTint")),
+    ) {
+        tb = tb.colors(to_color(bar), to_color(sel), to_color(unsel));
+    }
+    if let Some(bc) = style::color_prop(el, "borderColor") {
+        tb = tb.border(to_color(bc), style::f32_prop(el, "borderWidth").unwrap_or(1.0));
+    }
+    if let Some(r) = style::f32_prop(el, "radius") {
+        tb = tb.radius(r);
+    }
+    if let Some(sz) = style::f32_prop(el, "iconSize") {
+        tb = tb.icon_size(sz);
+    }
+    if let Some(fam) = prop_string_value(ctx, el, "font")
+        .or_else(|| style::font_family(el).map(|s| s.to_string()))
+    {
+        let path = mocida::text::get_font(&fam).unwrap_or(fam);
+        tb = tb.font(&path, style::f32_prop(el, "fontSize").unwrap_or(11.0))?;
+    }
+    if let Some(c) = style::enum_member(el, "cursor") {
+        tb = tb.cursor(cursor_from(&c));
+    }
+
+    tb.set_selected(selected);
+    let mut on_idx = wire_index_selection(ctx, el, "onChange", move |_| {});
+    tb = tb.on_change(move |i| on_idx(i));
+
+    let sptr = tb.as_ptr();
+    let selected_name = match find_prop(el, "selected").map(|p| &p.value) {
+        Some(PropValue::Expr(e)) => match &e.kind {
+            ExprKind::Ident(n) => Some(n.clone()),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(name) = selected_name {
+        if let Some(sig) = ctx.reactive.signals.get(&name).cloned() {
+            let ptr = sptr;
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |s: &Signal<i32>| {
+                unsafe { mocida::sys::UITabBar_SetSelected(ptr, s.get()) };
+            }) {
+                ctx.reactive._subs.push(sub);
+            }
+        }
+    }
+
+    let w = dim_prop(ctx, el, "width").unwrap_or(ctx.avail_w.max(280.0));
+    let h = dim_prop(ctx, el, "height").unwrap_or(56.0);
+    let _ = layout;
+    Ok(tb.into_widget_sized(w, h)?)
+}
+
+/// `NavBar(brand:, logo:, menu:, selected:, onChange:, onBrandClick:, onMenuClick:) { NavItem("Film", value: "home") … }`
+fn build_navbar(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
+    let mut nb = NavBar::new()?;
+    let brand = prop_string_value(ctx, el, "brand")
+        .or_else(|| prop_string_value(ctx, el, "title"))
+        .unwrap_or_else(|| "App".into());
+    let logo = prop_string_value(ctx, el, "logo");
+    nb = nb.brand(&brand, logo.as_deref())?;
+
+    let mut item_values: Vec<Option<String>> = Vec::new();
+    for node in &el.children {
+        let Node::Element(child) = node else {
+            continue;
+        };
+        match child.name.as_str() {
+            "NavItem" | "Item" | "Link" => {
+                let title = chrome_child_title(ctx, child);
+                let value = prop_string_value(ctx, child, "value")
+                    .or_else(|| prop_string_value(ctx, child, "page"))
+                    .or_else(|| prop_string_value(ctx, child, "id"));
+                item_values.push(value.clone());
+                let _ = nb.add_item(&title, value.as_deref())?;
+            }
+            "NavBrand" => {
+                let t = chrome_child_title(ctx, child);
+                let l = prop_string_value(ctx, child, "logo").or_else(|| prop_string_value(ctx, child, "icon"));
+                if !t.is_empty() || l.is_some() {
+                    nb = nb.brand(
+                        if t.is_empty() { &brand } else { &t },
+                        l.as_deref().or(logo.as_deref()),
+                    )?;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let selected = dim_prop(ctx, el, "selected").unwrap_or(0.0) as i32;
+    let menu = eval_bool_prop(ctx, el, "menu")
+        .or_else(|| eval_bool_prop(ctx, el, "menuVisible"))
+        .unwrap_or(false);
+    let menu_open = eval_bool_prop(ctx, el, "menuOpen").unwrap_or(false);
+    nb = nb.menu_visible(menu).menu_open(menu_open);
+    // Reactive menu / menuOpen (string "0"/"1" or bool-ish signals).
+    {
+        let ptr = nb.as_ptr();
+        subscribe_bool_prop(ctx, el, "menu", move |b| unsafe {
+            mocida::sys::UINavBar_SetMenuVisible(ptr, b as i32);
+        });
+        let ptr = nb.as_ptr();
+        subscribe_bool_prop(ctx, el, "menuOpen", move |b| unsafe {
+            mocida::sys::UINavBar_SetMenuOpen(ptr, b as i32);
+        });
+        let ptr = nb.as_ptr();
+        subscribe_bool_prop(ctx, el, "menuVisible", move |b| unsafe {
+            mocida::sys::UINavBar_SetMenuVisible(ptr, b as i32);
+        });
+    }
+
+    if let (Some(bar), Some(title), Some(link), Some(active)) = (
+        style::color_prop(el, "background"),
+        style::color_prop(el, "titleColor").or_else(|| style::color_prop(el, "brandColor")),
+        style::color_prop(el, "textColor").or_else(|| style::color_prop(el, "linkColor")),
+        style::color_prop(el, "selectedTextColor").or_else(|| style::color_prop(el, "linkActiveColor")),
+    ) {
+        nb = nb.colors(to_color(bar), to_color(title), to_color(link), to_color(active));
+    }
+    if let Some(bc) = style::color_prop(el, "borderColor") {
+        nb = nb.border(to_color(bc), style::f32_prop(el, "borderWidth").unwrap_or(1.0));
+    }
+    if let Some(fam) = prop_string_value(ctx, el, "font")
+        .or_else(|| style::font_family(el).map(|s| s.to_string()))
+    {
+        let path = mocida::text::get_font(&fam).unwrap_or(fam);
+        nb = nb.font(
+            &path,
+            style::f32_prop(el, "fontSize").unwrap_or(14.0),
+            style::f32_prop(el, "brandSize").unwrap_or(12.0),
+        )?;
+    }
+    if let Some(c) = style::enum_member(el, "cursor") {
+        nb = nb.cursor(cursor_from(&c));
+    }
+
+    nb.set_selected(selected);
+
+    let page_sig = prop_string_value(ctx, el, "page")
+        .and_then(|n| ctx.string_signal(&n).cloned())
+        .or_else(|| ctx.string_signal("page").cloned());
+    let values = item_values;
+    let mut on_idx = wire_index_selection(ctx, el, "onChange", move |i| {
+        if let (Some(sig), Some(Some(v))) = (&page_sig, values.get(i as usize)) {
+            if let Ok(mut g) = sig.try_borrow_mut() {
+                let _ = g.set(v.clone());
+            }
+        }
+    });
+    nb = nb.on_change(move |i| on_idx(i));
+
+    if let Some(mut f) = handler_apply_closure(ctx, el, "onBrandClick")
+        .or_else(|| handler_apply_closure(ctx, el, "onLogoClick"))
+    {
+        nb = nb.on_brand_click(move || f());
+    }
+    if let Some(mut f) = handler_apply_closure(ctx, el, "onMenuClick") {
+        nb = nb.on_menu_click(move || f());
+    }
+
+    let sptr = nb.as_ptr();
+    let selected_name = match find_prop(el, "selected").map(|p| &p.value) {
+        Some(PropValue::Expr(e)) => match &e.kind {
+            ExprKind::Ident(n) => Some(n.clone()),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(name) = selected_name {
+        if let Some(sig) = ctx.reactive.signals.get(&name).cloned() {
+            let ptr = sptr;
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |s: &Signal<i32>| {
+                unsafe { mocida::sys::UINavBar_SetSelected(ptr, s.get()) };
+            }) {
+                ctx.reactive._subs.push(sub);
+            }
+        }
+    }
+
+    let w = dim_prop(ctx, el, "width").unwrap_or(ctx.avail_w.max(320.0));
+    let h = dim_prop(ctx, el, "height").unwrap_or(56.0);
+    let _ = layout;
+    Ok(nb.into_widget_sized(w, h)?)
+}
+
 fn build_switch(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
     let on = eval_bool_prop(ctx, el, "value")
         .or_else(|| eval_bool_prop(ctx, el, "checked"))
@@ -3685,6 +4264,9 @@ fn build_image(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     if prop_bool(el, "antialiasing") == Some(false) {
         img = img.antialiasing(false);
     }
+    if let Some(r) = style::f32_prop(el, "radius") {
+        img = img.radius(r);
+    }
     let w = dim_prop(ctx, el, "width").unwrap_or(120.0);
     let h = dim_prop(ctx, el, "height").unwrap_or(120.0);
     let (x, y) = place(el, layout, w, h);
@@ -3736,6 +4318,128 @@ fn build_video(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     let h = dim_prop(ctx, el, "height").unwrap_or(180.0);
     let (x, y) = place(el, layout, w, h);
     let widget = video.into_widget_sized(w, h)?.position(x, y);
+    Ok(apply_anchor(widget, style::anchor(el)))
+}
+
+/// `Scene3D` / `Scene25D` — native 2.5D scene (mocida `UIScene3D`).
+///
+/// Children (not regular widgets):
+///   `Sprite3D(source, x:, y:, z:, width:, height:, billboard:, castsShadow:)`
+///   `PointLight(x:, y:, z:, radius:, intensity:, color:)`
+///   `ShaderPass(name, vertex:, fragment:, compute:)` — custom GPU pass
+///
+/// Props: `width`/`height`, `shader:` (`hd2d` / `lit_sprite` / `unlit` / custom),
+/// `mode:` (`2d` / `25d` / `3d`), `background:`.
+fn build_scene3d(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
+    let w = dim_prop(ctx, el, "width").unwrap_or(ctx.avail_w.max(320.0));
+    let h = dim_prop(ctx, el, "height").unwrap_or(ctx.avail_h.max(240.0));
+    let mut scene = Scene3D::new(w, h)?;
+
+    let mode = style::enum_member(el, "mode").unwrap_or_default();
+    let mode = match mode.to_ascii_lowercase().as_str() {
+        "2d" | "mode2d" => GfxMode::Mode2D,
+        "3d" | "3daux" | "mode3daux" => GfxMode::Mode3DAux,
+        _ => GfxMode::Mode25D,
+    };
+    scene = scene.mode(mode);
+
+    if let Some(bg) = style::color_prop(el, "background").or_else(|| style::color_prop(el, "color"))
+    {
+        scene = scene.background(to_color(bg));
+    }
+
+    let mut lib = ShaderLibrary::new(None)?;
+    for node in &el.children {
+        let Node::Element(child) = node else {
+            continue;
+        };
+        match child.name.as_str() {
+            "Sprite3D" | "Sprite" => {
+                let source = child
+                    .positional
+                    .as_ref()
+                    .map(|e| render_text_expr(e, ctx))
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| prop_string_value(ctx, child, "source"))
+                    .or_else(|| prop_string_value(ctx, child, "src"))
+                    .unwrap_or_default();
+                if source.is_empty() {
+                    continue;
+                }
+                let x = dim_prop(ctx, child, "x").unwrap_or(0.0);
+                let y = dim_prop(ctx, child, "y").unwrap_or(0.0);
+                let z = dim_prop(ctx, child, "z")
+                    .or_else(|| dim_prop(ctx, child, "depth"))
+                    .unwrap_or(0.0);
+                let sw = dim_prop(ctx, child, "width").unwrap_or(32.0);
+                let sh = dim_prop(ctx, child, "height").unwrap_or(32.0);
+                let idx = scene.add_sprite(&source, x, y, z, sw, sh)?;
+                let billboard = style::enum_member(child, "billboard").unwrap_or_default();
+                let bm = match billboard.to_ascii_lowercase().as_str() {
+                    "none" => BillboardMode::None,
+                    "spherical" => BillboardMode::Spherical,
+                    _ => BillboardMode::YAxis,
+                };
+                scene.sprite_billboard(idx, bm);
+                if prop_bool(child, "castsShadow").unwrap_or(false)
+                    || prop_bool(child, "casts_shadow").unwrap_or(false)
+                {
+                    scene.sprite_casts_shadow(idx, true);
+                }
+            }
+            "PointLight" | "Light" => {
+                let x = dim_prop(ctx, child, "x").unwrap_or(0.0);
+                let y = dim_prop(ctx, child, "y").unwrap_or(0.0);
+                let z = dim_prop(ctx, child, "z").unwrap_or(0.0);
+                let radius = dim_prop(ctx, child, "radius").unwrap_or(220.0);
+                let intensity = dim_prop(ctx, child, "intensity").unwrap_or(1.0);
+                let color = style::color_prop(child, "color")
+                    .map(to_color)
+                    .unwrap_or(Color::WHITE);
+                let _ = scene.add_point_light(x, y, z, radius, intensity, color)?;
+            }
+            "ShaderPass" => {
+                let name = child
+                    .positional
+                    .as_ref()
+                    .map(|e| render_text_expr(e, ctx))
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| prop_string_value(ctx, child, "name"))
+                    .unwrap_or_default();
+                if name.is_empty() {
+                    continue;
+                }
+                let vert = prop_string_value(ctx, child, "vertex")
+                    .or_else(|| prop_string_value(ctx, child, "vert"));
+                let frag = prop_string_value(ctx, child, "fragment")
+                    .or_else(|| prop_string_value(ctx, child, "frag"));
+                let comp = prop_string_value(ctx, child, "compute");
+                let requires_compute = prop_bool(child, "requiresCompute").unwrap_or(false)
+                    || prop_bool(child, "requires_compute").unwrap_or(false)
+                    || comp.is_some();
+                let requires_rt = prop_bool(child, "requiresRt").unwrap_or(false)
+                    || prop_bool(child, "requires_rt").unwrap_or(false);
+                let _ = lib.register_pass(
+                    &name,
+                    vert.as_deref(),
+                    frag.as_deref(),
+                    comp.as_deref(),
+                    ShaderLang::Auto,
+                    requires_compute,
+                    requires_rt,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    let shader = prop_string_value(ctx, el, "shader")
+        .or_else(|| prop_string_value(ctx, el, "useShader"))
+        .unwrap_or_else(|| "hd2d".into());
+    scene = scene.own_shader_library(lib).use_shader(&shader)?;
+
+    let (x, y) = place(el, layout, w, h);
+    let widget = scene.into_widget_sized(w, h)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
 }
 
@@ -4585,6 +5289,201 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
     ))
 }
 
+/// SwiftUI-style gesture surface.
+///
+/// ```text
+/// GestureArea(onTap:, onLongPress:, onSwipe:, onDragChanged:, …) { children }
+/// TapGesture(onTap:) { … }
+/// LongPressGesture(onLongPress:, longPressMs: 500) { … }
+/// DragGesture(onDragChanged:, onDragEnded:) { … }
+/// SwipeGesture(onSwipe:) { … }   // direction: 1 left, 2 right, 3 up, 4 down
+/// ```
+fn build_gesture_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
+    let mut rect = Rectangle::new()?.color(to_color(style::background(el).unwrap_or(Rgba {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    })));
+    if let Some(r) = style::f32_prop(el, "radius") {
+        rect = rect.radius(r);
+    }
+    if let Some(bw) = style::f32_prop(el, "borderWidth") {
+        rect = rect.border_width(bw);
+    }
+    if let Some(bc) = style::color_prop(el, "borderColor") {
+        rect = rect.border_color(to_color(bc));
+    }
+
+    ctx.declare_signals(&el.children);
+    let explicit_w = dim_prop(ctx, el, "width");
+    let explicit_h = dim_prop(ctx, el, "height");
+    let saved_avail = (ctx.avail_w, ctx.avail_h);
+    let saved_orient = ctx.parent_horizontal;
+    ctx.avail_w = explicit_w.unwrap_or(ctx.avail_w).max(0.0);
+    ctx.avail_h = explicit_h.unwrap_or(ctx.avail_h).max(0.0);
+    ctx.parent_horizontal = None;
+    let mut child_layout = Layout::root();
+    let mut content_w: f32 = 0.0;
+    let mut content_h: f32 = 0.0;
+    for node in &el.children {
+        let before_h = child_layout.content_height();
+        if let Some(widget) = build_node(ctx, node, &mut child_layout)? {
+            let (ww, wh) = unsafe {
+                let p = widget.as_ptr();
+                if p.is_null() {
+                    (0.0, 0.0)
+                } else {
+                    (
+                        (*p).width.as_ref().copied().unwrap_or(0.0),
+                        (*p).height.as_ref().copied().unwrap_or(0.0),
+                    )
+                }
+            };
+            let advanced = (child_layout.content_height() - before_h).max(0.0);
+            rect.add_child(widget);
+            content_w = content_w.max(child_layout.content_width()).max(ww);
+            content_h += if advanced > 0.0 { advanced } else { wh };
+        }
+    }
+    ctx.avail_w = saved_avail.0;
+    ctx.avail_h = saved_avail.1;
+    ctx.parent_horizontal = saved_orient;
+
+    let w = explicit_w.unwrap_or(content_w.max(1.0));
+    let h = explicit_h.unwrap_or(content_h.max(1.0));
+
+    let mut area = GestureArea::new()?;
+    if !el.children.is_empty() {
+        area = area.nested_first(true);
+    }
+    if let Some(c) = style::enum_member(el, "cursor") {
+        area = area.cursor(cursor_from(&c));
+    }
+    if eval_bool_prop(ctx, el, "enabled") == Some(false) {
+        area = area.enabled(false);
+    }
+    if let Some(b) = eval_bool_prop(ctx, el, "exclusive") {
+        area = area.exclusive(b);
+    }
+    if let Some(ms) = style::f32_prop(el, "longPressMs").or_else(|| style::f32_prop(el, "minimumDuration"))
+    {
+        area = area.long_press_ms(ms as i32);
+    }
+    if let Some(px) = style::f32_prop(el, "dragMinDistance").or_else(|| style::f32_prop(el, "minimumDistance"))
+    {
+        area = area.drag_min_distance(px);
+    }
+    if let Some(px) = style::f32_prop(el, "tapMaxDistance") {
+        area = area.tap_max_distance(px);
+    }
+    if let Some(px) = style::f32_prop(el, "swipeMinDistance") {
+        area = area.swipe_min_distance(px);
+    }
+    if let Some(v) = style::f32_prop(el, "swipeMinVelocity") {
+        area = area.swipe_min_velocity(v);
+    }
+
+    // Location / direction signals for SpatialTap / Swipe / Drag hosts.
+    let tap_x = prop_string_value(ctx, el, "tapXSignal").and_then(|n| ctx.signal(&n).cloned());
+    let tap_y = prop_string_value(ctx, el, "tapYSignal").and_then(|n| ctx.signal(&n).cloned());
+    let swipe_dir = prop_string_value(ctx, el, "swipeDirSignal")
+        .or_else(|| prop_string_value(ctx, el, "directionSignal"))
+        .and_then(|n| ctx.signal(&n).cloned());
+    let drag_x = prop_string_value(ctx, el, "dragXSignal").and_then(|n| ctx.signal(&n).cloned());
+    let drag_y = prop_string_value(ctx, el, "dragYSignal").and_then(|n| ctx.signal(&n).cloned());
+
+    // One C callback slot per kind — merge signal writes + user handlers.
+    let tap_user = handler_apply_closure(ctx, el, "onTap")
+        .or_else(|| handler_apply_closure(ctx, el, "onClick"));
+    if tap_x.is_some() || tap_y.is_some() || tap_user.is_some() {
+        let (tx, ty) = (tap_x, tap_y);
+        let mut user = tap_user;
+        area = area.on(GestureKind::Tap, move |ev| {
+            if let Some(s) = &tx {
+                let _ = s.borrow_mut().set(ev.x.round() as i32);
+            }
+            if let Some(s) = &ty {
+                let _ = s.borrow_mut().set(ev.y.round() as i32);
+            }
+            if let Some(f) = user.as_mut() {
+                f();
+            }
+        });
+    }
+
+    let swipe_user = handler_apply_closure(ctx, el, "onSwipe");
+    if swipe_dir.is_some() || swipe_user.is_some() {
+        let sig = swipe_dir;
+        let mut user = swipe_user;
+        let mut on_idx = wire_index_selection(ctx, el, "onSwipe", move |_| {});
+        area = area.on(GestureKind::Swipe, move |ev| {
+            let dir = ev.direction as i32;
+            if let Some(s) = &sig {
+                let _ = s.borrow_mut().set(dir);
+            }
+            on_idx(dir);
+            if let Some(f) = user.as_mut() {
+                f();
+            }
+        });
+    }
+
+    let drag_user = handler_apply_closure(ctx, el, "onDragChanged")
+        .or_else(|| handler_apply_closure(ctx, el, "onDrag"));
+    if drag_x.is_some() || drag_y.is_some() || drag_user.is_some() {
+        let (dx, dy) = (drag_x, drag_y);
+        let mut user = drag_user;
+        area = area.on(GestureKind::DragChanged, move |ev| {
+            if let Some(s) = &dx {
+                let _ = s.borrow_mut().set(ev.translation_x.round() as i32);
+            }
+            if let Some(s) = &dy {
+                let _ = s.borrow_mut().set(ev.translation_y.round() as i32);
+            }
+            if let Some(f) = user.as_mut() {
+                f();
+            }
+        });
+    }
+
+    const EVENTS: &[(&str, GestureKind)] = &[
+        ("onDoubleTap", GestureKind::DoubleTap),
+        ("onDoubleClick", GestureKind::DoubleTap),
+        ("onLongPress", GestureKind::LongPress),
+        ("onLongPressProgress", GestureKind::LongPressProgress),
+        ("onDragStart", GestureKind::DragStart),
+        ("onDragEnded", GestureKind::DragEnded),
+        ("onDragEnd", GestureKind::DragEnded),
+        ("onEnter", GestureKind::HoverEnter),
+        ("onHover", GestureKind::HoverEnter),
+        ("onLeave", GestureKind::HoverExit),
+        ("onExit", GestureKind::HoverExit),
+    ];
+    for (prop, kind) in EVENTS {
+        if let Some(mut f) = handler_apply_closure(ctx, el, prop) {
+            area = area.on(*kind, move |_| f());
+        }
+    }
+
+    let area_widget = area
+        .into_widget_sized(w, h)?
+        .margin(0.0, -content_h, 0.0, 0.0);
+    rect.add_child(area_widget);
+
+    let (mut x, mut y) = place(el, layout, w, h);
+    if let Some(px) = dim_prop(ctx, el, "x") {
+        x = px;
+    }
+    if let Some(py) = dim_prop(ctx, el, "y") {
+        y = py;
+    }
+    Ok(apply_anchor(
+        rect.into_widget_sized(w, h)?.position(x, y),
+        style::anchor(el),
+    ))
+}
+
 /// `Grid(columns:, gap:) { children }` — fixed-column grid container.
 fn build_grid(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
     let columns = style::f32_prop(el, "columns")
@@ -4629,13 +5528,16 @@ fn build_scroll(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
     if let Some(ws) = style::f32_prop(el, "wheelSpeed") {
         scroll = scroll.wheel_speed(ws);
     }
-    if prop_bool(el, "dragScroll").unwrap_or(false) {
+    // Web: drag-to-pan ON and scrollbar OFF by default (finger scroll, no chrome).
+    // Opt back in with `scrollbar: true` / `dragScroll: false` in the .mui.
+    if prop_bool(el, "dragScroll").unwrap_or(true) {
         scroll = scroll.drag_scroll(true);
     }
-    // `scrollbar: false` hides the scrollbar; `scrollbarColor` / `trackColor` /
-    // `scrollbarWidth` customize it (shown by default when content overflows).
-    if prop_bool(el, "scrollbar") == Some(false) {
-        scroll = scroll.scrollbar(false);
+    match prop_bool(el, "scrollbar") {
+        Some(false) => scroll = scroll.scrollbar(false),
+        Some(true) => {}
+        None if cfg!(target_arch = "wasm32") => scroll = scroll.scrollbar(false),
+        None => {}
     }
     let bar_thumb = style::color_prop(el, "scrollbarColor");
     let bar_track = style::color_prop(el, "scrollbarTrackColor");
@@ -4666,6 +5568,14 @@ fn build_scroll(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
     let gap = style::f32_prop(el, "gap").unwrap_or(8.0);
     let mut inner = Stack::new(StackOrientation::Vertical)?.spacing(gap);
     ctx.declare_signals(&el.children);
+    // Seed the available box with the Scroll viewport so nested
+    // `align: center` / `width: Window.width - N` columns resolve against the
+    // live view — not an unbounded root layout (which left-pinned mobile pages).
+    let view_w = dim_prop(ctx, el, "width").unwrap_or(ctx.avail_w.max(120.0));
+    let view_h = dim_prop(ctx, el, "height").unwrap_or(ctx.avail_h.max(200.0));
+    let saved_avail = (ctx.avail_w, ctx.avail_h);
+    ctx.avail_w = view_w;
+    ctx.avail_h = view_h;
     let mut child_layout = Layout::root();
     let mut content_w: f32 = 0.0;
     let mut content_h: f32 = 0.0;
@@ -4679,6 +5589,8 @@ fn build_scroll(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
             count += 1;
         }
     }
+    ctx.avail_w = saved_avail.0;
+    ctx.avail_h = saved_avail.1;
     let gaps = gap * (count.saturating_sub(1) as f32);
     let iw = content_w.max(1.0);
     let ih = (content_h + gaps).max(1.0);
@@ -5055,6 +5967,68 @@ fn text_width(el: &Element, label: &str, size: f32) -> f32 {
     mocida::text::measure(label, size, family.as_deref(), FontStyle::from_bits(bits))
         .map(|(w, _)| (w + 1.0).ceil())
         .unwrap_or_else(|| text_extent(label, size).0)
+}
+
+/// Layout-time wrap line count matching mocida's word/char wrap, so a `Text`
+/// with `wrap:` + `width:` reserves enough vertical space for every visual
+/// line (not just explicit `\n`). Under-counting here is what lets one Text
+/// paint into the next.
+fn estimate_wrapped_lines(
+    el: &Element,
+    label: &str,
+    size: f32,
+    max_w: f32,
+    letter_sp: f32,
+    char_wrap: bool,
+) -> f32 {
+    let max_w = max_w.max(1.0);
+    let space_w = text_width(el, " ", size) + letter_sp;
+    let mut total = 0.0_f32;
+    // `lines()` drops a trailing empty line; keep blank explicit lines as 1.
+    let paragraphs: Vec<&str> = if label.is_empty() {
+        vec![""]
+    } else {
+        label.split('\n').collect()
+    };
+    for para in paragraphs {
+        if para.is_empty() {
+            total += 1.0;
+            continue;
+        }
+        if char_wrap || !para.chars().any(|c| c.is_whitespace()) {
+            let nw = text_width(el, para, size)
+                + letter_sp * para.chars().count().saturating_sub(1) as f32;
+            total += (nw / max_w).ceil().max(1.0);
+            continue;
+        }
+        let mut lines = 1.0_f32;
+        let mut x = 0.0_f32;
+        for word in para.split_whitespace() {
+            let ww = text_width(el, word, size)
+                + letter_sp * word.chars().count().saturating_sub(1) as f32;
+            if ww > max_w {
+                // Oversized token: finish current line, then char-wrap the word.
+                if x > 0.0 {
+                    lines += 1.0;
+                    x = 0.0;
+                }
+                let pieces = (ww / max_w).ceil().max(1.0);
+                lines += pieces - 1.0;
+                x = ww - (pieces - 1.0) * max_w;
+                continue;
+            }
+            if x <= 0.0 {
+                x = ww;
+            } else if x + space_w + ww <= max_w {
+                x += space_w + ww;
+            } else {
+                lines += 1.0;
+                x = ww;
+            }
+        }
+        total += lines.max(1.0);
+    }
+    total.max(1.0)
 }
 
 /// Rough text bounds in logical px (mocida re-measures the real glyph run).
@@ -5960,6 +6934,12 @@ fn screen_metric(ns: &str, field: &str) -> Option<i32> {
     Some(match (ns, field) {
         ("Screen", "width") => unsafe { mocida::sys::UIScreen_GetWidth() },
         ("Screen", "height") => unsafe { mocida::sys::UIScreen_GetHeight() },
+        // Bare `height: Screen.safeTop` parses as Enum, not Expr — must resolve here
+        // or the prop is dropped and layout collapses (text through the navbar).
+        ("Screen", "safeTop") => unsafe { mocida::sys::UIScreen_GetSafeArea().top as i32 },
+        ("Screen", "safeBottom") => unsafe { mocida::sys::UIScreen_GetSafeArea().bottom as i32 },
+        ("Screen", "safeLeft") => unsafe { mocida::sys::UIScreen_GetSafeArea().left as i32 },
+        ("Screen", "safeRight") => unsafe { mocida::sys::UIScreen_GetSafeArea().right as i32 },
         ("Window", "width") => unsafe { mocida::sys::UIApp_GetWidthG() },
         ("Window", "height") => unsafe { mocida::sys::UIApp_GetHeightG() },
         _ => return None,
@@ -6436,6 +7416,14 @@ fn dispatch_host_call(field: &str, args: &[Expr]) {
             mocida::sys::UIApp_ToggleMaximizeG()
         },
         "close" | "quit" => unsafe { mocida::sys::UIApp_CloseG() },
+        "openUrl" | "openURL" | "open" => {
+            if let Some(a) = args.first() {
+                let url = literal_display(a).unwrap_or_else(|| render_text_expr_env(a, &Env::default()));
+                if !url.is_empty() {
+                    mocida::app::open_url(&url);
+                }
+            }
+        }
         _ => {}
     }
 }

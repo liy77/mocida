@@ -1,199 +1,183 @@
 <div align="center">
 
-<img src="mocida/assets/banner.svg" alt="Mocida — Modular UI toolkit in C" width="100%"/>
+<img src="mocida/assets/banner.svg" alt="Mocida" width="100%"/>
 
 <p>
-  <a href="mocida/README.md"><img alt="C11" src="https://img.shields.io/badge/C-11-3949ab?style=flat-square"></a>
-  <a href="mocida-rs/README.md"><img alt="Rust" src="https://img.shields.io/badge/Rust-bindings-ce422b?style=flat-square&logo=rust"></a>
-  <a href="https://github.com/libsdl-org/SDL"><img alt="SDL3" src="https://img.shields.io/badge/SDL-3-2c5f9e?style=flat-square"></a>
-  <img alt="Windows / Linux / macOS" src="https://img.shields.io/badge/build-Windows%20%C2%B7%20Linux%20%C2%B7%20macOS-0078d4?style=flat-square">
+  <img alt="C11" src="https://img.shields.io/badge/C-11-3949ab?style=flat-square">
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-bindings-ce422b?style=flat-square&logo=rust">
+  <img alt="SDL3" src="https://img.shields.io/badge/SDL-3-2c5f9e?style=flat-square">
+  <img alt="Platforms" src="https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux%20%C2%B7%20Web-0078d4?style=flat-square">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square">
-  <img alt="status" src="https://img.shields.io/badge/status-active-f59e0b?style=flat-square">
 </p>
 
-<p>
-  <b>A modular UI toolkit in C</b> on
-  <a href="https://github.com/libsdl-org/SDL"><img src="mocida/assets/sdl_logo.png" height="14" alt="SDL" style="vertical-align: middle"></a>
-  — plus idiomatic <b>Rust bindings</b>, in one monorepo with a single,
-  cross-platform <code>python build.py</code>.
-</p>
+<p><b>Mocida</b> — a modular UI and graphics toolkit on SDL3.<br/>
+One C core, idiomatic Rust bindings, and a declarative MUI runtime for apps and 2.5D games.</p>
 
 </div>
 
 ---
 
-## Monorepo at a glance
+## Why Mocida
+
+Mocida is the host surface for desktop apps, MUI views, and Mocidad games. The same widget tree, canvas, shaders, and animation clock run on Windows, macOS, Linux, and WebAssembly — with GPU acceleration when the device allows it, and a software path when it does not.
+
+| Layer | Role |
+| ----- | ---- |
+| **C toolkit** (`mocida/`) | Widgets, layout, render, GPU/shaders, 2.5D scene, animation |
+| **Rust** (`mocida-rs/`) | Safe FFI (`mocida-sys`) + builders (`mocida`) |
+| **MUI** (`mui-runtime`, `mui-dev`) | Declarative `.mui` → live window; hot-reload; signals |
 
 ```
-mocida/                         build.py  ──┐  one command builds
-┌───────────────┐   FFI         ┌───────────▼──────────────┐   the whole graph:
-│  mocida (C)   │ ───────────►  │  mocida-rs (Rust)        │
-│  UIWidget     │  headers +    │  mocida-sys  (raw FFI)   │      c ──► rust
-│  SDL3 render  │  mocida.lib   │  mocida      (idiomatic) │   (rust links the
-└───────────────┘               └──────────────────────────┘    C lib, so c runs first)
+┌─────────────┐     FFI      ┌──────────────────┐
+│  mocida (C) │ ───────────► │ mocida-rs        │
+│  UIWidget   │  headers +   │  mocida-sys      │
+│  UIScene3D  │  libmocida   │  mocida          │
+│  UIAnim     │              │  mui-runtime     │
+└─────────────┘              └──────────────────┘
+        ▲                            ▲
+        └──────── build.py ──────────┘
 ```
 
-| Path         | Contents                                                                                       |
-| ------------ | ---------------------------------------------------------------------------------------------- |
-| [`mocida/`](mocida/README.md)    | The **C toolkit** — a Windows-first UI library on SDL3 (sources, vendored SDL/SDL_image/SDL_ttf, tests, docs). |
-| [`mocida-rs/`](mocida-rs/README.md) | The **Rust bindings** — a Cargo workspace: the `mocida-sys` FFI crate + the safe, idiomatic `mocida` wrapper. |
-| `build.py` · `setup.py`          | Cross-platform **build orchestrator** (Turbo-style task graph) and dependency **bootstrap**.   |
-| `.github/`                       | CI workflows.                                                                                  |
+---
 
-The Rust side links the C library through environment variables wired
-automatically by `build.py`: `MOCIDA_INCLUDE_DIR` (`mocida/src/headers`),
-`MOCIDA_LIB_DIR` (the build output), plus optional `MOCIDA_LIB_NAME` /
-`MOCIDA_STATIC`.
+## Capabilities
+
+### UI
+
+- Component model on one `UIWidget` envelope: stacks, text, buttons, inputs, dialogs, tabs, scroll/grid, image, video, glass/backdrop, file drop, WebView.
+- Analytic-coverage anti-aliasing, SDF shadows, MSAA / SSAA / FXAA / TAA.
+- Hardware render drivers when available; software + light profile on weak or headless machines.
+
+### Graphics — shaders & 2.5D / 3D
+
+Built for Mocidad-style **2D with native 2.5D** (and 3D-aux props), exposed to C, Rust, and MUI:
+
+| API | Purpose |
+| --- | ------- |
+| `UIGpu` | Soft SDL_GPU device — never hard-fails; reports driver & shader support |
+| `UIShader` | Library with built-ins `unlit`, `lit_sprite`, `hd2d` + custom Metal/HLSL/GLSL/WGSL/SPIR-V passes |
+| `UIScene3D` | Depth-sorted sprites, point lights, camera, meshes; paints via GPU path or CPU lighting fallback |
+
+```c
+UIScene3D* scene = UIScene3D_Create(960, 540);
+UIScene3D_UseShader(scene, "hd2d");
+UIScene3D_AddSprite(scene, "hero.png", 120, 80, 12, 64, 64);
+UIScene3D_AddPointLight(scene, 200, 100, 0, 220, 1.4f, UI_COLOR_ORANGE);
+```
+
+```mui
+Scene3D(width: 960, height: 540, shader: "hd2d") {
+  Sprite3D("hero.png", x: 120, y: 80, z: 12, width: 64, height: 64, billboard: "yAxis", castsShadow: true)
+  PointLight(x: 200, y: 100, radius: 220, intensity: 1.4, color: #ff9900)
+  ShaderPass("water", vertex: "shaders/water.vert", fragment: "shaders/water.frag")
+}
+```
+
+Modes: `Mode2D` · `Mode25D` (HD-2D) · `Mode3DAux`. Custom `ShaderPass` registrations stay selectable even when a device falls back to software — the scene approximates lighting instead of aborting the frame.
+
+### Animation
+
+Tween and timeline system shared by UI and scenes:
+
+- Float tweens (`UIAnim_To` / `FromTo`) with Penner easings, sine/expo/bounce/back
+- Timelines: delayed tracks, stagger, loop, per-timeline pause, callbacks
+- Global pause / time scale (256 concurrent tweens)
+
+```c
+UIAnimTimeline* intro = UIAnimTimeline_Create();
+UIAnimTimeline_AddFromTo(intro, &opacity, 0.f, 1.f, 0, 400, UI_EASE_OUT_CUBIC);
+UIAnimTimeline_Stagger(intro, targets, n, 1.f, 300, 0, 40, UI_EASE_OUT_BACK);
+UIAnimTimeline_Play(intro);
+```
+
+### Debug & quality
+
+Logger (terminal / file / TCP), Chrome-Trace profiler, bounds/FPS/overdraw overlays (F8–F12), crash dumps, optional mimalloc and sanitizers.
 
 ---
 
 ## Quick start
 
 ```sh
-# 1. First time on a fresh machine — installs tools, vcpkg, SDL, mimalloc,
-#    then runs the first build (Windows via winget; Linux/macOS verifies tools).
-python mocida/setup.py
-
-# 2. Build the whole monorepo (C toolkit -> Rust bindings) in one shot:
-python build.py                 # debug
+python mocida/setup.py          # first machine: tools + deps
+python build.py                 # debug: C → Rust
 python build.py --config release
 ```
 
-> The same command works on **Windows, Linux and macOS**. Thin wrappers
-> `build.ps1` / `build.sh` at the repo root forward to `build.py` if you
-> prefer `.\build.ps1` / `./build.sh`.
+| Command | Effect |
+| ------- | ------ |
+| `python build.py` | Full graph, Debug |
+| `python build.py c` / `rust` | C only / Rust only |
+| `python build.py --force` | Clean rebuild |
+| `python build.py --verbose` | Full compiler / cargo log |
+| `python mocida/docs.py --serve` | Doxygen locally |
 
-### Build orchestrator (`build.py`)
-
-A small dependency-graph task runner (`setup → c → rust`). Quiet by
-default — only progress + errors; pass `--verbose` for the full log.
-
-| Command                         | What it does                                            |
-| ------------------------------- | ------------------------------------------------------- |
-| `python build.py`               | Build everything (`c` then `rust`), Debug.              |
-| `python build.py c`             | Build only the C toolkit.                               |
-| `python build.py rust`          | Build only the Rust workspace (against the current C lib). |
-| `python build.py --config release` | Optimised build of both.                             |
-| `python build.py --force`       | Clean rebuild (C wipe + `cargo clean`).                 |
-| `python build.py --verbose`     | Show compiler warnings, cargo log, command echoes.      |
-| `python build.py clean`         | Wipe the C build dir + `cargo clean`.                   |
-| `python mocida/release.py`      | Package the SDK zip + single-file installer (Windows).  |
-| `python mocida/docs.py --serve` | Build the Doxygen docs and serve them locally.          |
+Environment wired by `build.py`: `MOCIDA_INCLUDE_DIR`, `MOCIDA_LIB_DIR`, optional `MOCIDA_LIB_NAME` / `MOCIDA_STATIC`.
 
 ---
 
-## What's inside the C toolkit
-
-<img src="mocida/assets/feature-widgets.svg" alt="Mocida widget gallery" width="100%"/>
-
-- **Widgets that look right** — analytic-coverage anti-aliasing, SDF drop shadows, configurable MSAA (1×/4×/16×/64×), optional SSAA / FXAA / TAA.
-- **A real component model** — buttons, text, images, text fields/areas, tabs, dialogs, popups, dropdowns, sliders, switches, file-drop zones, scroll views, grids, video, and an embedded WebView2 surface — all on one `UIWidget` envelope.
-- **Built-in debug stack** — logger (TCP/file/handler sinks), Chrome-Trace profiler, an opt-in debug overlay (widget bounds + FPS/timing HUD + overdraw heatmap, toggled with F9 / F10 / F8, F12 = all), always-on crash handler, optional ASan/UBSan.
-- **Modern allocator** — optional Microsoft [mimalloc](https://github.com/microsoft/mimalloc) wired in transparently.
-
-See **[`mocida/README.md`](mocida/README.md)** for the full feature tour and C API.
-
----
-
-## Using it from Rust
-
-The `mocida` crate wraps the C `UIWidget` model in safe, chainable
-builders (ownership tracked via a `moved` flag; callbacks routed through
-`extern "C"` trampolines):
+## Rust
 
 ```rust
-use mocida::{Button, FontStyle};
+use mocida::{Button, FontStyle, Scene3D, ShaderLibrary, Ease, Timeline};
 
-let button = Button::new("Click me", 18.0)?
-    .font_style(FontStyle::BOLD | FontStyle::ITALIC)
-    .on_click(|b| { let _ = b.set_text("Clicked!"); })
+let button = Button::new("Play", 18.0)?
+    .on_click(|_| { /* … */ })
     .into_widget()?;
+
+let mut scene = Scene3D::new(960.0, 540.0)?
+    .own_shader_library(ShaderLibrary::new(None)?)
+    .use_shader("hd2d")?;
+scene.add_sprite("hero.png", 120.0, 80.0, 12.0, 64.0, 64.0)?;
 ```
 
-Full programs and the FFI wiring are documented in
-**[`mocida-rs/README.md`](mocida-rs/README.md)** and
-**[`mocida-rs/EXAMPLES.md`](mocida-rs/EXAMPLES.md)**.
+Docs: [`mocida-rs/README.md`](mocida-rs/README.md) · [`mocida-rs/EXAMPLES.md`](mocida-rs/EXAMPLES.md)
 
 ---
 
-## Visual quality & debugging
+## Repository layout
 
-<img src="mocida/assets/feature-quality.svg" alt="Anti-aliasing pipeline" width="100%"/>
-
-Per-pixel analytic coverage for circles and rounded corners — output
-matches hardware 16×/64× MSAA, mathematically exact and consistent across
-every backend (D3D11/D3D12/OpenGL/Vulkan/Metal).
-
-<img src="mocida/assets/feature-debug.svg" alt="Debug subsystem" width="100%"/>
-
-A logger + Chrome-Trace profiler + live overlays + crash handler ship in
-the box. Details in [`mocida/README.md`](mocida/README.md#debug--profiling).
+| Path | Contents |
+| ---- | -------- |
+| [`mocida/`](mocida/README.md) | C toolkit (SDL3, headers under `src/headers/uikit/`) |
+| [`mocida-rs/`](mocida-rs/README.md) | `mocida-sys`, `mocida`, `mui-runtime`, `mui-dev` |
+| `build.py` · `setup.py` | Cross-platform orchestrator and bootstrap |
+| `.github/` | CI |
 
 ---
 
-## Roadmap / TODO
+## Status
 
-Status across the monorepo. Checked = working today.
+**Shipped**
 
-**C toolkit (`mocida/`)**
-- [x] Widget model on SDL3 (stacks, text, inputs, buttons, toggles, sliders, dialogs, tabs, dropdowns, scroll/grid, image/video, WebView2)
-- [x] Analytic-coverage AA, SDF shadows, MSAA / SSAA / FXAA / TAA
-- [x] Debug stack (logger, profiler, overlay, crash handler), mimalloc
-- [x] Flexbox-ish layout: `align` (cross) + `justify` (main) + per-side padding/margins
-- [x] Keyboard dispatch (`UIWidget_OnKeyDown`), recursive mouse/text/control dispatch into containers
-- [x] `window.c` refactored into `window_draw.inc` + `window_render.inc` + per-widget `window_widgets.inc`
-- [ ] Input dispatch recursion into `Scroll` content (covers Stack/Grid today)
-- [ ] First-class Linux/macOS render parity (Windows-first today)
+- [x] Widget model, layout, AA / shadows / post-AA, debug stack
+- [x] Canvas 2D, fonts, assets, video/audio (platform backends)
+- [x] `UIGpu` / `UIShader` / `UIScene3D` foundations + MUI `Scene3D`
+- [x] Tween + timeline animation (`UIAnim` / `UIAnimTimeline`)
+- [x] Rust FFI + builders; MUI reactive views & hot-reload
 
-**Rust bindings (`mocida-rs/`)**
-- [x] `mocida-sys` (bindgen FFI) + idiomatic `mocida` wrapper, ownership + callback trampolines
-- [x] Renderer / MSAA / AA / quality config, min/max window size, reactive `Window`/`Screen`
-- [ ] Wrap remaining C surface as it grows
+**Next**
 
-**MUI runtime + dev host (`mocida-rs/mui-runtime`, `mui-dev`)**
-- [x] Declarative `.mui`/`.crm` → live mocida window; signals, `${}` reactivity, hot-reload
-- [x] Reactive `if`/`for` (condition-tracked rebuild), string/int/bool/list signals
-- [x] `onKeyInput` interpreter (`=` reassign, `+=`/`-=`/`++`, `println!` debug)
-- [x] MouseArea, full widget styling surface, component reuse
-- [ ] Reactive **diff/reconcile** (today: full re-interpret per change → signal state resets on reload)
-- [ ] Richer handler interpreter (locals, loops, more expressions)
-- [ ] M4 Cranelift JIT for handlers/expressions (tree-walk today)
+- [ ] Full GPU shader compile/upload for custom passes (Metal/DXIL/SPIR-V)
+- [ ] Soft/RT shadow maps and GPU particles on the Scene3D path
+- [ ] MUI reactive diff/reconcile; richer handler interpreter
+- [ ] Scroll input recursion into nested content
 
 ---
 
-## Formatting and pre-commit hooks
+## Contributing hygiene
 
-Formatting is enforced on **changed/staged files only** via the
-[pre-commit](https://pre-commit.com/) framework:
-
-- **C** — `clang-format` (config: `.clang-format`), scoped to `mocida/src` only. Vendored SDL trees are excluded.
-- **Rust** — `cargo fmt` (config: `rustfmt.toml`), scoped to the `mocida-rs/` workspace.
-
-One-time setup, from the repository root:
+Pre-commit formats **staged files only**:
 
 ```sh
-pipx install pre-commit        # or: pip install --user pre-commit
-pre-commit install
+pipx install pre-commit && pre-commit install
 ```
 
-- **clang-format** — the `mirrors-clang-format` hook vendors its own binary (pinned to v18.1.8); a system `clang-format` on `PATH` also works.
-- **rustfmt** — `rust-toolchain.toml` pins `stable` + `rustfmt`, so `cargo fmt` works after `rustup component add rustfmt`.
+- **C** — `clang-format` on `mocida/src` (vendored SDL trees excluded)
+- **Rust** — `cargo fmt` on `mocida-rs/` (`rust-toolchain.toml` pins `rustfmt`)
 
-The hooks reformat only the files you stage; they never mass-reformat the tree.
+WSL sync helper: [`sync-from-windows.sh`](sync-from-windows.sh).
 
 ---
 
-## Working across Windows + WSL
-
-Editing on Windows but building on Linux? [`sync-from-windows.sh`](sync-from-windows.sh)
-mirrors the source (only what you edit — vendored deps and build output are
-excluded) into the WSL copy and can chain straight into a build:
-
-```sh
-./sync-from-windows.sh build            # sync + python build.py
-./sync-from-windows.sh build --release  # sync + release build
-```
-
----
-
-<div align="center"><sub>MIT-licensed · C11 + Rust · powered by SDL3</sub></div>
+<div align="center"><sub>MIT · C11 + Rust · SDL3 · UI · shaders · 2.5D · animation</sub></div>

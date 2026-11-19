@@ -107,10 +107,29 @@ UIImage* UIImage_FromMemory(SDL_Renderer* renderer,
 /* ====================================================================== */
 
 int UIImage_IsRemoteSource(const char* source) {
-    if (!source) return 0;
-    return (SDL_strncasecmp(source, "http://", 7) == 0 ||
-            SDL_strncasecmp(source, "https://", 8) == 0) ? 1 : 0;
+    if (!source || !source[0]) return 0;
+    if (SDL_strncasecmp(source, "http://", 7) == 0 ||
+        SDL_strncasecmp(source, "https://", 8) == 0) return 1;
+#if defined(MOCIDA_WEB)
+    /* Same-origin site assets ("logo.png", "media/x.png", "/fonts/a.ttf")
+       fetch on demand so the WASM build never has to --preload-file them. */
+    if (source[0] == '/') return 1;
+    if (!strchr(source, ':')) return 1;
+#endif
+    return 0;
 }
+
+#if defined(MOCIDA_WEB)
+/* Turn a relative MUI path into a same-origin URL for emscripten_fetch. */
+static const char* UIImage_WebFetchUrl(const char* source, char* buf, size_t bufCap) {
+    if (!source || !buf || bufCap < 2) return source;
+    if (SDL_strncasecmp(source, "http://", 7) == 0 ||
+        SDL_strncasecmp(source, "https://", 8) == 0) return source;
+    if (source[0] == '/') return source;
+    snprintf(buf, bufCap, "/%s", source);
+    return buf;
+}
+#endif
 
 void UIImage_SetCache(UIImage* image, int cache) {
     if (image) image->cache = cache ? 1 : 0;
@@ -409,7 +428,9 @@ void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer) {
     if (!job) {
         job = (WebJob*)calloc(1, sizeof(WebJob));
         if (!job) { image->loadState = IMAGE_LOAD_FAILURE; return; }
-        job->cookie = UIImage_RemoteHttpStart_Web(image->source);
+        char urlBuf[1024];
+        const char* url = UIImage_WebFetchUrl(image->source, urlBuf, sizeof(urlBuf));
+        job->cookie = UIImage_RemoteHttpStart_Web(url);
         if (!job->cookie) {
             free(job);
             image->loadState = IMAGE_LOAD_FAILURE;

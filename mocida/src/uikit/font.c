@@ -1,8 +1,10 @@
 #include <uikit/font.h>
 #include <uikit/debug.h>
+#include <uikit/net.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -25,6 +27,10 @@
 typedef struct { char* family; const char* path; } FontLookup;
 static FontLookup* s_lookups = NULL;
 static int s_lookupCount = 0;
+/* Separates "system scan done" from "registry pointer non-NULL" so
+   UIFont_Register can append before/after UISearchFonts without blocking the
+   scan (and without wiping faces already registered via App { fonts: }). */
+static int s_fonts_searched = 0;
 
 static const char* LookupCached(const char* family) {
     for (int i = 0; i < s_lookupCount; i++) {
@@ -143,15 +149,22 @@ static void WalkFontsDir(const char* dirPath, int* count) {
         if (entry->d_name[0] == '.') continue; // skip "." / ".." / hidden
 
         char child[1024];
-        snprintf(child, sizeof(child), "%s/%s", dirPath, entry->d_name);
+        // Avoid "//name" when walking the FS root (Emscripten base path is "/").
+        if (dirPath[0] == '/' && dirPath[1] == '\0') {
+            snprintf(child, sizeof(child), "/%s", entry->d_name);
+        } else {
+            snprintf(child, sizeof(child), "%s/%s", dirPath, entry->d_name);
+        }
 
-        // d_type can be DT_UNKNOWN on some filesystems (e.g. XFS,
-        // overlayfs in containers). Fall back to stat() to learn the
-        // real type rather than skipping a valid entry.
+        // d_type is unreliable on several filesystems (XFS, overlayfs, and
+        // Emscripten's MEMFS often leave it unset or set to a non-portable
+        // value). Trust DT_DIR / DT_REG when present; otherwise always stat().
         int isDir = 0, isReg = 0;
-        if (entry->d_type == DT_DIR)      isDir = 1;
-        else if (entry->d_type == DT_REG) isReg = 1;
-        else if (entry->d_type == DT_UNKNOWN || entry->d_type == DT_LNK) {
+        if (entry->d_type == DT_DIR) {
+            isDir = 1;
+        } else if (entry->d_type == DT_REG) {
+            isReg = 1;
+        } else {
             struct stat st;
             if (stat(child, &st) == 0) {
                 if (S_ISDIR(st.st_mode)) isDir = 1;
@@ -172,11 +185,13 @@ static void WalkFontsDir(const char* dirPath, int* count) {
 
         TTF_Font* font = TTF_OpenFont(child, 12);
         if (!font) {
-            // A single unloadable face in the user's font dir (a broken file, an
-            // unsupported variable-font axis table, etc.) is expected and not
-            // actionable — the family simply won't be available. Log at DEBUG so
-            // it doesn't flood the console at every launch.
+            // On web/iOS the bundled font set is small — surface failures so a
+            // bad preload is obvious. Desktop font dirs stay quiet at DEBUG.
+#if defined(MOCIDA_IOS) || defined(MOCIDA_WEB)
+            UI_WARN(UI_CAT_FONT, "skipping unloadable font '%s': %s", child, SDL_GetError());
+#else
             UI_DEBUG(UI_CAT_FONT, "skipping unloadable font '%s': %s", child, SDL_GetError());
+#endif
             continue;
         }
 
@@ -205,15 +220,17 @@ static void WalkFontsDir(const char* dirPath, int* count) {
 #endif // !_WIN32
 
 void UISearchFonts() {
-    // Idempotent: if the registry is already populated, don't rescan. Rescanning
-    // clears UIFonts to NULL first (below) and repopulates incrementally, which
-    // opens a window where renders see no fonts and text disappears. A host that
-    // genuinely needs to refresh must call UIFonts_Destroy() first (which NULLs
-    // the registry), after which this repopulates normally.
-    if (UIFonts != NULL) return;
+    // Idempotent: a host that needs a refresh calls UIFonts_Destroy() first.
+    // Registered faces (UIFont_Register) are preserved and appended to.
+    if (s_fonts_searched) return;
+    s_fonts_searched = 1;
 
     int fontCount = 0;
-    UIFonts = NULL;
+    if (UIFonts) {
+        while (UIFonts[fontCount]) fontCount++;
+    } else {
+        UIFonts = NULL;
+    }
 
     if (TTF_Init() != 1) {
         UI_ERROR(UI_CAT_FONT, "TTF_Init failed: %s", SDL_GetError());
@@ -312,10 +329,9 @@ void UISearchFonts() {
 
 #elif defined(MOCIDA_IOS) || defined(MOCIDA_WEB)
     // iOS apps are sandboxed and cannot read system fonts; Emscripten web
-    // builds also preload bundled fonts into the virtual FS. In both cases
-    // the only fonts available are the ones bundled inside the app/package
-    // at <base>/fonts. Walk that directory; if nothing is found, fall back
-    // to the base path.
+    // builds also preload / fetch fonts into the virtual FS. Walk every
+    // conventional location so bundled Inter (etc.) and App { fonts: } cache
+    // files are discovered the same way CSS would find a local @font-face.
     {
         const char* base = SDL_GetBasePath();
         if (base) {
@@ -327,6 +343,11 @@ void UISearchFonts() {
             WalkFontsDir(fontsDir, &fontCount);
             if (fontCount == 0) WalkFontsDir(base, &fontCount);
         }
+#if defined(MOCIDA_WEB)
+        // boot.js / cforge listen stage fonts at absolute `/fonts` in MEMFS.
+        WalkFontsDir("/fonts", &fontCount);
+        WalkFontsDir("/mui-font-cache", &fontCount);
+#endif
     }
 
     FontEntry** temp = realloc(UIFonts, sizeof(FontEntry*) * (fontCount + 1));
@@ -400,23 +421,6 @@ const char* UIGetDefaultFontPath(void) {
 #endif
 }
 
-#ifndef MOCIDA_FONT_CORETEXT
-// Look `family` up in the scanned registry (UISearchFonts). NULL if absent.
-static const char* RegistryFamilyPath(const char* family) {
-    // Lazily build the registry: hosts driving mocida directly (mui-runtime)
-    // never call UISearchFonts() themselves.
-    if (UIFonts == NULL) UISearchFonts();
-    if (UIFonts == NULL) return NULL;
-    for (int i = 0; UIFonts[i] != NULL; i++) {
-        FontEntry* e = UIFonts[i];
-        if (e && e->family_name && e->file_path && strcmp(e->family_name, family) == 0) {
-            return e->file_path;
-        }
-    }
-    return NULL;
-}
-#endif
-
 #ifdef MOCIDA_FONT_CORETEXT
 // macOS system families live in hidden (dot-prefixed) CoreText families, so a
 // lookup by their public names fails; map those names to the files directly.
@@ -441,15 +445,223 @@ static const char* AppleSystemFontFile(const char* family) {
 }
 #endif
 
+/* Look `family` up in the scanned / registered registry. Always available —
+   including on macOS, so App { fonts: FontFace(...) } works beside CoreText. */
+static const char* RegistryFamilyPath(const char* family) {
+    UISearchFonts();
+    if (UIFonts == NULL) return NULL;
+    for (int i = 0; UIFonts[i] != NULL; i++) {
+        FontEntry* e = UIFonts[i];
+        if (e && e->family_name && e->file_path &&
+            strcasecmp(e->family_name, family) == 0) {
+            return e->file_path;
+        }
+    }
+    return NULL;
+}
+
 static const char* ResolveFamily(const char* family) {
+    /* Explicit @font-face registrations always win. */
+    const char* reg = RegistryFamilyPath(family);
+    if (reg) return reg;
 #ifdef MOCIDA_FONT_CORETEXT
     const char* sys = AppleSystemFontFile(family);
     if (sys) return sys;
     // Owned by the lookup cache for the rest of the run.
     return CoreTextFamilyPath(family);
 #else
-    return RegistryFamilyPath(family);
+    return NULL;
 #endif
+}
+
+/* Ensure the registry exists (possibly empty) so Register can append without
+   racing UISearchFonts' idempotent early-return. */
+static void EnsureRegistry(void) {
+    if (UIFonts != NULL) return;
+    UIFonts = (FontEntry**)calloc(1, sizeof(FontEntry*));
+}
+
+static void ClearLookupCache(void) {
+    for (int i = 0; i < s_lookupCount; i++) free(s_lookups[i].family);
+    free(s_lookups);
+    s_lookups = NULL;
+    s_lookupCount = 0;
+}
+
+static int IsHttpUrl(const char* s) {
+    return s && (strncmp(s, "http://", 7) == 0 || strncmp(s, "https://", 8) == 0);
+}
+
+static const char* ExtOf(const char* src, const char* fallback) {
+    const char* ext = src ? strrchr(src, '.') : NULL;
+    if (ext && (strcasecmp(ext, ".ttf") == 0 || strcasecmp(ext, ".otf") == 0 ||
+                strcasecmp(ext, ".ttc") == 0))
+        return ext;
+    return fallback ? fallback : ".ttf";
+}
+
+#if defined(MOCIDA_WEB)
+#include <emscripten.h>
+#endif
+
+static int PathIsFile(const char* path) {
+    SDL_PathInfo info;
+    return path && SDL_GetPathInfo(path, &info) && info.type == SDL_PATHTYPE_FILE;
+}
+
+static char* CachePathFor(const char* family, const char* ext) {
+    static unsigned seq = 0;
+    char safe[128];
+    size_t j = 0;
+    for (size_t i = 0; family && family[i] && j + 1 < sizeof(safe); i++) {
+        unsigned char c = (unsigned char)family[i];
+        safe[j++] = (isalnum(c) || c == '-' || c == '_') ? (char)c : '_';
+    }
+    safe[j] = 0;
+    if (!safe[0]) snprintf(safe, sizeof(safe), "face");
+#if defined(MOCIDA_WEB)
+    const char* root = "/mui-font-cache";
+    EM_ASM({ try { FS.mkdirTree(UTF8ToString($0)); } catch (e) {} }, root);
+#else
+    static char pref[512];
+    const char* root = NULL;
+    char* base = SDL_GetPrefPath("Mocidad", "fonts");
+    if (base) {
+        snprintf(pref, sizeof(pref), "%s", base);
+        SDL_free(base);
+        root = pref;
+    } else {
+        root = "/tmp/mui-font-cache";
+    }
+#  ifdef _WIN32
+    CreateDirectoryA(root, NULL);
+#  else
+    mkdir(root, 0755);
+#  endif
+#endif
+    char* out = (char*)malloc(512);
+    if (!out) return NULL;
+    snprintf(out, 512, "%s/%s-%u%s", root, safe, ++seq, ExtOf(ext, ".ttf"));
+    return out;
+}
+
+static int AppendFontEntry(const char* family, const char* path) {
+    if (!family || !family[0] || !path || !path[0]) return 0;
+    EnsureRegistry();
+    /* Count current entries (NULL-terminated). */
+    int n = 0;
+    while (UIFonts[n]) n++;
+    /* Replace an existing entry with the same family (last @font-face wins,
+       matching CSS cascade for same family+weight when weight is omitted). */
+    for (int i = 0; i < n; i++) {
+        if (UIFonts[i] && UIFonts[i]->family_name &&
+            strcasecmp(UIFonts[i]->family_name, family) == 0) {
+            char* fam = strdup(family);
+            char* fp = strdup(path);
+            if (!fam || !fp) { free(fam); free(fp); return 0; }
+            free(UIFonts[i]->family_name);
+            free(UIFonts[i]->file_path);
+            UIFonts[i]->family_name = fam;
+            UIFonts[i]->file_path = fp;
+            ClearLookupCache();
+            UI_INFO(UI_CAT_FONT, "updated font face '%s' → %s", family, path);
+            return 1;
+        }
+    }
+    FontEntry** grown = realloc(UIFonts, sizeof(FontEntry*) * (size_t)(n + 2));
+    if (!grown) return 0;
+    UIFonts = grown;
+    UIFonts[n] = (FontEntry*)malloc(sizeof(FontEntry));
+    if (!UIFonts[n]) return 0;
+    UIFonts[n]->family_name = strdup(family);
+    UIFonts[n]->file_path = strdup(path);
+    UIFonts[n + 1] = NULL;
+    if (!UIFonts[n]->family_name || !UIFonts[n]->file_path) {
+        free(UIFonts[n]->family_name);
+        free(UIFonts[n]->file_path);
+        free(UIFonts[n]);
+        UIFonts[n] = NULL;
+        return 0;
+    }
+    ClearLookupCache();
+    UI_INFO(UI_CAT_FONT, "registered font face '%s' → %s", family, path);
+    return 1;
+}
+
+static int ProbeFamilyName(const char* path, char* out, size_t outCap) {
+    if (!path || !out || outCap == 0) return 0;
+    (void)TTF_Init(); /* idempotent in SDL_ttf 3 */
+    TTF_Font* font = TTF_OpenFont(path, 12);
+    if (!font) return 0;
+    const char* fam = TTF_GetFontFamilyName(font);
+    if (fam && fam[0]) snprintf(out, outCap, "%s", fam);
+    else snprintf(out, outCap, "Unknown");
+    TTF_CloseFont(font);
+    return 1;
+}
+
+int UIFont_RegisterData(const char* family, const void* data, size_t size, const char* ext) {
+    if (!data || size == 0) return 0;
+    char famBuf[256];
+    const char* useFamily = family;
+    char* path = CachePathFor(family && family[0] ? family : "face", ext);
+    if (!path) return 0;
+    FILE* f = fopen(path, "wb");
+    if (!f) {
+        UI_ERROR(UI_CAT_FONT, "UIFont_RegisterData: cannot write '%s'", path);
+        free(path);
+        return 0;
+    }
+    size_t n = fwrite(data, 1, size, f);
+    fclose(f);
+    if (n != size) {
+        remove(path);
+        free(path);
+        return 0;
+    }
+    if (!useFamily || !useFamily[0]) {
+        if (!ProbeFamilyName(path, famBuf, sizeof(famBuf))) {
+            remove(path);
+            free(path);
+            return 0;
+        }
+        useFamily = famBuf;
+    }
+    int ok = AppendFontEntry(useFamily, path);
+    free(path);
+    return ok;
+}
+
+int UIFont_Register(const char* family, const char* src) {
+    if (!src || !src[0]) return 0;
+
+    /* Prefer an already-present local / VFS file (boot preload, staged listen). */
+    if (PathIsFile(src)) {
+        char famBuf[256];
+        const char* useFamily = family;
+        if (!useFamily || !useFamily[0]) {
+            if (!ProbeFamilyName(src, famBuf, sizeof(famBuf))) return 0;
+            useFamily = famBuf;
+        }
+        return AppendFontEntry(useFamily, src);
+    }
+
+    /* Absolute same-origin path or remote URL → fetch into the font cache. */
+    if (IsHttpUrl(src) || src[0] == '/') {
+        void* data = NULL;
+        int size = 0;
+        if (!UINet_Get(src, &data, &size) || !data || size <= 0) {
+            UI_ERROR(UI_CAT_FONT, "UIFont_Register: download failed for '%s': %s",
+                     src, UINet_Error());
+            return 0;
+        }
+        int ok = UIFont_RegisterData(family, data, (size_t)size, ExtOf(src, ".ttf"));
+        SDL_free(data);
+        return ok;
+    }
+
+    UI_ERROR(UI_CAT_FONT, "UIFont_Register: file not found '%s'", src);
+    return 0;
 }
 
 char* UIGetFont(const char* family_name) {
@@ -489,6 +701,8 @@ void UIFont_Destroy(FontEntry* font) {
 }
 
 void UIFonts_Destroy() {
+    ClearLookupCache();
+    s_fonts_searched = 0;
     if (UIFonts == NULL) return;
 
     for (int i = 0; UIFonts[i] != NULL; i++) {

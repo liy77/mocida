@@ -2,6 +2,9 @@
 #include <uikit/rect.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(MOCIDA_WEB)
+#include <uikit/web.h>
+#endif
 
 // =====================================================================
 // UIGrid
@@ -128,6 +131,11 @@ UIScroll* UIScroll_Create(void) {
     s->scrollbarColor = (UIColor){ 150, 155, 168, 0.55f };
     s->scrollbarTrackColor = (UIColor){ 255, 255, 255, 0.04f };
     s->scrollbarWidth = 8.0f;
+#if defined(MOCIDA_WEB)
+    /* Web: finger/mouse drag pans; no scrollbar chrome (wheel still works). */
+    s->allowDragScroll = 1;
+    s->showScrollbar = 0;
+#endif
     return s;
 }
 

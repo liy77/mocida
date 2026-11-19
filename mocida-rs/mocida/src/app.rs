@@ -515,8 +515,7 @@ impl App {
 
     /// Runs the main loop until the window closes. Blocks.
     ///
-    /// On the web this hands the frame to the browser. The desktop loop
-    /// never returns there, so the canvas stays blank.
+    /// On the web this hands the frame to the browser via `requestAnimationFrame`.
     pub fn run(&mut self) {
         unsafe {
             #[cfg(target_os = "emscripten")]
@@ -524,7 +523,14 @@ impl App {
                 extern "C" {
                     fn UIApp_RunWeb(app: *mut sys::UIApp);
                 }
-                UIApp_RunWeb(self.ptr);
+                // `UIApp_RunWeb` unwinds into the JS event loop. With
+                // `-fwasm-exceptions`, that unwind still runs Rust `Drop` —
+                // which would `UIApp_Destroy` the app the rAF loop needs
+                // (black canvas after the first frame). Leak the C app on
+                // purpose; the browser reclaims the heap on navigation.
+                let ptr = self.ptr;
+                self.ptr = std::ptr::null_mut();
+                UIApp_RunWeb(ptr);
             }
             #[cfg(not(target_os = "emscripten"))]
             sys::UIApp_Run(self.ptr);
@@ -625,6 +631,23 @@ pub fn window_is_maximized() -> bool {
 /// title bar's close button.
 pub fn window_close() {
     unsafe { sys::UIApp_CloseG() };
+}
+
+/// Open a URL / URI with the platform-correct handler (browser tab on web,
+/// OS default app on desktop/mobile). Internal schemes (`docs:…`,
+/// `mocidad://…`, `#/…`) are rewritten on web into a hash navigation.
+pub fn open_url(url: &str) {
+    if url.is_empty() {
+        return;
+    }
+    // Declared here (not only via bindgen) so Link / App.openUrl link even
+    // before mocida-sys regenerates bindings against a newer app.h.
+    extern "C" {
+        fn UIApp_OpenURL(url: *const std::os::raw::c_char);
+    }
+    if let Ok(c) = std::ffi::CString::new(url) {
+        unsafe { UIApp_OpenURL(c.as_ptr()) };
+    }
 }
 
 impl Drop for App {

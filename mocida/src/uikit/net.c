@@ -10,18 +10,85 @@
 #include <string.h>
 
 #if defined(MOCIDA_WEB)
-int UINet_Reachable(const char* url) { (void)url; return 0; }
+#include <emscripten.h>
+
+static char g_web_error[256];
+static float g_web_progress = 1.0f;
+static int g_web_done = 0;
+static int g_web_total = 0;
+
+static int UrlAllowedWeb(const char* url) {
+    if (!url || !url[0]) return 0;
+    /* Same-origin relative paths (e.g. /fonts/Inter.ttf) and absolute http(s). */
+    if (url[0] == '/') return 1;
+    if (SDL_strncmp(url, "https://", 8) != 0 && SDL_strncmp(url, "http://", 7) != 0) return 0;
+    if (SDL_strstr(url, "..") || SDL_strstr(url, "\r") || SDL_strstr(url, "\n")) return 0;
+    return 1;
+}
+
+int UINet_Reachable(const char* url) {
+    void* data = NULL;
+    int size = 0;
+    if (!UINet_Get(url, &data, &size)) return 0;
+    SDL_free(data);
+    return 1;
+}
+
 int UINet_Get(const char* url, void** out_data, int* out_size) {
-    (void)url;
     if (out_data) *out_data = NULL;
     if (out_size) *out_size = 0;
+    g_web_error[0] = 0;
+    g_web_progress = 0.0f;
+    g_web_done = 0;
+    g_web_total = 0;
+    if (!UrlAllowedWeb(url)) {
+        SDL_strlcpy(g_web_error, "only http(s) or same-origin paths are accepted", sizeof(g_web_error));
+        return 0;
+    }
+    /* Sync HTTP on the main thread needs ASYNCIFY/JSPI. We deliberately do
+       NOT call emscripten_wget_data here — without those link flags it
+       aborts the whole module ("Please compile with async support").
+       Callers (FontFace, etc.) should stage same-origin files into MEMFS
+       from JS preRun (fetch → FS.writeFile) and open them as local paths. */
+    SDL_snprintf(g_web_error, sizeof(g_web_error),
+                 "sync fetch unavailable for '%s' (stage into FS from JS, or link with ASYNCIFY)",
+                 url);
     return 0;
 }
-int UINet_Download(const char* url, const char* path) { (void)url; (void)path; return 0; }
-float UINet_Progress(void) { return 0.0f; }
-int UINet_BytesDone(void) { return 0; }
-int UINet_BytesTotal(void) { return 0; }
-const char* UINet_Error(void) { return "HTTP is not linked in the web build"; }
+
+int UINet_Download(const char* url, const char* path) {
+    void* data = NULL;
+    int size = 0;
+    if (!UINet_Get(url, &data, &size)) return 0;
+    /* Ensure parent dir exists (best-effort). */
+    char dir[1024];
+    SDL_strlcpy(dir, path ? path : "", sizeof(dir));
+    char* slash = strrchr(dir, '/');
+    if (slash) {
+        *slash = 0;
+        if (dir[0]) EM_ASM({ try { FS.mkdirTree(UTF8ToString($0)); } catch (e) {} }, dir);
+    }
+    FILE* f = fopen(path, "wb");
+    if (!f) {
+        SDL_free(data);
+        SDL_strlcpy(g_web_error, "could not write download path", sizeof(g_web_error));
+        return 0;
+    }
+    size_t n = fwrite(data, 1, (size_t)size, f);
+    fclose(f);
+    SDL_free(data);
+    if (n != (size_t)size) {
+        remove(path);
+        SDL_strlcpy(g_web_error, "short write", sizeof(g_web_error));
+        return 0;
+    }
+    return 1;
+}
+
+float UINet_Progress(void) { return g_web_progress; }
+int UINet_BytesDone(void) { return g_web_done; }
+int UINet_BytesTotal(void) { return g_web_total; }
+const char* UINet_Error(void) { return g_web_error; }
 #else
 static float g_progress = 1.0f;
 static int g_done = 0;

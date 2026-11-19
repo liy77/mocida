@@ -128,17 +128,22 @@ static void RenderWidget_Stack(UIWindow* window, UIWidget* el,
         }
         // 0 = "use the box": only report a smaller extent when hidden items
         // actually freed room, so fixed-size rows keep their full size.
-        s->__flowExtent = (!s->freeLayout && shrunk)
+        // Always publish the visible main-axis extent. Scroll viewports read
+        // this to keep contentH in sync after images/layout settle — previously
+        // only "shrunk" stacks reported it, so mobile pages with late-loaded
+        // media could stick at a short contentH and refuse to pan.
+        s->__flowExtent = (!s->freeLayout && flowEnd > 0.0f)
             ? flowEnd + ((s->orientation == UI_STACK_HORIZONTAL) ? s->paddingRight : s->paddingBottom)
             : 0.0f;
+        (void)shrunk;
 }
 
 // Glass: a styled container. Where the OS provides a native region backdrop
 // (Acrylic / Liquid Glass / Vibrancy / KDE region) the compositor draws the
 // blur behind the transparent window, and this widget only paints the tint +
-// edge highlight on top. Where there is no native effect, the same tint +
-// highlight stands in as a flat in-app approximation. Either way the layout of
-// the children is identical to a UIStack.
+// edge highlight on top. Where there is no native effect (incl. every browser
+// build), the in-app path simulates each material: mip blur + optional liquid
+// refraction/chroma + vibrancy saturate/state + acrylic grain.
 static void RenderWidget_Glass(UIWindow* window, UIWidget* el,
                                 UIWidgetBase* base, float op) {
 
@@ -160,17 +165,74 @@ static void RenderWidget_Glass(UIWindow* window, UIWidget* el,
             const int   glassOn    = UIGlass_GetGlobalEnabled();
             const float blurScale  = UIGlass_GetGlobalBlurScale();
             const float tintScale  = UIGlass_GetGlobalTintScale();
-            const float effBlur    = glassOn ? (g->blurPx * blurScale) : 0.0f;
-            // Tint scale keeps Subtle frosted (more opaque) and lets Strong show
-            // more of the blurred backdrop instead of a solid wash.
-            float effTintOp = glassOn ? (g->tintOpacity * tintScale) : 1.0f;
+
+            UIBackdropMaterial mat = g->material;
+#if defined(MOCIDA_WEB)
+            // Browser has no OS compositor materials — fold window-wide / auto
+            // into the liquid-glass simulation so Glass always frosts content.
+            if (mat == UI_BACKDROP_AUTO ||
+                mat == UI_BACKDROP_MICA ||
+                mat == UI_BACKDROP_MICA_ALT ||
+                mat == UI_BACKDROP_KDE_BLUR_WINDOW) {
+                mat = UI_BACKDROP_LIQUID_GLASS;
+            }
+#endif
+            const int isLiquid =
+                (mat == UI_BACKDROP_LIQUID_GLASS);
+            const int isVibrancy =
+                (mat == UI_BACKDROP_VIBRANCY_SIDEBAR ||
+                 mat == UI_BACKDROP_VIBRANCY_HEADER  ||
+                 mat == UI_BACKDROP_VIBRANCY_MENU    ||
+                 mat == UI_BACKDROP_VIBRANCY_POPOVER ||
+                 mat == UI_BACKDROP_VIBRANCY_HUD);
+            const int isAcrylic =
+                (mat == UI_BACKDROP_ACRYLIC ||
+                 mat == UI_BACKDROP_ACRYLIC_LEGACY);
+
+            float recipeBlur = g->blurPx;
+            float recipeRefr = g->refraction;
+            float recipeNoise = g->noise;
+            float recipeTintOp = g->tintOpacity;
+            float glowA = 0.16f;
+            float edgeA = 0.08f;
+            float satA = 0.0f; // vibrancy "saturate()" lift
+
+            if (isLiquid) {
+                if (recipeRefr < 0.01f) recipeRefr = 0.42f;
+                glowA = 0.30f;
+                edgeA = 0.20f;
+                satA = 0.04f;
+                if (recipeNoise < 0.001f) recipeNoise = 0.05f;
+            } else if (isVibrancy) {
+                // CSS-like backdrop-filter: blur() saturate(1.4–1.8)
+                satA = (mat == UI_BACKDROP_VIBRANCY_HUD) ? 0.10f : 0.07f;
+                glowA = 0.20f;
+                edgeA = 0.12f;
+                if (recipeNoise < 0.001f)
+                    recipeNoise = (mat == UI_BACKDROP_VIBRANCY_HUD) ? 0.14f : 0.04f;
+                if (g->vibrancyState == UI_VIBRANCY_INACTIVE) {
+                    recipeBlur *= 0.75f;
+                    recipeTintOp *= 0.72f;
+                    satA *= 0.5f;
+                } else if (g->vibrancyState == UI_VIBRANCY_PRESSED) {
+                    recipeTintOp *= 1.12f;
+                    satA *= 1.2f;
+                }
+            } else if (isAcrylic) {
+                glowA = 0.14f;
+                edgeA = 0.10f;
+                if (recipeNoise < 0.001f) recipeNoise = 0.16f;
+            }
+
+            const float effBlur = glassOn ? (recipeBlur * blurScale) : 0.0f;
+            float effTintOp = glassOn ? (recipeTintOp * tintScale) : 1.0f;
             if (effTintOp > 1.0f) effTintOp = 1.0f;
 
-            // Real backdrop blur of the app content behind the panel (the in-app
-            // "vibrancy"). Skipped for window-wide OS materials (Mica/KDE-window)
-            // — there the compositor blurs the desktop behind the whole window.
-            if (effBlur >= 1.0f && !UIBackdropMaterial_IsWindowWide(g->material)) {
-                DrawGlassBackdropBlur(window->sdlRenderer, g_tempRect1, effBlur);
+            // Real backdrop blur (+ liquid refraction when requested). Skipped
+            // for window-wide OS materials on native — compositor owns those.
+            if (effBlur >= 1.0f && !UIBackdropMaterial_IsWindowWide(mat)) {
+                const float refr = (glassOn && isLiquid) ? recipeRefr : 0.0f;
+                DrawGlassBackdropBlur(window->sdlRenderer, g_tempRect1, effBlur, refr);
             }
 
             // thin/regular/thick nudge the painted opacity a little (glass only).
@@ -187,31 +249,45 @@ static void RenderWidget_Glass(UIWindow* window, UIWidget* el,
             }
             if (fillC.a > 1.0f) fillC.a = 1.0f;
 
-            // macOS vibrancy-style top highlight — glass only (solid panels skip
-            // the glow so they read as flat chrome).
+            // Specular top highlight — stronger for liquid glass (fresnel rim).
             if (glassOn && g->radius >= 1.0f) {
                 SDL_FRect topGlow = g_tempRect1;
-                topGlow.h = SDL_max(1.0f, g->radius * 0.6f);
-                if (topGlow.h > g_tempRect1.h * 0.25f) topGlow.h = g_tempRect1.h * 0.25f;
-                UIColor glowC = (UIColor){ 255, 255, 255, 0.16f * op };
+                topGlow.h = SDL_max(1.0f, g->radius * (isLiquid ? 0.85f : 0.6f));
+                if (topGlow.h > g_tempRect1.h * 0.28f) topGlow.h = g_tempRect1.h * 0.28f;
+                UIColor glowC = (UIColor){ 255, 255, 255, glowA * op };
                 DrawRoundedRectFill(window->sdlRenderer, topGlow, glowC, g->radius);
+                if (isLiquid) {
+                    // Thin bottom rim catch-light (liquid-glass demos).
+                    SDL_FRect botGlow = g_tempRect1;
+                    botGlow.h = SDL_max(1.0f, g->radius * 0.35f);
+                    if (botGlow.h > g_tempRect1.h * 0.15f) botGlow.h = g_tempRect1.h * 0.15f;
+                    botGlow.y = g_tempRect1.y + g_tempRect1.h - botGlow.h;
+                    UIColor botC = (UIColor){ 255, 255, 255, 0.08f * op };
+                    DrawRoundedRectFill(window->sdlRenderer, botGlow, botC, g->radius);
+                }
             }
 
             // Tint fill + edge. fillC MUST be painted — a prior change passed a
             // fully transparent fill here, so Glass{} never covered the content
             // behind it (Translucent Popups OFF still looked see-through).
             UIColor edgeC = glassOn
-                ? (UIColor){ 255, 255, 255, 0.08f * op }
+                ? (UIColor){ 255, 255, 255, edgeA * op }
                 : (UIColor){ 255, 255, 255, 0.12f * op };
             DrawRoundedRectWithBorder(window->sdlRenderer, g_tempRect1,
                                       fillC, g->radius, 1, edgeC);
 
-            // Subtle grain for Acrylic / Vibrancy HUD / Liquid Glass — the
-            // macOS vibrancy look has a fine surface texture that keeps the
-            // panel from looking like a flat plastic overlay.
+            // Vibrancy saturate lift — soft white wash so midtones pop through
+            // the frost (CSS `backdrop-filter: … saturate()` stand-in).
+            if (glassOn && satA > 0.001f) {
+                UIColor satC = (UIColor){ 255, 255, 255, satA * op };
+                DrawRoundedRectFill(window->sdlRenderer, g_tempRect1, satC, g->radius);
+            }
+
+            // Subtle grain for Acrylic / Vibrancy / Liquid Glass.
             const int supportsNoise =
-                (UIBackdropMaterial_SupportedProps(g->material) & UI_GLASS_PROP_NOISE) != 0;
-            if (glassOn && supportsNoise && g->noise > 0.001f) {
+                (UIBackdropMaterial_SupportedProps(mat) & UI_GLASS_PROP_NOISE) != 0
+                || isLiquid || isVibrancy || isAcrylic;
+            if (glassOn && supportsNoise && recipeNoise > 0.001f) {
                 int nw = (int)(g_tempRect1.w * 0.5f + 0.5f);
                 int nh = (int)(g_tempRect1.h * 0.5f + 0.5f);
                 if (nw < 4) nw = 4;
@@ -219,7 +295,7 @@ static void RenderWidget_Glass(UIWindow* window, UIWidget* el,
                 SDL_Texture* noise = GetGlassNoiseTexture(window->sdlRenderer, nw, nh);
                 if (noise) {
                     SDL_SetTextureBlendMode(noise, SDL_BLENDMODE_BLEND);
-                    SDL_SetTextureAlphaMod(noise, (Uint8)(g->noise * 40.0f * op));
+                    SDL_SetTextureAlphaMod(noise, (Uint8)(recipeNoise * 40.0f * op));
                     SDL_SetTextureScaleMode(noise, SDL_SCALEMODE_LINEAR);
                     SDL_RenderTexture(window->sdlRenderer, noise, NULL, &g_tempRect1);
                 }
@@ -1456,12 +1532,35 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
                 }
             }
         }
-        if (!img->__SDL_texture) return;
 
         SDL_FRect bounds = { el->x, el->y, *el->width, *el->height };
         ApplyMargins(&bounds, img->marginLeft, img->marginTop,
                               img->marginRight, img->marginBottom);
         if (bounds.w <= 0 || bounds.h <= 0) return;
+
+        /* Async / remote load still in flight — soft plate + spinner. */
+        if (!img->__SDL_texture) {
+            if (img->loadState == IMAGE_LOAD_FAILURE) return;
+            UIColor plate = { 36, 35, 34, 0.55f * op };
+            const float rad = (img->radius > 0.0f) ? img->radius : 8.0f;
+            DrawRoundedRectFill(window->sdlRenderer, bounds, plate, rad);
+            const float cx = bounds.x + bounds.w * 0.5f;
+            const float cy = bounds.y + bounds.h * 0.5f;
+            float ring = SDL_min(bounds.w, bounds.h) * 0.07f;
+            if (ring < 7.0f) ring = 7.0f;
+            if (ring > 16.0f) ring = 16.0f;
+            const float phase = (float)(SDL_GetTicks() * 0.001) * 6.28318530718f;
+            const float dotR = SDL_max(1.6f, ring * 0.18f);
+            for (int i = 0; i < 10; i++) {
+                const float a = phase + i * (6.28318530718f / 10.0f);
+                UIColor dc = { 244, 239, 230, 0.9f * op * ((float)i / 10.0f) };
+                DrawCircle(window->sdlRenderer,
+                           cx + cosf(a) * ring,
+                           cy + sinf(a) * ring,
+                           dotR, dc);
+            }
+            return;
+        }
 
         // Remember the caller's clip (e.g. a parent Scroll viewport): the overflow/
         // tile/rounded paths below set their own clip and must restore THIS one, not
@@ -2944,7 +3043,7 @@ static void RenderWidget_TextArea(UIWindow* window, UIWidget* el,
                 SDL_SetTextureAlphaModFloat(__btex, op);
                 SDL_RenderTexture(window->sdlRenderer, __btex, &__src, &bounds);
                 if (ta->bgImageBlur > 0.0f)
-                    DrawGlassBackdropBlur(window->sdlRenderer, bounds, ta->bgImageBlur);
+                    DrawGlassBackdropBlur(window->sdlRenderer, bounds, ta->bgImageBlur, 0.0f);
                 if (ta->bgImageDim > 0.0f) {
                     SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_BLEND);
                     SDL_SetRenderDrawColor(window->sdlRenderer, 30, 31, 34,
@@ -4159,4 +4258,322 @@ static void RenderWidget_Canvas(UIWindow* window, UIWidget* el,
 
     FlushRenderBatch(window->sdlRenderer);
     SDL_SetRenderClipRect(window->sdlRenderer, __cvHadClip ? &__cvPrevClip : NULL);
+}
+
+static void RenderWidget_Scene3D(UIWindow* window, UIWidget* el,
+                                 UIWidgetBase* base, float op) {
+    UIScene3D* scene = (UIScene3D*)base;
+    if (!el->width || !el->height) return;
+    if (op <= 0.0f) return;
+    UIScene3D_SetSize(scene, *el->width, *el->height);
+
+    FlushRenderBatch(window->sdlRenderer);
+
+    const bool hadClip = SDL_RenderClipEnabled(window->sdlRenderer);
+    SDL_Rect prevClip = {0, 0, 0, 0};
+    if (hadClip) SDL_GetRenderClipRect(window->sdlRenderer, &prevClip);
+    SDL_Rect clip = {
+        (int)el->x, (int)el->y,
+        (int)ceilf(*el->width), (int)ceilf(*el->height)
+    };
+    if (hadClip) {
+        SDL_Rect isect;
+        if (SDL_GetRectIntersection(&clip, &prevClip, &isect)) clip = isect;
+        else clip = (SDL_Rect){ prevClip.x, prevClip.y, 0, 0 };
+    }
+    SDL_SetRenderClipRect(window->sdlRenderer, &clip);
+
+    UIScene3D_Render(scene, window->sdlRenderer, el->x, el->y, op);
+
+    FlushRenderBatch(window->sdlRenderer);
+    SDL_SetRenderClipRect(window->sdlRenderer, hadClip ? &prevClip : NULL);
+}
+
+/* ---- Chrome: SegmentedControl / TabBar / NavBar -------------------- */
+
+/* fontFamily may be a family name ("Inter") or a resolved path. GetFont only
+ * opens file paths, so always resolve through UIGetFont first (NULL → default). */
+static TTF_Font* ChromeGetFont(const char* familyOrPath, float size) {
+    if (size <= 0.0f) return NULL;
+    char* path = UIGetFont(familyOrPath);
+    return path ? GetFont(path, size) : NULL;
+}
+
+static void ChromeEnsureIcon(UIChromeItem* it, SDL_Renderer* r) {
+    if (!it || it->iconTex || !it->icon || !it->icon[0] || !r) return;
+    it->iconTex = UIAsset_LoadTexture(r, it->icon);
+}
+
+static SDL_Texture* ChromeMakeLabel(SDL_Renderer* r, TTF_Font* font,
+                                    const char* text, UIColor color) {
+    if (!r || !font || !text || !text[0]) return NULL;
+    SDL_Color sc = { (Uint8)color.r, (Uint8)color.g, (Uint8)color.b,
+                     (Uint8)SDL_clamp((int)(color.a * 255.0f), 0, 255) };
+    SDL_Surface* surf = TTF_RenderText_Blended(font, text, strlen(text), sc);
+    if (!surf) return NULL;
+    return MakeTextTexture(r, surf);
+}
+
+static void ChromeBlitTex(SDL_Renderer* r, SDL_Texture* tex,
+                          float x, float y, float w, float h, float op) {
+    if (!tex) return;
+    SDL_FRect dst = { x, y, w, h };
+    SDL_SetTextureAlphaMod(tex, (Uint8)SDL_clamp((int)(op * 255.0f), 0, 255));
+    SDL_RenderTexture(r, tex, NULL, &dst);
+    SDL_SetTextureAlphaMod(tex, 255);
+}
+
+static void RenderWidget_Segmented(UIWindow* window, UIWidget* el,
+                                   UIWidgetBase* base, float op) {
+    UISegmentedControl* sc = (UISegmentedControl*)base;
+    if (!el->width || !el->height || sc->itemCount <= 0) return;
+    const float W = *el->width, H = *el->height;
+    SDL_FRect track = { el->x, el->y, W, H };
+    UIColor tb = sc->trackBg; tb.a *= op;
+    UIColor bc = sc->borderColor; bc.a *= op;
+    DrawRoundedRectWithBorder(window->sdlRenderer, track, tb, sc->radius,
+                              (int)sc->borderWidth, bc);
+
+    float target = (float)sc->selected;
+    if (sc->animMs > 0) {
+        float k = 1.0f - powf(0.3f, 1.0f / (float)sc->animMs);
+        sc->_phase += (target - sc->_phase) * k * 16.0f;
+        if (fabsf(target - sc->_phase) < 0.001f) sc->_phase = target;
+    } else {
+        sc->_phase = target;
+    }
+
+    float segW = W / (float)sc->itemCount;
+    float pad = sc->padding;
+    SDL_FRect pill = {
+        el->x + sc->_phase * segW + pad,
+        el->y + pad,
+        segW - pad * 2.0f,
+        H - pad * 2.0f
+    };
+    UIColor pb = sc->selectedBg; pb.a *= op;
+    float pillR = sc->radius > pad ? sc->radius - pad : sc->radius;
+    DrawRoundedRectFill(window->sdlRenderer, pill, pb, pillR);
+
+    TTF_Font* font = ChromeGetFont(sc->fontFamily, sc->fontSize * g_textSS);
+    if (font) TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
+
+    for (int i = 0; i < sc->itemCount; i++) {
+        UIChromeItem* it = &sc->items[i];
+        int active = (i == sc->selected);
+        UIColor tc = active ? sc->selectedTextColor : sc->textColor;
+        ChromeEnsureIcon(it, window->sdlRenderer);
+
+        if (font && it->title && it->title[0]) {
+            if (!it->titleTex || it->selectedCached != active ||
+                it->titleLenCached != (int)strlen(it->title)) {
+                if (it->titleTex) SDL_DestroyTexture(it->titleTex);
+                it->titleTex = ChromeMakeLabel(window->sdlRenderer, font, it->title, tc);
+                it->selectedCached = active;
+                it->titleLenCached = (int)strlen(it->title);
+            }
+        }
+        if (font && it->symbol && it->symbol[0]) {
+            if (!it->symbolTex || it->symbolLenCached != (int)strlen(it->symbol)) {
+                if (it->symbolTex) SDL_DestroyTexture(it->symbolTex);
+                it->symbolTex = ChromeMakeLabel(window->sdlRenderer, font, it->symbol, tc);
+                it->symbolLenCached = (int)strlen(it->symbol);
+            }
+        }
+
+        float tw = 0, th = 0, sw = 0, sh = 0;
+        if (it->titleTex) { SDL_GetTextureSize(it->titleTex, &tw, &th); tw /= g_textSS; th /= g_textSS; }
+        if (it->symbolTex) { SDL_GetTextureSize(it->symbolTex, &sw, &sh); sw /= g_textSS; sh /= g_textSS; }
+        float iw = (it->iconTex) ? sc->iconSize : 0.0f;
+        float total = iw + ((iw > 0 && (sw > 0 || tw > 0)) ? sc->gap : 0.0f)
+                    + sw + ((sw > 0 && tw > 0) ? sc->gap : 0.0f) + tw;
+        float cx = el->x + i * segW + (segW - total) * 0.5f;
+        float cy = el->y + H * 0.5f;
+        if (it->iconTex) {
+            ChromeBlitTex(window->sdlRenderer, it->iconTex,
+                          cx, cy - iw * 0.5f, iw, iw, op);
+            cx += iw + sc->gap;
+        }
+        if (it->symbolTex) {
+            ChromeBlitTex(window->sdlRenderer, it->symbolTex,
+                          cx, cy - sh * 0.5f, sw, sh, op);
+            cx += sw + sc->gap;
+        }
+        if (it->titleTex) {
+            ChromeBlitTex(window->sdlRenderer, it->titleTex,
+                          cx, cy - th * 0.5f, tw, th, op);
+        }
+    }
+}
+
+static void RenderWidget_TabBar(UIWindow* window, UIWidget* el,
+                                UIWidgetBase* base, float op) {
+    UITabBar* tb = (UITabBar*)base;
+    if (!el->width || !el->height || tb->itemCount <= 0) return;
+    const float W = *el->width, H = *el->height;
+    SDL_FRect bar = { el->x, el->y, W, H };
+    UIColor bg = tb->barBg; bg.a *= op;
+    UIColor bc = tb->borderColor; bc.a *= op;
+    DrawRoundedRectWithBorder(window->sdlRenderer, bar, bg, tb->radius,
+                              (int)tb->borderWidth, bc);
+
+    TTF_Font* font = ChromeGetFont(tb->fontFamily, tb->fontSize * g_textSS);
+    if (font) TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
+
+    float segW = W / (float)tb->itemCount;
+    for (int i = 0; i < tb->itemCount; i++) {
+        UIChromeItem* it = &tb->items[i];
+        int active = (i == tb->selected);
+        UIColor tint = active ? tb->selectedTint : tb->unselectedTint;
+        ChromeEnsureIcon(it, window->sdlRenderer);
+
+        if (font && it->title && it->title[0]) {
+            if (!it->titleTex || it->selectedCached != active) {
+                if (it->titleTex) SDL_DestroyTexture(it->titleTex);
+                it->titleTex = ChromeMakeLabel(window->sdlRenderer, font, it->title, tint);
+                it->selectedCached = active;
+                it->titleLenCached = (int)strlen(it->title);
+            }
+        }
+        if (font && it->symbol && it->symbol[0]) {
+            if (!it->symbolTex || it->symbolLenCached != (int)strlen(it->symbol) ||
+                it->selectedCached != active) {
+                if (it->symbolTex) SDL_DestroyTexture(it->symbolTex);
+                it->symbolTex = ChromeMakeLabel(window->sdlRenderer, font, it->symbol, tint);
+                it->symbolLenCached = (int)strlen(it->symbol);
+            }
+        }
+
+        float tw = 0, th = 0, sw = 0, sh = 0;
+        if (it->titleTex) { SDL_GetTextureSize(it->titleTex, &tw, &th); tw /= g_textSS; th /= g_textSS; }
+        if (it->symbolTex) { SDL_GetTextureSize(it->symbolTex, &sw, &sh); sw /= g_textSS; sh /= g_textSS; }
+        float iw = it->iconTex ? tb->iconSize : (sw > 0 ? sw : 0.0f);
+        float stackH = iw + ((iw > 0 && th > 0) ? tb->gap : 0.0f) + th;
+        float top = el->y + (H - stackH) * 0.5f;
+        float cx = el->x + i * segW + segW * 0.5f;
+
+        if (active) {
+            SDL_FRect indicator = { cx - 10.0f, el->y + 4.0f, 20.0f, 3.0f };
+            UIColor ic = tb->selectedTint; ic.a *= op;
+            DrawRoundedRectFill(window->sdlRenderer, indicator, ic, 1.5f);
+        }
+
+        if (it->iconTex) {
+            ChromeBlitTex(window->sdlRenderer, it->iconTex,
+                          cx - iw * 0.5f, top, iw, iw, op);
+            top += iw + tb->gap;
+        } else if (it->symbolTex) {
+            ChromeBlitTex(window->sdlRenderer, it->symbolTex,
+                          cx - sw * 0.5f, top, sw, sh, op);
+            top += sh + tb->gap;
+        }
+        if (it->titleTex) {
+            ChromeBlitTex(window->sdlRenderer, it->titleTex,
+                          cx - tw * 0.5f, top, tw, th, op);
+        }
+    }
+}
+
+static void RenderWidget_NavBar(UIWindow* window, UIWidget* el,
+                                UIWidgetBase* base, float op) {
+    UINavBar* nb = (UINavBar*)base;
+    if (!el->width || !el->height) return;
+    const float W = *el->width, H = *el->height;
+    SDL_FRect bar = { el->x, el->y, W, H };
+    UIColor bg = nb->barBg; bg.a *= op;
+    DrawRoundedRectFill(window->sdlRenderer, bar, bg, 0.0f);
+    if (nb->borderWidth > 0.0f) {
+        UIColor bc = nb->borderColor; bc.a *= op;
+        SDL_FRect line = { el->x, el->y + H - nb->borderWidth, W, nb->borderWidth };
+        DrawRoundedRectFill(window->sdlRenderer, line, bc, 0.0f);
+    }
+
+    float pad = 16.0f;
+    float x = el->x + pad;
+    float cy = el->y + H * 0.5f;
+
+    if (nb->brandLogo && nb->brandLogo[0] && !nb->logoTex) {
+        nb->logoTex = UIAsset_LoadTexture(window->sdlRenderer, nb->brandLogo);
+    }
+    if (nb->logoTex) {
+        ChromeBlitTex(window->sdlRenderer, nb->logoTex,
+                      x, cy - nb->iconSize * 0.5f, nb->iconSize, nb->iconSize, op);
+        x += nb->iconSize + nb->brandGap;
+    }
+
+    TTF_Font* brandFont = ChromeGetFont(nb->fontFamily, nb->brandFontSize * g_textSS);
+    if (brandFont) TTF_SetFontStyle(brandFont, TTF_STYLE_BOLD);
+    if (nb->brandTitle && nb->brandTitle[0]) {
+        int len = (int)strlen(nb->brandTitle);
+        if (brandFont && (!nb->brandTex || nb->brandLenCached != len)) {
+            if (nb->brandTex) SDL_DestroyTexture(nb->brandTex);
+            nb->brandTex = ChromeMakeLabel(window->sdlRenderer, brandFont, nb->brandTitle, nb->titleColor);
+            nb->brandLenCached = len;
+        }
+        if (nb->brandTex) {
+            float tw = 0, th = 0;
+            SDL_GetTextureSize(nb->brandTex, &tw, &th);
+            tw /= g_textSS; th /= g_textSS;
+            ChromeBlitTex(window->sdlRenderer, nb->brandTex, x, cy - th * 0.5f, tw, th, op);
+        } else {
+            /* Fallback so a missing font never hides the brand. */
+            UIColor mark = nb->titleColor; mark.a *= op;
+            SDL_FRect br = { x, cy - 6.0f, 64.0f, 12.0f };
+            DrawRoundedRectFill(window->sdlRenderer, br, mark, 3.0f);
+        }
+    }
+
+    TTF_Font* font = ChromeGetFont(nb->fontFamily, nb->fontSize * g_textSS);
+    if (font) TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
+
+    if (!nb->menuVisible && nb->itemCount > 0) {
+        float linkW = 72.0f;
+        float startX = el->x + (W - linkW * (float)nb->itemCount) * 0.5f;
+        for (int i = 0; i < nb->itemCount; i++) {
+            UIChromeItem* it = &nb->items[i];
+            int active = (i == nb->selected);
+            int hover = (i == nb->hovered);
+            UIColor tc = active ? nb->linkActiveColor : nb->linkColor;
+            if (font && it->title && it->title[0] &&
+                (!it->titleTex || it->selectedCached != active)) {
+                if (it->titleTex) SDL_DestroyTexture(it->titleTex);
+                it->titleTex = ChromeMakeLabel(window->sdlRenderer, font, it->title, tc);
+                it->selectedCached = active;
+            }
+            float lx = startX + i * linkW;
+            if (hover || active) {
+                UIColor hb = nb->linkHoverBg; hb.a *= op * (active ? 1.4f : 1.0f);
+                SDL_FRect hr = { lx + 4.0f, el->y + (H - 36.0f) * 0.5f, linkW - 8.0f, 36.0f };
+                DrawRoundedRectFill(window->sdlRenderer, hr, hb, 10.0f);
+            }
+            if (it->titleTex) {
+                float tw = 0, th = 0;
+                SDL_GetTextureSize(it->titleTex, &tw, &th);
+                tw /= g_textSS; th /= g_textSS;
+                ChromeBlitTex(window->sdlRenderer, it->titleTex,
+                              lx + (linkW - tw) * 0.5f, cy - th * 0.5f, tw, th, op);
+            } else {
+                /* Fallback marker when font/label texture is missing. */
+                UIColor mark = tc; mark.a *= op;
+                SDL_FRect mr = { lx + 12.0f, cy - 5.0f, linkW - 24.0f, 10.0f };
+                DrawRoundedRectFill(window->sdlRenderer, mr, mark, 3.0f);
+            }
+        }
+    }
+
+    if (nb->menuVisible) {
+        float mw = 44.0f;
+        float mx = el->x + W - pad - mw;
+        UIColor mb = nb->menuOpen ? nb->menuBgOpen : nb->menuBg;
+        if (nb->menuHovered) mb.a = SDL_min(1.0f, mb.a + 0.08f);
+        mb.a *= op;
+        SDL_FRect mr = { mx, el->y + (H - mw) * 0.5f, mw, mw };
+        DrawRoundedRectFill(window->sdlRenderer, mr, mb, 10.0f);
+        UIColor line = nb->titleColor; line.a *= op;
+        float lx = mx + 13.0f, ly = el->y + H * 0.5f - 5.0f;
+        for (int i = 0; i < 3; i++) {
+            SDL_FRect dash = { lx, ly + i * 5.0f, 18.0f, 2.0f };
+            DrawRoundedRectFill(window->sdlRenderer, dash, line, 1.0f);
+        }
+    }
 }

@@ -25,6 +25,8 @@
 
 - **Widgets that look right.** Rounded rectangles with analytic-coverage anti-aliasing, SDF-based drop shadows, configurable MSAA (1×/4×/16×/64× SPP), optional SSAA / FXAA / TAA on top.
 - **A real component model.** Buttons, text, images, text fields/areas, tabs, dialogs, popups, dropdowns, sliders, switches, file drop zones, scroll views, grids, video, and an embedded WebView2 surface — all built around the same `UIWidget` envelope.
+- **Shaders & 2.5D.** `UIGpu` (soft SDL_GPU), `UIShader` (`unlit` / `lit_sprite` / `hd2d` + custom passes), `UIScene3D` (depth-sorted sprites, lights, camera, meshes) — same API on GPU or software fallback.
+- **Animation.** Float tweens and timelines (`UIAnim` / `UIAnimTimeline`) with stagger, loop, pause, and time scale — shared by UI and scenes.
 - **Built-in debug stack.** Logger with TCP/file/handler sinks · Chrome-Trace profiler · opt-in debug overlay — widget bounds + FPS/timing HUD + overdraw heatmap, toggled with F9 / F10 / F8 (F12 = all) · always-on crash handler with stack trace + widget-tree dump · optional ASAN/UBSAN.
 - **Modern allocator.** Optional Microsoft [mimalloc](https://github.com/microsoft/mimalloc) plugged in transparently via `mocida_alloc.h`.
 - **Themed C API.** Single header (`<uikit/app.h>`) re-exports the whole surface; consistent `UIType_Verb()` naming throughout.

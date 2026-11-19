@@ -380,6 +380,43 @@ pub fn search_fonts() {
     unsafe { sys::UISearchFonts() };
 }
 
+/// CSS `@font-face`-style registration (mirrors `UIFont_Register`).
+///
+/// `src` is a filesystem / MEMFS path or an `http(s)://` URL. When `family` is
+/// empty, the family name embedded in the font file is used. Returns `true` on
+/// success.
+pub fn register_font(family: &str, src: &str) -> bool {
+    let fam = match std::ffi::CString::new(family) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let path = match std::ffi::CString::new(src) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    unsafe { sys::UIFont_Register(fam.as_ptr(), path.as_ptr()) != 0 }
+}
+
+/// Register a font from already-loaded bytes (mirrors `UIFont_RegisterData`).
+pub fn register_font_data(family: &str, data: &[u8], ext: &str) -> bool {
+    let fam = match std::ffi::CString::new(family) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let e = match std::ffi::CString::new(ext) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    unsafe {
+        sys::UIFont_RegisterData(
+            fam.as_ptr(),
+            data.as_ptr() as *const _,
+            data.len(),
+            e.as_ptr(),
+        ) != 0
+    }
+}
+
 /// Measures one line of `text` in logical points with the renderer's font
 /// cache (`family` is a font path; `None` = the default font). `None` off
 /// the main thread or when the font can't be opened.

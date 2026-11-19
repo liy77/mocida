@@ -1,9 +1,11 @@
 #include <uikit/window.h>
+#include <uikit/web.h>
 #include <uikit/upscale.h>
 #include <uikit/button.h>
 #include <uikit/mouse_area.h>
 #include <uikit/container.h>
 #include <uikit/controls.h>
+#include <uikit/text.h>
 #include <uikit/textfield.h>
 #include <uikit/textarea.h>
 #include <uikit/webview.h>
@@ -12,9 +14,12 @@
 #include <uikit/backdrop.h>
 #include <uikit/dialog.h>
 #include <uikit/tab.h>
+#include <uikit/chrome.h>
 #include <uikit/popup.h>
 #include <uikit/video.h>
 #include <uikit/file_drop.h>
+#include <uikit/scene3d.h>
+#include <uikit/walker.h>
 #include "canvas_internal.h"
 #include "device_simulator_internal.h"
 #include <uikit/asset.h>
@@ -108,18 +113,15 @@ static float g_taaBlend = 0.5f;
 // caller lays out in logical units (it divides the rasterized texture size by
 // g_textSS), never letting SDL upscale a small glyph texture - SDL's scaled
 // blit shaves/crops glyph edge rows. Net effect:
-//   * Coverage mode (frame drawn 1:1): the 2x glyph is LINEAR-downscaled to
-//     the logical box -> supersampled, crisper text (helps synthetic bold).
-//   * SSAA modes (frame drawn at 2x via SetRenderScale): the logical box maps
-//     to 2x physical px, so the 2x glyph lands ~1:1 -> stays crisp instead of
-//     being upscaled and blurred.
-// Kept constant (not tied to the AA mode) so cached text textures never need
-// rebuilding when the AA mode changes at runtime.
-// 2 = glyphs rasterized at 2x and laid out in logical units → supersampled,
-// crisper text (helps synthetic bold). The flicker that was once blamed on this
-// turned out to be the line-number gutter rebuilding a texture every frame (now
-// cached — see GetLineNumTexture); text textures are cached, so 2x rasterizes
-// once and does not churn. Safe to keep on.
+//   * Coverage mode (frame drawn 1:1): the N× glyph is LINEAR-mapped through
+//     logical presentation onto the HiDPI drawable. N must be >= device
+//     density or the present step upscales soft glyphs (classic "blurry web
+//     on a 3× phone" when N stayed at 2).
+//   * SSAA / glass offscreen (SetRenderScale(N)): the logical box maps to N
+//     physical px, so g_textSS == N lands ~1:1 in the offscreen target.
+// Floor stays 2 on 1× displays (supersampled AA for synthetic bold). Synced
+// per frame to draw density via SyncTextSupersample; glyph caches are busted
+// when it changes.
 static int   g_textSS   = 2;
 
 // TAA state. The implementation history is in the GIT log:
@@ -267,7 +269,47 @@ static int DetectWSLg(void) {
 // was removed. VSync is controlled per-renderer via SDL_SetRenderVSync
 // (the SDL_GL_* equivalents only work with the OpenGL backend, so they
 // were a no-op when the user picked D3D12).
+// Prefer whatever acceleration the machine actually has (Metal / D3D /
+// GLES2 / …). The light profile is only for when those tools are missing
+// (software blit) or the host forced `MOCIDA_LIGHT=1` — never strip a
+// working GPU path just because the device "looks" weak.
+static int s_lightProfile = 0;
+
+static int RendererIsSoftware(SDL_Renderer* renderer) {
+    const char* drv = renderer ? SDL_GetRendererName(renderer) : NULL;
+    return drv && SDL_strcasecmp(drv, "software") == 0;
+}
+
+static void ApplyLightRenderProfile(SDL_Renderer* renderer, int force) {
+    const char* env = SDL_getenv("MOCIDA_LIGHT");
+    const int noAccel = RendererIsSoftware(renderer);
+    const int want = force || noAccel || (env && env[0] == '1');
+    if (!want) {
+        s_lightProfile = 0;
+        // Hardware path: keep the quality the GPU can pay for.
+        if (g_textSS < 2) g_textSS = 2;
+        UI_INFO(UI_CAT_RENDER,
+                "accelerated renderer '%s' — using full quality path",
+                renderer && SDL_GetRendererName(renderer)
+                    ? SDL_GetRendererName(renderer)
+                    : "?");
+        return;
+    }
+    s_lightProfile = 1;
+    // Coverage (1) or none (0) — never SSAA/FXAA/TAA (those multiply fill).
+    if (g_aaMode >= 2) g_aaMode = 1;
+    g_textSS = 1;
+    UI_INFO(UI_CAT_RENDER,
+            "light render profile on (%s): AA=%d textSS=1 — fallback without GPU accel",
+            noAccel ? "software" : "forced",
+            g_aaMode);
+}
+
+int UIWindow_IsLightProfile(void) { return s_lightProfile; }
+
 void OptimizeSDLForHighPerformance(SDL_Renderer* renderer) {
+    ApplyLightRenderProfile(renderer, 0);
+
     // 3 = SDL3's "geometry" line method — emits indexed triangles for
     // lines, which integrates with the same batching path as
     // SDL_RenderGeometry. The default ("polyline") issues per-segment
@@ -378,6 +420,66 @@ float UIWindow__DrawDensity(void) {
     return g_drawDensity;
 }
 
+// Web: stretch so the logical canvas always fills the CSS box 1:1 (no
+// letterbox bars from 1-px aspect rounding). Desktop keeps letterbox so
+// fixed-aspect content can sit in a larger window without stretching.
+static SDL_RendererLogicalPresentation UIWindow__PresentationMode(void) {
+#if defined(MOCIDA_WEB)
+    return SDL_LOGICAL_PRESENTATION_STRETCH;
+#else
+    return SDL_LOGICAL_PRESENTATION_LETTERBOX;
+#endif
+}
+
+// Drop cached glyph textures so they re-raster at the new g_textSS.
+static UIWalkResult UIWindow__InvalidateGlyphCaches(UIWidget* w, int depth, void* user) {
+    (void)depth; (void)user;
+    if (!w || !w->data) return UI_WALK_CONTINUE;
+    const char* type = ((UIWidgetBase*)w->data)->__widget_type;
+    if (UIWidget_TypeIs(type, UI_WIDGET_TEXT)) {
+        UIText_DestroyTexture((UIText*)w->data);
+    } else if (UIWidget_TypeIs(type, UI_WIDGET_BUTTON)) {
+        UIButton* btn = (UIButton*)w->data;
+        if (btn->label) UIText_DestroyTexture(btn->label);
+    } else if (UIWidget_TypeIs(type, UI_WIDGET_TEXTFIELD)) {
+        UITextField* tf = (UITextField*)w->data;
+        if (tf->__SDL_textTexture) {
+            SDL_DestroyTexture(tf->__SDL_textTexture);
+            tf->__SDL_textTexture = NULL;
+        }
+        tf->__cachedTextLen = -1;
+    } else if (UIWidget_TypeIs(type, UI_WIDGET_TEXTAREA)) {
+        UITextArea* ta = (UITextArea*)w->data;
+        // Force the virtualized line-cache rebuild path (frees old textures).
+        ta->__cachedTextLen = -1;
+    } else if (UIWidget_TypeIs(type, UI_WIDGET_TABVIEW)) {
+        UITabView* tv = (UITabView*)w->data;
+        tv->__titleSizeCached = -1.0f;
+    } else if (UIWidget_TypeIs(type, UI_WIDGET_TOOLTIP)) {
+        UITooltip* tt = (UITooltip*)w->data;
+        if (tt->__SDL_textTexture) {
+            SDL_DestroyTexture(tt->__SDL_textTexture);
+            tt->__SDL_textTexture = NULL;
+        }
+    }
+    return UI_WALK_CONTINUE;
+}
+
+// Match glyph raster density to the drawable so presentation never upscales
+// soft text. Floor 2 keeps supersampled edges on 1× screens; cap 4 bounds
+// VRAM on 3×/4× phones.
+static void SyncTextSupersample(UIWindow* window, float density) {
+    if (s_lightProfile) return;
+    int want = (int)SDL_ceilf(density - 0.001f);
+    if (want < 2) want = 2;
+    if (want > 4) want = 4;
+    if (want == g_textSS) return;
+    g_textSS = want;
+    if (window && window->children) {
+        UIChildren_WalkTree(window->children, 0, UIWindow__InvalidateGlyphCaches, NULL);
+    }
+}
+
 // Main rendering function - optimized for high performance
 int UIWindow_Render(UIWindow* window) {
     if (!window || !window->sdlRenderer) return -1;
@@ -404,7 +506,7 @@ int UIWindow_Render(UIWindow* window) {
     const float simDensity = sim ? UIWindow_DeviceSimulatorGetDensity(window) : 1.0f;
     if (rw > 0 && rh > 0) {
         SDL_SetRenderLogicalPresentation(window->sdlRenderer, rw, rh,
-                                         SDL_LOGICAL_PRESENTATION_LETTERBOX);
+                                         UIWindow__PresentationMode());
     }
 
     // Initialize TTF once
@@ -448,18 +550,21 @@ int UIWindow_Render(UIWindow* window) {
     // the region instead of reading back the backbuffer. g_glassBlurSeen is re-set
     // during this frame's render if a glass widget blurs again (it stays on while a
     // glass surface is visible).
+    //
+    // Web: only when glass actually painted — forcing offscreen every frame at
+    // phone DPR (3×) freezes scroll/input. First glass frame may skip blur;
+    // the next frame is offscreen and frosts normally.
     const int glassWantsOffscreen = g_glassBlurSeen;
     g_glassBlurSeen = 0;
     const int needsOffscreen = (g_aaMode >= 2) || glassWantsOffscreen;
 
-    // The offscreen target is sized in LOGICAL units (rw×rh). On a HiDPI / Retina
-    // display the real drawable is `density`× larger, so rendering glass offscreen
-    // at logical size and then letting the logical-presentation blit upscale it
-    // throws away half the resolution — the whole frame, and especially the frosted
-    // wallpaper, looks soft / pixelated. When the offscreen is used only for glass
-    // (no explicit SSAA), bump the scale to the device pixel density so it renders
-    // at native resolution. (Real SSAA modes already over-sample, so leave them.)
-    if (needsOffscreen && g_aaMode < 2) {
+    // The offscreen target is sized in LOGICAL units (rw×rh). On a HiDPI /
+    // Retina / phone display the real drawable is `density`× larger. Rendering
+    // offscreen below that density (classic SSAA_2X on a 3× DPR canvas) and
+    // then letting logical presentation upscale throws away sharpness — the
+    // whole frame looks soft. Always bump aaScale up to the live pixel density
+    // so glass and SSAA resolve at least 1:1 with the drawable.
+    if (needsOffscreen) {
         int pw = rw, ph = rh;
         SDL_GetWindowSizeInPixels(window->sdlWindow, &pw, &ph);
         const int density = (rw > 0) ? (pw + rw / 2) / rw : 1;
@@ -481,6 +586,7 @@ int UIWindow_Render(UIWindow* window) {
         SDL_GetWindowSizeInPixels(window->sdlWindow, &pw, &ph);
         g_drawDensity = SDL_clamp((float)pw / (float)rw, 1.0f, 4.0f);
     }
+    SyncTextSupersample(window, g_drawDensity);
 
     if (needsOffscreen) {
         const int tw = rw * aaScale;
@@ -594,7 +700,7 @@ int UIWindow_Render(UIWindow* window) {
         SDL_SetRenderTarget(window->sdlRenderer, NULL);
         SDL_SetRenderScale(window->sdlRenderer, 1.0f, 1.0f);
         SDL_SetRenderLogicalPresentation(window->sdlRenderer, hostW, hostH,
-                                         SDL_LOGICAL_PRESENTATION_LETTERBOX);
+                                         UIWindow__PresentationMode());
         SDL_SetRenderDrawColor(window->sdlRenderer, 30, 30, 30, 255);
         SDL_RenderClear(window->sdlRenderer);
         UIWindow_DeviceSimulatorPresentFrame(window, hostW, hostH);
@@ -731,7 +837,13 @@ void UIWindow_SetActive(UIWindow* window) {
 // insets come out 0; on iOS the top reflects the notch / status bar.
 UIScreenInsets UIScreen_GetSafeArea(void) {
     UIScreenInsets ins = {0, 0, 0, 0};
-    if (!g_activeWindow || !g_activeWindow->sdlWindow) return ins;
+    if (!g_activeWindow || !g_activeWindow->sdlWindow) {
+#if defined(MOCIDA_WEB)
+        /* Before the window exists, still expose CSS env insets. */
+        UIWeb_GetSafeArea(&ins.top, &ins.right, &ins.bottom, &ins.left);
+#endif
+        return ins;
+    }
     if (UIWindow_IsDeviceSimulatorEnabled(g_activeWindow)) {
         UIWindow_DeviceSimulatorGetSafeArea(g_activeWindow, &ins);
     } else {
@@ -744,6 +856,18 @@ UIScreenInsets UIScreen_GetSafeArea(void) {
             ins.left   = r.x;
             ins.right  = ww - (r.x + r.w);
         }
+#if defined(MOCIDA_WEB)
+        /* Emscripten SDL often reports a full-window "safe" rect. Prefer
+         * CSS env(safe-area-inset-*) from the host page (notch / home bar). */
+        {
+            int t = 0, rgt = 0, b = 0, l = 0;
+            UIWeb_GetSafeArea(&t, &rgt, &b, &l);
+            if (t > ins.top) ins.top = t;
+            if (rgt > ins.right) ins.right = rgt;
+            if (b > ins.bottom) ins.bottom = b;
+            if (l > ins.left) ins.left = l;
+        }
+#endif
     }
     if (ins.left   < 0) ins.left   = 0;
     if (ins.top    < 0) ins.top    = 0;
@@ -856,13 +980,18 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
         return NULL;
     }
 
-    // Create window with simpler flags to avoid compatibility issues.
-    // The web canvas is not a desktop window: HiDPI and resize flags make
-    // SDL create a surface the browser never presents.
+    // Prefer WebGL (opengles2). If the browser/GPU refuses it — disabled
+    // WebGL, blocked GPU process, very weak device — fall back to SDL's
+    // software renderer, which presents via Canvas2D putImageData. Comma
+    // lists are tried in order until one creates successfully (SDL 3.2+).
 #if defined(MOCIDA_WEB)
-    uint32_t window_flags = 0;
-    // Software never presents to the browser canvas. GLES2 does.
-    SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengles2");
+    // RESIZABLE + CSS-sized #canvas → SDL's external_size path. HIGH_PIXEL_DENSITY
+    // then sets the backing store to css×devicePixelRatio so text/UI stay sharp
+    // on phones (without it the browser upscales a 1× buffer and everything
+    // looks soft and oversized).
+    uint32_t window_flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    SDL_SetHintWithPriority(SDL_HINT_RENDER_DRIVER, "opengles2,software",
+                            SDL_HINT_DEFAULT);
     SDL_SetHint(SDL_HINT_EMSCRIPTEN_CANVAS_SELECTOR, "#canvas");
 #else
     uint32_t window_flags = SDL_WINDOW_RESIZABLE;
@@ -874,7 +1003,7 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
     // SDL_SetRenderLogicalPresentation(rw, rh) already maps our logical coordinate
     // system onto that larger drawable, so widgets keep their point sizes while
     // rendering crisply. iOS opts out on purpose (see below).
-#if !defined(MOCIDA_IOS)
+#if !defined(MOCIDA_IOS) && !defined(MOCIDA_WEB)
     window_flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
 #endif
 
@@ -1055,9 +1184,15 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
 #if defined(__linux__)
     SDL_SetHintWithPriority(SDL_HINT_RENDER_DRIVER, "vulkan,opengl,software",
                             SDL_HINT_DEFAULT);
+#elif defined(_WIN32)
+    // Explicit software tail so a machine with a broken GPU driver still
+    // opens a window (D3D/GL fail → CPU blit) instead of aborting create.
+    SDL_SetHintWithPriority(SDL_HINT_RENDER_DRIVER,
+                            "direct3d11,direct3d12,opengl,software",
+                            SDL_HINT_DEFAULT);
 #endif
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !defined(MOCIDA_IOS) && !defined(MOCIDA_WEB)
     // macOS render-creation hints. Both MUST be set before SDL_CreateRenderer
     // (they only influence renderer creation), so they live here rather than
     // in OptimizeSDLForHighPerformance which runs afterwards. DEFAULT priority
@@ -1097,8 +1232,32 @@ UIWindow* UIWindow_Create(const char* title, int width, int height) {
                                 SDL_HINT_OVERRIDE);
     }
 
-    // In SDL3, CreateRenderer has different parameters
+    // Prefer the hint chain (NULL). If that fails — broken GPU, WebGL
+    // blocked, driver missing — walk an explicit list so weak / no-GPU
+    // machines still get a window instead of a black abort.
     SDL_Renderer* sdlRenderer = SDL_CreateRenderer(sdlWindow, NULL);
+    if (!sdlRenderer) {
+        static const char* const kFallback[] = {
+#if defined(MOCIDA_WEB)
+            "opengles2", "software",
+#elif defined(_WIN32)
+            "direct3d11", "direct3d12", "opengl", "software",
+#elif defined(__APPLE__)
+            "metal", "opengl", "software",
+#else
+            "vulkan", "opengl", "software",
+#endif
+            NULL
+        };
+        for (int i = 0; kFallback[i] && !sdlRenderer; i++) {
+            SDL_ClearError();
+            sdlRenderer = SDL_CreateRenderer(sdlWindow, kFallback[i]);
+            if (!sdlRenderer) {
+                UI_WARN(UI_CAT_RENDER, "renderer '%s' unavailable: %s",
+                        kFallback[i], SDL_GetError());
+            }
+        }
+    }
     if (!sdlRenderer) {
         UI_ERROR(UI_CAT_RENDER, "SDL_CreateRenderer error: %s", SDL_GetError());
         SDL_DestroyWindow(sdlWindow);

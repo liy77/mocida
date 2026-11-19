@@ -32,7 +32,9 @@ UIBackdropMaterial UIBackdrop_FromString(const char* effect) {
     if (!strcmp(buf, "acrylic"))          return UI_BACKDROP_ACRYLIC;
     if (!strcmp(buf, "acrylic-legacy"))   return UI_BACKDROP_ACRYLIC_LEGACY;
     if (!strcmp(buf, "liquid") ||
-        !strcmp(buf, "liquid-glass"))     return UI_BACKDROP_LIQUID_GLASS;
+        !strcmp(buf, "liquid-glass") ||
+        !strcmp(buf, "glass") ||
+        !strcmp(buf, "web-glass"))        return UI_BACKDROP_LIQUID_GLASS;
     // method:liquid (or method:liquid-glass) — explicit alias for the
     // macOS 26+ / iOS 26+ Liquid Glass material. Resolves to the same family
     // as effect:liquid, kept distinct so .mui authors can write
@@ -40,11 +42,16 @@ UIBackdropMaterial UIBackdrop_FromString(const char* effect) {
     // and still use effect: for the broader material picker.
     if (!strcmp(buf, "method-liquid") ||
         !strcmp(buf, "method-liquid-glass")) return UI_BACKDROP_LIQUID_GLASS;
-    if (!strcmp(buf, "vibrancy-sidebar")) return UI_BACKDROP_VIBRANCY_SIDEBAR;
+    // Bare "vibrancy" / "frost" aliases — useful on web where the in-app
+    // simulation is the only path and authors want a short token.
+    if (!strcmp(buf, "vibrancy") ||
+        !strcmp(buf, "vibrancy-sidebar")) return UI_BACKDROP_VIBRANCY_SIDEBAR;
     if (!strcmp(buf, "vibrancy-header"))  return UI_BACKDROP_VIBRANCY_HEADER;
     if (!strcmp(buf, "vibrancy-menu"))    return UI_BACKDROP_VIBRANCY_MENU;
     if (!strcmp(buf, "vibrancy-popover")) return UI_BACKDROP_VIBRANCY_POPOVER;
     if (!strcmp(buf, "vibrancy-hud"))     return UI_BACKDROP_VIBRANCY_HUD;
+    if (!strcmp(buf, "frost") ||
+        !strcmp(buf, "frosted"))          return UI_BACKDROP_ACRYLIC;
     if (!strcmp(buf, "kde-window"))       return UI_BACKDROP_KDE_BLUR_WINDOW;
     if (!strcmp(buf, "kde-region") ||
         !strcmp(buf, "kde-blur"))         return UI_BACKDROP_KDE_BLUR_REGION;
@@ -60,19 +67,23 @@ uint32_t UIBackdropMaterial_SupportedProps(UIBackdropMaterial m) {
 
         case UI_BACKDROP_ACRYLIC:
         case UI_BACKDROP_ACRYLIC_LEGACY:
-            return UI_GLASS_PROP_TINT | UI_GLASS_PROP_NOISE;
+            return UI_GLASS_PROP_TINT | UI_GLASS_PROP_BLUR | UI_GLASS_PROP_NOISE;
 
         case UI_BACKDROP_LIQUID_GLASS:
-            return UI_GLASS_PROP_TINT | UI_GLASS_PROP_REFRACTION;
+            // In-app / web simulation paints blur + refraction + light grain.
+            return UI_GLASS_PROP_TINT | UI_GLASS_PROP_BLUR
+                 | UI_GLASS_PROP_REFRACTION | UI_GLASS_PROP_NOISE;
 
         case UI_BACKDROP_VIBRANCY_SIDEBAR:
         case UI_BACKDROP_VIBRANCY_HEADER:
         case UI_BACKDROP_VIBRANCY_MENU:
         case UI_BACKDROP_VIBRANCY_POPOVER:
-            return UI_GLASS_PROP_STATE;
+            return UI_GLASS_PROP_STATE | UI_GLASS_PROP_TINT
+                 | UI_GLASS_PROP_BLUR | UI_GLASS_PROP_NOISE;
 
         case UI_BACKDROP_VIBRANCY_HUD:
-            return UI_GLASS_PROP_STATE | UI_GLASS_PROP_NOISE;
+            return UI_GLASS_PROP_STATE | UI_GLASS_PROP_TINT
+                 | UI_GLASS_PROP_BLUR | UI_GLASS_PROP_NOISE;
 
         case UI_BACKDROP_KDE_BLUR_WINDOW:
         case UI_BACKDROP_KDE_BLUR_REGION:
@@ -100,6 +111,16 @@ UIGlass* UIGlass_Create(UIBackdropMaterial material) {
     UIGlass* g = (UIGlass*)calloc(1, sizeof(UIGlass));
     if (!g) return NULL;
     g->__widget_type = UI_WIDGET_GLASS;
+#if defined(MOCIDA_WEB)
+    // No OS window-wide materials in the browser — map them to liquid glass so
+    // Glass{} still frosts in-canvas content via the WebGL simulation.
+    if (material == UI_BACKDROP_AUTO ||
+        material == UI_BACKDROP_MICA ||
+        material == UI_BACKDROP_MICA_ALT ||
+        material == UI_BACKDROP_KDE_BLUR_WINDOW) {
+        material = UI_BACKDROP_LIQUID_GLASS;
+    }
+#endif
     g->material      = material;
     g->radius        = 0.0f;
     g->tint          = (UIColor){ 255, 255, 255, 1.0f };
@@ -111,7 +132,39 @@ UIGlass* UIGlass_Create(UIBackdropMaterial material) {
     g->vibrancyState = UI_VIBRANCY_ACTIVE;
     g->orientation   = 0; // vertical
     g->spacing       = 8.0f;
-    g->items         = UIChildren_Create(16);
+
+    // Material-tuned defaults (setters / MUI props still override). Tuned so
+    // the in-app + web simulation of each type reads differently — liquid has
+    // refraction + lighter tint, acrylic is grainier, vibrancy sits between.
+    switch (material) {
+        case UI_BACKDROP_LIQUID_GLASS:
+            g->blurPx      = 24.0f;
+            g->refraction  = 0.45f;
+            g->tintOpacity = 0.28f;
+            g->noise       = 0.06f;
+            break;
+        case UI_BACKDROP_ACRYLIC:
+        case UI_BACKDROP_ACRYLIC_LEGACY:
+            g->blurPx      = 28.0f;
+            g->tintOpacity = 0.42f;
+            g->noise       = 0.18f;
+            break;
+        case UI_BACKDROP_VIBRANCY_SIDEBAR:
+            g->blurPx = 20.0f; g->tintOpacity = 0.38f; g->noise = 0.04f; break;
+        case UI_BACKDROP_VIBRANCY_HEADER:
+            g->blurPx = 18.0f; g->tintOpacity = 0.34f; g->noise = 0.04f; break;
+        case UI_BACKDROP_VIBRANCY_MENU:
+        case UI_BACKDROP_VIBRANCY_POPOVER:
+            g->blurPx = 22.0f; g->tintOpacity = 0.40f; g->noise = 0.05f; break;
+        case UI_BACKDROP_VIBRANCY_HUD:
+            g->blurPx = 26.0f; g->tintOpacity = 0.48f; g->noise = 0.16f; break;
+        case UI_BACKDROP_KDE_BLUR_REGION:
+            g->blurPx = 20.0f; g->tintOpacity = 0.35f; break;
+        default:
+            break;
+    }
+
+    g->items = UIChildren_Create(16);
     if (!g->items) { free(g); return NULL; }
     return g;
 }

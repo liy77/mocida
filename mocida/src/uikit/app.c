@@ -4,9 +4,11 @@ void UIInput__OnEvent(const SDL_Event* e);
 /* sound.c: marks every open audio stream as freed by SDL_Quit. */
 void UIAudio__Invalidate(void);
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_misc.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 #ifdef _WIN32
 #include <windows.h>  // SetCurrentProcessExplicitAppUserModelID via shell32
@@ -40,6 +42,7 @@ void UIAudio__Invalidate(void);
 #include "device_simulator_internal.h"
 
 #ifdef MOCIDA_WEB
+#include <uikit/web.h>
 #include <SDL3_image/SDL_image.h>
 #include <emscripten/em_js.h>
 
@@ -103,7 +106,7 @@ static int OcclusionAllows(UIWidget* leaf);
 // nested containers. Without the recursion a Scroll nested inside layout
 // containers — the common case (e.g. a file panel deep in a Stack tree) — never
 // receives the wheel, so scrolling silently does nothing.
-static UIScroll* FindScrollAt(UIChildren* children, float x, float y) {
+static UIScroll* FindScrollAtEx(UIChildren* children, float x, float y, UIWidget** outW) {
     if (!children) return NULL;
     for (int i = children->count - 1; i >= 0; i--) {
         UIWidget* w = children->children[i];
@@ -111,7 +114,7 @@ static UIScroll* FindScrollAt(UIChildren* children, float x, float y) {
         // Descend first so a more deeply-nested scroll wins over an outer one.
         UIChildren* kids = WheelContainerChildren(w);
         if (kids) {
-            UIScroll* inner = FindScrollAt(kids, x, y);
+            UIScroll* inner = FindScrollAtEx(kids, x, y, outW);
             if (inner) return inner;
         }
         UIWidgetBase* b = (UIWidgetBase*)w->data;
@@ -120,10 +123,178 @@ static UIScroll* FindScrollAt(UIChildren* children, float x, float y) {
             x >= w->x && x < w->x + *w->width &&
             y >= w->y && y < w->y + *w->height &&
             OcclusionAllows(w)) {     // a scroll hidden behind an overlay is occluded
+            if (outW) *outW = w;
             return (UIScroll*)b;
         }
     }
     return NULL;
+}
+
+static UIScroll* FindScrollAt(UIChildren* children, float x, float y) {
+    return FindScrollAtEx(children, x, y, NULL);
+}
+
+// --- Content drag-to-pan (finger / mouse drag inside a Scroll) -------------
+// allowDragScroll scrolls by dragging the content. Used for touch phones where
+// there is no wheel and the scrollbar is hidden. A small move threshold keeps
+// taps on Buttons working; once the pan starts, button presses are cancelled.
+static UIScroll* g_contentPan = NULL;
+static UIWidget* g_contentPanW = NULL;
+static float g_contentPanX = 0, g_contentPanY = 0;
+static int g_contentPanMoved = 0;
+/* Finger fling: px/s of scroll offset after release (iOS-like coast). */
+static UIScroll* g_inertiaScroll = NULL;
+static UIWidget* g_inertiaW = NULL;
+static float g_inertiaVX = 0.0f, g_inertiaVY = 0.0f;
+static float g_panVelX = 0.0f, g_panVelY = 0.0f;
+static Uint64 g_panSampleMs = 0;
+
+static void ClampScrollOffset(UIScroll* s, UIWidget* w) {
+    if (!s || !w || !w->width || !w->height) return;
+    const float viewW = *w->width, viewH = *w->height;
+    const float maxX = (s->contentW > viewW) ? (s->contentW - viewW) : 0.0f;
+    const float maxY = (s->contentH > viewH) ? (s->contentH - viewH) : 0.0f;
+    if (s->scrollX < 0.0f) s->scrollX = 0.0f;
+    if (s->scrollY < 0.0f) s->scrollY = 0.0f;
+    if (s->scrollX > maxX) s->scrollX = maxX;
+    if (s->scrollY > maxY) s->scrollY = maxY;
+}
+
+static void ContentPanClearInertia(void) {
+    g_inertiaScroll = NULL;
+    g_inertiaW = NULL;
+    g_inertiaVX = 0.0f;
+    g_inertiaVY = 0.0f;
+}
+
+static void ContentPanBegin(UIChildren* children, float x, float y) {
+    UIWidget* w = NULL;
+    UIScroll* s = FindScrollAtEx(children, x, y, &w);
+    ContentPanClearInertia();
+    g_panVelX = g_panVelY = 0.0f;
+    g_panSampleMs = SDL_GetTicks();
+    if (!s || !s->allowDragScroll || !w) {
+        g_contentPan = NULL;
+        g_contentPanW = NULL;
+        g_contentPanMoved = 0;
+        return;
+    }
+    g_contentPan = s;
+    g_contentPanW = w;
+    g_contentPanX = x;
+    g_contentPanY = y;
+    g_contentPanMoved = 0;
+    s->isDragging = 0;
+}
+
+static int ContentPanMove(UIChildren* children, float x, float y) {
+    if (!g_contentPan || !g_contentPanW) return 0;
+    const float dx = x - g_contentPanX;
+    const float dy = y - g_contentPanY;
+    if (!g_contentPanMoved) {
+        if (dx * dx + dy * dy < 25.0f) return 0; /* 5px tap slop */
+        g_contentPanMoved = 1;
+        g_contentPan->isDragging = 1;
+        /* Cancel in-progress button presses so a drag doesn't also click. */
+        if (children) UIButton_DispatchMouseUp(children, -1.0e6f, -1.0e6f);
+    }
+    /* scrollY -= dy → scroll velocity tracks -dy/dt for fling. */
+    {
+        const Uint64 now = SDL_GetTicks();
+        const float dt = (g_panSampleMs > 0) ? (float)(now - g_panSampleMs) / 1000.0f : 0.0f;
+        if (dt > 0.0005f && dt < 0.064f) {
+            const float vx = -dx / dt;
+            const float vy = -dy / dt;
+            /* Bias recent samples so release velocity matches the last flick. */
+            g_panVelX = g_panVelX * 0.35f + vx * 0.65f;
+            g_panVelY = g_panVelY * 0.35f + vy * 0.65f;
+        }
+        g_panSampleMs = now;
+    }
+    if (g_contentPan->allowVertical)   g_contentPan->scrollY -= dy;
+    if (g_contentPan->allowHorizontal) g_contentPan->scrollX -= dx;
+    ClampScrollOffset(g_contentPan, g_contentPanW);
+    g_contentPanX = x;
+    g_contentPanY = y;
+    return 1;
+}
+
+static int ContentPanEnd(void) {
+    const int moved = g_contentPanMoved;
+    if (g_contentPan) g_contentPan->isDragging = 0;
+    if (moved && g_contentPan && g_contentPanW) {
+        /* Keep coasting for a light flick — long iOS-like ease-out. */
+        const float speed2 = g_panVelX * g_panVelX + g_panVelY * g_panVelY;
+        if (speed2 > (40.0f * 40.0f)) {
+            g_inertiaScroll = g_contentPan;
+            g_inertiaW = g_contentPanW;
+            /* Cap so a wild flick doesn't warp across the whole page. */
+            const float cap = 5600.0f;
+            g_inertiaVX = g_panVelX;
+            g_inertiaVY = g_panVelY;
+            if (g_inertiaVX >  cap) g_inertiaVX =  cap;
+            if (g_inertiaVX < -cap) g_inertiaVX = -cap;
+            if (g_inertiaVY >  cap) g_inertiaVY =  cap;
+            if (g_inertiaVY < -cap) g_inertiaVY = -cap;
+        } else {
+            ContentPanClearInertia();
+        }
+    }
+    g_contentPan = NULL;
+    g_contentPanW = NULL;
+    g_contentPanMoved = 0;
+    g_panVelX = g_panVelY = 0.0f;
+    return moved;
+}
+
+static void ContentPanTick(Uint32 dtMs) {
+    if (!g_inertiaScroll || !g_inertiaW || dtMs == 0) return;
+    if (!UIScroll_IsLive(g_inertiaScroll)) {
+        ContentPanClearInertia();
+        return;
+    }
+    /* Clamp huge stalls (tab background) so one frame doesn't jump. */
+    float dt = (float)dtMs / 1000.0f;
+    if (dt > 0.045f) dt = 0.045f;
+    if (g_inertiaScroll->allowVertical)   g_inertiaScroll->scrollY += g_inertiaVY * dt;
+    if (g_inertiaScroll->allowHorizontal) g_inertiaScroll->scrollX += g_inertiaVX * dt;
+    ClampScrollOffset(g_inertiaScroll, g_inertiaW);
+    /* Ultra-soft friction — long ease-out coast (~1.4–2.0s), no hard stop. */
+    const float damp = expf(-1.35f * dt);
+    g_inertiaVX *= damp;
+    g_inertiaVY *= damp;
+    if (g_inertiaVX * g_inertiaVX + g_inertiaVY * g_inertiaVY < (4.0f * 4.0f)) {
+        ContentPanClearInertia();
+    }
+}
+
+/* Wheel / trackpad: tiny immediate nudge + velocity coast (same path as fling).
+ * Avoids stair-step notch jumps; feels continuous on trackpads and mice. */
+static void WheelInjectInertia(UIScroll* s, UIWidget* w, float dxPx, float dyPx) {
+    if (!s || !w) return;
+    if (g_inertiaScroll != s) {
+        ContentPanClearInertia();
+        g_inertiaScroll = s;
+        g_inertiaW = w;
+    }
+    /* Most of the delta becomes velocity; a sliver applies now so the wheel
+     * still feels connected without discrete jumps. */
+    const float immediacy = 0.10f;
+    const float burst = 22.0f;
+    if (s->allowHorizontal) {
+        s->scrollX += dxPx * immediacy;
+        g_inertiaVX += dxPx * (1.0f - immediacy) * burst;
+    }
+    if (s->allowVertical) {
+        s->scrollY += dyPx * immediacy;
+        g_inertiaVY += dyPx * (1.0f - immediacy) * burst;
+    }
+    ClampScrollOffset(s, w);
+    const float cap = 5200.0f;
+    if (g_inertiaVX >  cap) g_inertiaVX =  cap;
+    if (g_inertiaVX < -cap) g_inertiaVX = -cap;
+    if (g_inertiaVY >  cap) g_inertiaVY =  cap;
+    if (g_inertiaVY < -cap) g_inertiaVY = -cap;
 }
 
 // --- Z-order event occlusion ------------------------------------------------
@@ -190,7 +361,9 @@ static int BranchCovers(UIWidget* w, float x, float y) {
     UIWidgetBase* __bc_base = (UIWidgetBase*)w->data;
     const int self_catches =
         !(strcmp(__bc_base->__widget_type, UI_WIDGET_MOUSE_AREA) == 0
-          && !((UIMouseArea*)__bc_base)->enabled);
+          && !((UIMouseArea*)__bc_base)->enabled) &&
+        !(strcmp(__bc_base->__widget_type, UI_WIDGET_GESTURE_AREA) == 0
+          && !((UIGestureArea*)__bc_base)->enabled);
     const int sized = (w->width && w->height);
     if (self_catches && sized &&
         x >= w->x && x < w->x + *w->width &&
@@ -293,20 +466,31 @@ static void DispatchWheelToScrolls(UIChildren* children,
                                    float mouseX, float mouseY,
                                    float dxNotches, float dyNotches,
                                    int shift) {
-    UIScroll* s = FindScrollAt(children, mouseX, mouseY);
+    UIWidget* w = NULL;
+    UIScroll* s = FindScrollAtEx(children, mouseX, mouseY, &w);
     if (!s) return;
     const float speed = s->wheelSpeed > 0.0f ? s->wheelSpeed : 60.0f;
+    float dxPx = 0.0f, dyPx = 0.0f;
     if (shift) {
-        if (s->allowHorizontal) s->scrollX -= dyNotches * speed;
+        if (s->allowHorizontal) dxPx = -dyNotches * speed;
     } else if (s->allowHorizontal && !s->allowVertical) {
         // Horizontal-only viewport (e.g. a VSCode-style tab strip): map the
         // vertical wheel onto horizontal scroll so a normal mouse wheel scrolls
         // it sideways, plus any genuine horizontal wheel delta.
-        s->scrollX -= (dyNotches + dxNotches) * speed;
+        dxPx = -(dyNotches + dxNotches) * speed;
     } else {
-        if (s->allowVertical)   s->scrollY -= dyNotches * speed;
-        if (s->allowHorizontal) s->scrollX -= dxNotches * speed;
+        if (s->allowVertical)   dyPx = -dyNotches * speed;
+        if (s->allowHorizontal) dxPx = -dxNotches * speed;
     }
+    if (dxPx == 0.0f && dyPx == 0.0f) return;
+#if defined(MOCIDA_WEB)
+    /* Web trackpads fire many small wheel events — feed nearly full delta into
+     * inertia so consecutive ticks blend into one continuous coast. */
+    WheelInjectInertia(s, w, dxPx * 0.92f, dyPx * 0.92f);
+#else
+    /* Desktop: same ultra-smooth path (mouse notches + trackpads). */
+    WheelInjectInertia(s, w, dxPx * 0.85f, dyPx * 0.85f);
+#endif
 }
 
 // --- Scrollbar thumb drag --------------------------------------------------
@@ -444,9 +628,17 @@ static void ApplyResize(UIApp* app, int new_width, int new_height) {
         UIWidget_SetSize(app->mainWidget, (float)layoutW, (float)layoutH);
     }
     if (app->window->sdlRenderer) {
+        /* Web: STRETCH keeps logical == CSS box with no letterbox bars from
+         * 1-px aspect rounding. Desktop keeps letterbox for fixed-aspect
+         * content inside a larger window. */
         SDL_SetRenderLogicalPresentation(app->window->sdlRenderer,
                                          new_width, new_height,
-                                         SDL_LOGICAL_PRESENTATION_LETTERBOX);
+#if defined(MOCIDA_WEB)
+                                         SDL_LOGICAL_PRESENTATION_STRETCH
+#else
+                                         SDL_LOGICAL_PRESENTATION_LETTERBOX
+#endif
+                                         );
     }
     // Fire user callback BEFORE relayout so the user can adjust widget
     // sizes that the alignment pass should then position.
@@ -601,6 +793,12 @@ static UICursor PickHoverCursorImpl(UIChildren* children, float x, float y, bool
             if (blocked) *blocked = true;
             return m->cursor;
         }
+        if (!strcmp(type, UI_WIDGET_GESTURE_AREA)) {
+            UIGestureArea* g = (UIGestureArea*)base;
+            if (!g->enabled) continue;
+            if (blocked) *blocked = true;
+            return g->cursor;
+        }
         if (!strcmp(type, UI_WIDGET_CHECKBOX)) {
             if (blocked) *blocked = true;
             return ((UICheckbox*)base)->cursor;
@@ -612,6 +810,18 @@ static UICursor PickHoverCursorImpl(UIChildren* children, float x, float y, bool
         if (!strcmp(type, UI_WIDGET_SWITCH)) {
             if (blocked) *blocked = true;
             return ((UISwitch*)base)->cursor;
+        }
+        if (!strcmp(type, UI_WIDGET_SEGMENTED)) {
+            if (blocked) *blocked = true;
+            return ((UISegmentedControl*)base)->cursor;
+        }
+        if (!strcmp(type, UI_WIDGET_TABBAR)) {
+            if (blocked) *blocked = true;
+            return ((UITabBar*)base)->cursor;
+        }
+        if (!strcmp(type, UI_WIDGET_NAVBAR)) {
+            if (blocked) *blocked = true;
+            return ((UINavBar*)base)->cursor;
         }
         if (!strcmp(type, UI_WIDGET_RADIO)) {
             if (blocked) *blocked = true;
@@ -690,8 +900,12 @@ static int   g_hoverRefreshPending = 0;
 static void DispatchHoverMotion(UIApp* app, float rx, float ry) {
     OcclusionBegin(app->window->children, rx, ry);
     UIMouseArea_DispatchMouseMotion(app->window->children, rx, ry);
+    UIGestureArea_DispatchMouseMotion(app->window->children, rx, ry);
     UIButton_DispatchMouseMotion   (app->window->children, rx, ry);
     UIControls_DispatchMouseMotion (app->window->children, rx, ry);
+    UISegmentedControl_DispatchMouseMotion(app->window->children, rx, ry);
+    UITabBar_DispatchMouseMotion   (app->window->children, rx, ry);
+    UINavBar_DispatchMouseMotion   (app->window->children, rx, ry);
     UIPopup_DispatchMouseMotion    (app->window->children, rx, ry);
     UITextField_DispatchMouseMotion(app->window->children, rx, ry);
     UITextArea_DispatchMouseMotion (app->window->children, rx, ry);
@@ -723,14 +937,23 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
             // A scrollbar-thumb drag in progress owns the motion: move it and
             // swallow the event so hover/selection logic doesn't also react.
             if (ScrollbarDragMove(app->window->children, ry)) break;
+            /* Finger / mouse drag-to-pan inside a Scroll (mobile). Don't rely
+               on motion.state — some browsers / CDP paths omit button flags. */
+            if (g_contentPan && ContentPanMove(app->window->children, rx, ry)) {
+                break;
+            }
             // Establish the z-order occluder for this point so the dispatchers
             // (and the hover-cursor pick) don't leak hover through an overlay.
             OcclusionBegin(app->window->children, rx, ry);
             // Mouse areas first so a draggable area can capture the
             // motion even when a button widget is underneath.
             UIMouseArea_DispatchMouseMotion(app->window->children, rx, ry);
+            UIGestureArea_DispatchMouseMotion(app->window->children, rx, ry);
             UIButton_DispatchMouseMotion   (app->window->children, rx, ry);
             UIControls_DispatchMouseMotion (app->window->children, rx, ry);
+            UISegmentedControl_DispatchMouseMotion(app->window->children, rx, ry);
+            UITabBar_DispatchMouseMotion   (app->window->children, rx, ry);
+            UINavBar_DispatchMouseMotion   (app->window->children, rx, ry);
             UIPopup_DispatchMouseMotion    (app->window->children, rx, ry);
             UITextField_DispatchMouseMotion(app->window->children, rx, ry);
             UITextArea_DispatchMouseMotion (app->window->children, rx, ry);
@@ -753,6 +976,7 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
             // UIMouseArea handles every button (its callbacks see the
             // button index). The rest are left-only by design.
             UIMouseArea_DispatchMouseDown(app->window->children, rx, ry, event->button.button);
+            UIGestureArea_DispatchMouseDown(app->window->children, rx, ry, event->button.button);
             // Forward to webview unconditionally - the webview itself
             // decides if the click landed on a button/link/etc.
             UIWebView_DispatchMouseDown  (app->window->children, rx, ry, event->button.button);
@@ -760,8 +984,14 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
                 // A scrollbar thumb grab takes priority over any widget beneath
                 // it; if it grabs, don't also click through to that widget.
                 if (ScrollbarDragBegin(app->window->children, rx, ry)) break;
+                /* Candidate for content pan — arm before button down so a
+                   subsequent drag can cancel the press without losing taps. */
+                ContentPanBegin(app->window->children, rx, ry);
                 UIButton_DispatchMouseDown   (app->window->children, rx, ry);
                 UIControls_DispatchMouseDown (app->window->children, rx, ry, event->button.button);
+                UISegmentedControl_DispatchMouseDown(app->window->children, rx, ry, event->button.button);
+                UITabBar_DispatchMouseDown   (app->window->children, rx, ry, event->button.button);
+                UINavBar_DispatchMouseDown   (app->window->children, rx, ry, event->button.button);
                 UITextField_DispatchMouseDown(app->window->children, app->window->sdlWindow,
                                               rx, ry, event->button.button);
                 UITextArea_DispatchMouseDown (app->window->children, app->window->sdlWindow,
@@ -829,8 +1059,15 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
             ApplySimulatorMouseTransform(app, &rx, &ry);
             // End any scrollbar-thumb drag before the usual up-dispatch.
             ScrollbarDragEnd(app->window->children);
+            const int panMoved = ContentPanEnd();
             OcclusionBegin(app->window->children, rx, ry);
+            if (panMoved) {
+                /* Drag was a pan — clear presses without firing clicks. */
+                UIButton_DispatchMouseUp(app->window->children, -1.0e6f, -1.0e6f);
+                break;
+            }
             UIMouseArea_DispatchMouseUp(app->window->children, rx, ry, event->button.button);
+            UIGestureArea_DispatchMouseUp(app->window->children, rx, ry, event->button.button);
             // Internal drag-and-drop: if a `dragData` source was being dragged,
             // deliver it to the topmost drop target under the cursor, then clear.
             if (UIMouseArea_DragActive()) {
@@ -841,6 +1078,9 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
             if (event->button.button == SDL_BUTTON_LEFT) {
                 UIButton_DispatchMouseUp    (app->window->children, rx, ry);
                 UIControls_DispatchMouseUp  (app->window->children, rx, ry, event->button.button);
+                UISegmentedControl_DispatchMouseUp(app->window->children, rx, ry, event->button.button);
+                UITabBar_DispatchMouseUp    (app->window->children, rx, ry, event->button.button);
+                UINavBar_DispatchMouseUp    (app->window->children, rx, ry, event->button.button);
                 UIPopup_DispatchMouseUp     (app->window->children, rx, ry, event->button.button);
                 UITextField_DispatchMouseUp (app->window->children, rx, ry, event->button.button);
                 UITextArea_DispatchMouseUp  (app->window->children, rx, ry, event->button.button);
@@ -1056,6 +1296,19 @@ UIApp* UIApp_Create(const char* title, int width, int height) {
     /* Force-init the debug subsystem so env-var sinks (port/file) are
      * live before any other init code logs anything. */
     UIDebug_SetLevel(UIDebug_GetLevel());
+#if defined(MOCIDA_WEB)
+    // The browser canvas is the window. Prefer the live CSS viewport so
+    // phone/tablet pages don't open at a desktop App() size and get letterboxed.
+    {
+        int vw = 0, vh = 0;
+        UIWeb_GetViewport(&vw, &vh);
+        if (vw > 0 && vh > 0) {
+            width = vw;
+            height = vh;
+        }
+    }
+#endif
+
     UI_INFO(UI_CAT_CORE, "UIApp_Create '%s' (%dx%d)", title ? title : "", width, height);
 
     /* calloc, not malloc — any field we add to UIApp later must start
@@ -1116,6 +1369,13 @@ UIApp* UIApp_Create(const char* title, int width, int height) {
         UIWidget_Destroy(mainWidget);
         free(app);
         return NULL;
+    }
+
+    // Only the no-accel fallback caps FPS. When Metal/D3D/GLES2 is up we
+    // keep the normal target so the GPU tools actually get used.
+    if (UIWindow_IsLightProfile() && app->targetFps > 30) {
+        app->targetFps = 30;
+        UI_INFO(UI_CAT_CORE, "light profile: target FPS capped to 30 (no GPU accel)");
     }
 
     UIApp_SetBackgroundColor(app, UI_COLOR_WHITE);
@@ -1222,8 +1482,13 @@ static int PointHitsInteractive(UIChildren* children, float x, float y) {
             if (((UIButton*)base)->enabled) return 1;
         } else if (!strcmp(type, UI_WIDGET_MOUSE_AREA)) {
             if (((UIMouseArea*)base)->enabled) return 1;
+        } else if (!strcmp(type, UI_WIDGET_GESTURE_AREA)) {
+            if (((UIGestureArea*)base)->enabled) return 1;
         } else if (!strcmp(type, UI_WIDGET_CHECKBOX) ||
                    !strcmp(type, UI_WIDGET_SWITCH)   ||
+                   !strcmp(type, UI_WIDGET_SEGMENTED)||
+                   !strcmp(type, UI_WIDGET_TABBAR)   ||
+                   !strcmp(type, UI_WIDGET_NAVBAR)   ||
                    !strcmp(type, UI_WIDGET_RADIO)    ||
                    !strcmp(type, UI_WIDGET_SLIDER)   ||
                    !strcmp(type, UI_WIDGET_TEXTFIELD)||
@@ -1365,6 +1630,75 @@ void UIApp_CloseG(void) {
     g_currentApp->runInBackground = 0;
     SDL_Event q; SDL_zero(q); q.type = SDL_EVENT_QUIT;
     SDL_PushEvent(&q);
+}
+
+#ifdef MOCIDA_WEB
+/* NOTE: no `//` inside EM_JS bodies — the C preprocessor treats them as
+ * line comments and truncates the macro argument. */
+EM_JS(void, mocida_web_open_url, (const char* url), {
+    var u = UTF8ToString(url || 0);
+    if (!u) return;
+    function isHttp(s) {
+        var l = s.toLowerCase();
+        return l.indexOf("http://") === 0 || l.indexOf("https://") === 0
+            || l.indexOf("mailto:") === 0 || l.indexOf("tel:") === 0;
+    }
+    function toHash(s) {
+        if (s.indexOf("docs:") === 0) return "#/docs/" + s.slice(5);
+        if (s.indexOf("mocidad://guide/") === 0) return "#/docs/" + s.slice(16);
+        if (s.indexOf("mocidad://api/") === 0) return "#/docs/" + s.slice(14);
+        if (s.indexOf("mocidad://") === 0) return "#/docs/" + s.slice(10);
+        if (s.charAt(0) === "#") {
+            if (s.indexOf("#/") === 0) return s;
+            var rest = s.slice(1);
+            while (rest.charAt(0) === "/") rest = rest.slice(1);
+            return "#/" + rest;
+        }
+        if (s.charAt(0) === "/") return "#" + s;
+        if (s.indexOf("://") < 0) {
+            var t = s;
+            if (t.indexOf("docs/") === 0) t = t.slice(5);
+            return "#/docs/" + t;
+        }
+        return s;
+    }
+    if (!isHttp(u)) {
+        var h = toHash(u);
+        try {
+            if (location.hash !== h) {
+                location.hash = h;
+            } else {
+                location.hash = "";
+                location.hash = h;
+            }
+        } catch (e) { }
+        try {
+            window.dispatchEvent(new CustomEvent("mocida:navigate", { detail: { href: u, hash: h } }));
+        } catch (e2) { }
+        return;
+    }
+    try {
+        var w = window.open(u, "_blank", "noopener,noreferrer");
+        if (!w) location.href = u;
+    } catch (e3) {
+        try { location.href = u; } catch (e4) { }
+    }
+});
+#endif
+
+void UIApp_OpenURL(const char* url) {
+    if (!url || !url[0]) return;
+#ifdef MOCIDA_WEB
+    mocida_web_open_url(url);
+#else
+    char buf[1024];
+    const char* out = url;
+    if (strncmp(url, "docs:", 5) == 0) {
+        snprintf(buf, sizeof(buf), "mocidad://guide/%s", url + 5);
+        out = buf;
+    }
+    SDL_OpenURL(out);
+#endif
 }
 
 // ---- Global (current-app) convenience wrappers, for the MUI App.*/Window.*
@@ -1858,6 +2192,7 @@ void UIApp_Destroy(UIApp* app) {
     UIApp_BundleShutdown();
 
     UICursor_Shutdown();
+    UIGpu_ShutdownDefault();
     UIAudio__Invalidate();
     SDL_Quit();
 #ifdef MOCIDA_WEB
@@ -2035,19 +2370,40 @@ void UIApp_RunOneFrame(UIApp* app, Uint32 dtMs) {
     if (app->window->visible && app->window->sdlWindow) {
         int liveW = 0, liveH = 0;
         SDL_GetWindowSize(app->window->sdlWindow, &liveW, &liveH);
+#if defined(MOCIDA_WEB)
+        /* Keep the logical window matched to the live CSS / visualViewport
+         * size so iOS Safari chrome and Android URL bars reflow the MUI tree. */
+        {
+            int vw = 0, vh = 0;
+            UIWeb_GetViewport(&vw, &vh);
+            if (vw > 0 && vh > 0) {
+                liveW = vw;
+                liveH = vh;
+            }
+        }
+#endif
         const UIScreenInsets s = UIScreen_GetSafeArea();
         if (liveW > 0 && liveH > 0 &&
             (liveW != app->__lastResizeW || liveH != app->__lastResizeH ||
              s.top != app->__lastSafeArea.top || s.left != app->__lastSafeArea.left ||
              s.bottom != app->__lastSafeArea.bottom || s.right != app->__lastSafeArea.right)) {
             app->__lastResizeW = liveW; app->__lastResizeH = liveH; app->__lastSafeArea = s;
+#if defined(MOCIDA_WEB)
+            /* Drive SDL's window size too — otherwise hit-tests stay mapped to
+             * the App() create size while layout uses the phone CSS viewport. */
+            SDL_SetWindowSize(app->window->sdlWindow, liveW, liveH);
+#endif
             ApplyResize(app, liveW, liveH);
         }
     }
 
     if (dtMs > 0) {
         UI_SCOPEC("anim", UI_PROF_LAYOUT);
+        ContentPanTick(dtMs);
         UIAnim_Tick(dtMs);
+        if (app->window && app->window->children) {
+            UIGestureArea_Tick(app->window->children, (float)dtMs);
+        }
     }
 
     if (app->window->visible) {

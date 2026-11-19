@@ -7,7 +7,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 #endif
 
-int UIUpscale_MetalFXSupported(void) {
+extern "C" int UIUpscale_MetalFXSupported(void) {
 #if !defined(__APPLE__)
     return 0;
 #else
@@ -20,7 +20,7 @@ int UIUpscale_MetalFXSupported(void) {
 #endif
 }
 
-void UIUpscale_ApplyFrame(SDL_Renderer* renderer) {
+extern "C" void UIUpscale_ApplyFrame(SDL_Renderer* renderer) {
 #if !defined(__APPLE__)
     (void)renderer;
     return;

@@ -48,6 +48,29 @@ const SIM_SCREENSHOT_SAVED: u32 = 908;
 /// `SIM_DEVICE_BASE + i` switches to `MENU_DEVICES[i]`.
 const SIM_DEVICE_BASE: u32 = 920;
 
+#[cfg(target_os = "emscripten")]
+thread_local! {
+    static WEB_FRAME_POLL: RefCell<Option<Box<dyn FnMut()>>> = const { RefCell::new(None) };
+}
+
+/// Called each browser frame from `app_web.c` (linked symbol, not a fn pointer).
+#[cfg(target_os = "emscripten")]
+#[no_mangle]
+pub extern "C" fn mui_host_frame_poll() {
+    WEB_FRAME_POLL.with(|slot| {
+        if let Some(f) = slot.borrow_mut().as_mut() {
+            f();
+        }
+    });
+}
+
+#[cfg(target_os = "emscripten")]
+fn install_web_frame_poll<F: FnMut() + 'static>(f: F) {
+    WEB_FRAME_POLL.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(f));
+    });
+}
+
 /// The Simulator ▸ Device menu (every `--list-devices` id works with --device).
 const MENU_DEVICES: &[&str] = &[
     "iphone-17-pro-max", "iphone-17-pro", "iphone-air", "iphone-16", "iphone-13-mini", "iphone-8",
@@ -446,13 +469,35 @@ fn sim_title(app_ptr: *mut mocida::sys::UIApp, sim: &Sim, orientation: DeviceOri
 }
 
 fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
-    let path = opts.path;
+    // On the web listen host, `boot.js` mounts the entry + import graph into
+    // MEMFS from `/manifest.json` (same relative layout as on disk). Prefer the
+    // manifest entry path so `import { X } from "../y.mui"` resolves like desktop.
+    let mut path = opts.path;
     let (label, source) = match &path {
         Some(p) => (p.clone(), std::fs::read_to_string(p)?),
         None => {
             #[cfg(target_os = "emscripten")]
             {
-                ("site.mui".to_string(), include_str!("../../../../OndaEngine/site/site.mui").to_string())
+                let from_manifest = std::fs::read_to_string("/manifest.json")
+                    .ok()
+                    .and_then(|raw| manifest_entry_path(&raw))
+                    .and_then(|entry| {
+                        std::fs::read_to_string(&entry)
+                            .ok()
+                            .map(|s| (entry, s))
+                    });
+                if let Some((entry, s)) = from_manifest {
+                    path = Some(entry.clone());
+                    (entry, s)
+                } else if let Ok(s) = std::fs::read_to_string("/app.mui") {
+                    path = Some("/app.mui".to_string());
+                    ("/app.mui".to_string(), s)
+                } else {
+                    (
+                        "site.mui".to_string(),
+                        include_str!("../../../../OndaEngine/site/site.mui").to_string(),
+                    )
+                }
             }
             #[cfg(not(target_os = "emscripten"))]
             {
@@ -617,6 +662,11 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
     // ── Font + first build ───────────────────────────────────────────────────
 
     search_fonts();
+    // App() { fonts: [FontFace(...)] } — same role as CSS @font-face.
+    let font_base = path
+        .as_deref()
+        .and_then(|p| std::path::Path::new(p).parent());
+    mui_runtime::apply_app_fonts(&doc, font_base);
     let _ = get_font("Arial");
 
     let Built {
@@ -630,7 +680,47 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
     app.set_children(children);
 
     // ── Hot-reload + simulator on_tick ───────────────────────────────────────
+    // Browser: do NOT use App::on_tick — Rust function pointers passed into C
+    // trip "function signature mismatch" under -fwasm-exceptions. app_web.c
+    // calls the linked symbol `mui_host_frame_poll` each frame instead.
 
+    #[cfg(target_os = "emscripten")]
+    {
+        let app_ptr = app.as_ptr();
+        let reactive_slot = reactive_slot.clone();
+        let source_cell = Rc::new(RefCell::new(source.clone()));
+        let path_owned = path.clone();
+        let last_size = Rc::new(Cell::new((0i32, 0i32)));
+        install_web_frame_poll(move || {
+            let dirty_signal = reactive_slot
+                .borrow()
+                .as_ref()
+                .map(|r| r.take_dirty())
+                .unwrap_or(false);
+            if !dirty_signal {
+                return;
+            }
+            let seed = with_platform(
+                reactive_slot
+                    .borrow()
+                    .as_ref()
+                    .map(|r| r.values())
+                    .unwrap_or_default(),
+            );
+            let src = source_cell.borrow().clone();
+            match build_seeded(&src, path_owned.as_deref(), &seed) {
+                Ok(built) => {
+                    let raw = built.children.into_raw();
+                    unsafe { mocida::sys::UIApp_SetChildren(app_ptr, raw) };
+                    *reactive_slot.borrow_mut() = Some(built.reactive);
+                }
+                Err(e) => eprintln!("mui-dev: web reactive rebuild failed: {e}"),
+            }
+        });
+        let _ = last_size; // reserved for a later resize-driven rebuild
+    }
+
+    #[cfg(not(target_os = "emscripten"))]
     if let Some(p) = path {
         let watch_path = PathBuf::from(&p);
         let mut initial = sources;
@@ -842,38 +932,50 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
 /// start being watched too. A coarse 150 ms poll — cheap, off the UI thread,
 /// and plenty responsive for editing. No external crate, no notification API.
 fn spawn_watcher(paths: Arc<Mutex<Vec<PathBuf>>>, dirty: Arc<AtomicBool>) {
-    std::thread::spawn(move || {
-        let mtime = |p: &PathBuf| -> Option<SystemTime> {
-            std::fs::metadata(p).and_then(|m| m.modified()).ok()
-        };
-        let mut last: HashMap<PathBuf, Option<SystemTime>> = HashMap::new();
-        if let Ok(list) = paths.lock() {
-            for p in list.iter() {
-                last.insert(p.clone(), mtime(p));
-            }
-        }
-        loop {
-            std::thread::sleep(Duration::from_millis(150));
-            let list = match paths.lock() {
-                Ok(l) => l.clone(),
-                Err(_) => continue,
-            };
-            let mut changed = false;
-            for p in &list {
-                let now = mtime(p);
-                match last.get(p) {
-                    Some(prev) if *prev == now => {}
-                    _ => {
-                        last.insert(p.clone(), now);
-                        changed = true;
+    // Browser/wasm builds have no OS threads unless linked with pthreads.
+    // Skip the watcher so listen hosts still render (imports already loaded).
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = (paths, dirty);
+        return;
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        let _ = std::thread::Builder::new()
+            .name("mui-dev-watch".into())
+            .spawn(move || {
+                let mtime = |p: &PathBuf| -> Option<SystemTime> {
+                    std::fs::metadata(p).and_then(|m| m.modified()).ok()
+                };
+                let mut last: HashMap<PathBuf, Option<SystemTime>> = HashMap::new();
+                if let Ok(list) = paths.lock() {
+                    for p in list.iter() {
+                        last.insert(p.clone(), mtime(p));
                     }
                 }
-            }
-            if changed {
-                dirty.store(true, Ordering::Release);
-            }
-        }
-    });
+                loop {
+                    std::thread::sleep(Duration::from_millis(150));
+                    let list = match paths.lock() {
+                        Ok(l) => l.clone(),
+                        Err(_) => continue,
+                    };
+                    let mut changed = false;
+                    for p in &list {
+                        let now = mtime(p);
+                        match last.get(p) {
+                            Some(prev) if *prev == now => {}
+                            _ => {
+                                last.insert(p.clone(), now);
+                                changed = true;
+                            }
+                        }
+                    }
+                    if changed {
+                        dirty.store(true, Ordering::Release);
+                    }
+                }
+            });
+    }
 }
 
 /// Best-effort "same file" check across possibly-different path spellings
@@ -883,4 +985,20 @@ fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
         (Ok(ca), Ok(cb)) => ca == cb,
         _ => a == b,
     }
+}
+
+/// Pull `"entry": "/path.mui"` out of the listen-stage manifest without pulling
+/// in a JSON crate (mui-dev stays dependency-light for the wasm build).
+fn manifest_entry_path(raw: &str) -> Option<String> {
+    let key = "\"entry\"";
+    let i = raw.find(key)?;
+    let after = raw[i + key.len()..].trim_start();
+    let after = after.strip_prefix(':')?.trim_start();
+    let after = after.strip_prefix('"')?;
+    let end = after.find('"')?;
+    let entry = &after[..end];
+    if entry.is_empty() || entry.contains("..") {
+        return None;
+    }
+    Some(entry.to_string())
 }

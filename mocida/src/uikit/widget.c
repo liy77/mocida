@@ -12,6 +12,8 @@
 #include <uikit/stack.h>
 #include <uikit/dialog.h>
 #include <uikit/tab.h>
+#include <uikit/chrome.h>
+#include <uikit/gesture.h>
 #include <uikit/popup.h>
 #include <uikit/video.h>
 #include <uikit/file_drop.h>
@@ -225,6 +227,14 @@ void UIWidget_Destroy(UIWidget* widget) {
             UIDialog_Destroy((UIDialog*)base);
         } else if (UIWidget_TypeIs(t, UI_WIDGET_TABVIEW)) {
             UITabView_Destroy((UITabView*)base);
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_SEGMENTED)) {
+            UISegmentedControl_Destroy((UISegmentedControl*)base);
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_TABBAR)) {
+            UITabBar_Destroy((UITabBar*)base);
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_NAVBAR)) {
+            UINavBar_Destroy((UINavBar*)base);
+        } else if (UIWidget_TypeIs(t, UI_WIDGET_GESTURE_AREA)) {
+            UIGestureArea_Destroy((UIGestureArea*)base);
         } else if (UIWidget_TypeIs(t, UI_WIDGET_TOOLTIP)) {
             UITooltip_Destroy((UITooltip*)base);
         } else if (UIWidget_TypeIs(t, UI_WIDGET_MENU)) {

@@ -1,13 +1,13 @@
 // glass.mui — UIGlass / backdrop showcase.
 //
-// Demonstrates the region-backdrop Glass widget with macOS-style vibrancy,
-// Liquid Glass, Acrylic and the in-app blur fallback. Run with:
+// Demonstrates the region-backdrop Glass widget with liquid glass, vibrancy,
+// acrylic and the in-app / web blur simulation. Run with:
 //
 //   cargo run -p mui-dev -- mui/examples/glass.mui
 //
-// or, after building the monorepo:
+// or via cforge listen (web):
 //
-//   ./mocida-rs/target/release/mui-dev mui/examples/glass.mui
+//   cforge run --listen=3001 mui/examples/glass.mui
 
 view GlassDemo() {
   mut material = signal("liquid")
@@ -19,64 +19,65 @@ view GlassDemo() {
     Stack(orientation: vertical, gap: 0, align: center,
           width: Window.width, height: Window.height,
           background: #0b1020) {
-      // Header with a Glass panel
-      Glass(effect: material, radius: 20, tint: #ffffff, tintOpacity: 0.35,
+
+      Glass(effect: material, radius: 20, tint: #ffffff, tintOpacity: 0.28,
             blur: blurPreset * 20 + 10,
+            refraction: 0.45,
             noise: noisePreset * 0.15,
             padding: 28, margin: 24) {
         Stack(orientation: vertical, gap: 8) {
           Text("Glass & Vibrancy", size: 34, color: #ffffff)
-          Text("Region backdrop effects that feel at home on macOS.",
+          Text("Liquid glass, vibrancy and acrylic — including the web simulation.",
                size: 15, color: #94a3b8)
         }
       }
 
-      // Background content that shows through the glass panels
-      Stack(orientation: horizontal, gap: 16, padding: 24) {
-        Rectangle(width: 120, height: 120, radius: 16, fill: #3b82f6)
-        Rectangle(width: 120, height: 120, radius: 16, fill: #ef4444)
-        Rectangle(width: 120, height: 120, radius: 16, fill: #10b981)
-        Rectangle(width: 120, height: 120, radius: 16, fill: #f59e0b)
+      // Backdrop art + glass cards stacked so blur has real content under it.
+      Stack(orientation: vertical, gap: 0, width: 820, height: 280) {
+        Stack(orientation: horizontal, gap: 16, padding: 24,
+              width: 820, height: 280) {
+          Rectangle(width: 180, height: 230, radius: 20, fill: #3b82f6)
+          Rectangle(width: 180, height: 230, radius: 20, fill: #ef4444)
+          Rectangle(width: 180, height: 230, radius: 20, fill: #10b981)
+          Rectangle(width: 180, height: 230, radius: 20, fill: #f59e0b)
+        }
+        Stack(orientation: horizontal, gap: 20, padding: 30,
+              width: 820, height: 280, marginTop: -280) {
+          Glass(effect: material, radius: 24, tint: #ffffff, tintOpacity: 0.32,
+                blur: blurPreset * 20 + 10,
+                refraction: 0.5,
+                noise: noisePreset * 0.15,
+                padding: 24, width: 380, height: 220) {
+            Stack(orientation: vertical, gap: 10) {
+              Text("Frosted panel", size: 22, color: #ffffff)
+              Text("Blurs and refracts the colored shapes behind it.",
+                   size: 14, color: #94a3b8)
+            }
+          }
+          Glass(effect: material, radius: 24, tint: #e2e8f0, tintOpacity: 0.42,
+                blur: blurPreset * 20 + 10,
+                refraction: 0.35,
+                noise: noisePreset * 0.15,
+                padding: 24, width: 380, height: 220) {
+            Stack(orientation: vertical, gap: 10) {
+              Text("Tinted panel", size: 22, color: #0f172a)
+              Text("Same material, stronger tint wash on top.",
+                   size: 14, color: #334155)
+            }
+          }
+        }
       }
 
-      // Material picker
       Stack(orientation: vertical, gap: 12, padding: 24) {
         Text("Material", size: 18, color: #e2e8f0)
-        Stack(orientation: horizontal, gap: 8, wrap: true) {
+        Stack(orientation: horizontal, gap: 8) {
           Button("Liquid Glass", onClick: { material = "liquid" })
-          Button("Vibrancy Sidebar", onClick: { material = "vibrancy-sidebar" })
-          Button("Vibrancy Header", onClick: { material = "vibrancy-header" })
-          Button("Vibrancy Popover", onClick: { material = "vibrancy-popover" })
-          Button("Acrylic", onClick: { material = "acrylic" })
+          Button("Vibrancy", onClick: { material = "vibrancy" })
+          Button("Vibrancy HUD", onClick: { material = "vibrancy-hud" })
+          Button("Acrylic / Frost", onClick: { material = "frost" })
         }
       }
 
-      // Two Glass cards side by side with the same content behind them
-      Stack(orientation: horizontal, gap: 20, padding: 24) {
-        Glass(effect: material, radius: 24, tint: #ffffff, tintOpacity: 0.40,
-              blur: blurPreset * 20 + 10,
-              noise: noisePreset * 0.15,
-              padding: 24, width: 380, height: 220) {
-          Stack(orientation: vertical, gap: 10) {
-            Text("Frosted panel", size: 22, color: #ffffff)
-            Text("This panel blurs the colored rectangles behind it.",
-                 size: 14, color: #94a3b8)
-          }
-        }
-
-        Glass(effect: material, radius: 24, tint: #e2e8f0, tintOpacity: 0.55,
-              blur: blurPreset * 20 + 10,
-              noise: noisePreset * 0.15,
-              padding: 24, width: 380, height: 220) {
-          Stack(orientation: vertical, gap: 10) {
-            Text("Tinted panel", size: 22, color: #ffffff)
-            Text("A subtle tint layered on top of the blurred backdrop.",
-                 size: 14, color: #94a3b8)
-          }
-        }
-      }
-
-      // Preset tuners
       Stack(orientation: vertical, gap: 12, padding: 24) {
         Text("Blur preset: ${blurPreset} (0=low .. 3=ultra)", size: 14, color: #94a3b8)
         Stack(orientation: horizontal, gap: 8) {

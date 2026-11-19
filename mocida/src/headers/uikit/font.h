@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 
 #ifdef _WIN32
 #define SYSTEM_FONTS_PATH "C:\\Windows\\Fonts\\"
@@ -82,6 +83,24 @@ static FontEntry **UIFonts = NULL;
  * The map contains font family names as keys and their file paths as values.
  */
 void UISearchFonts();
+
+/**
+ * CSS `@font-face`-style registration: bind `family` to a font file or URL.
+ *
+ * `src` may be:
+ *   - an absolute / relative filesystem (or MEMFS) path to `.ttf` / `.otf` / `.ttc`
+ *   - an `http://` / `https://` URL (downloaded into a cache file, then opened)
+ *
+ * When `family` is NULL/empty, the family name embedded in the font file is used.
+ * Returns 1 on success, 0 on failure (see debug log / `UINet_Error` for URLs).
+ */
+int UIFont_Register(const char* family, const char* src);
+
+/**
+ * Like [`UIFont_Register`], but from already-loaded bytes (e.g. a bundled asset).
+ * `ext` is a hint such as `".ttf"` / `".otf"` (default `.ttf`).
+ */
+int UIFont_RegisterData(const char* family, const void* data, size_t size, const char* ext);
 
 /**
  * Retrieves the font file path for a given font family name.

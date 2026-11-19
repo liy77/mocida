@@ -129,6 +129,14 @@ impl Image {
         self
     }
 
+    /// Corner radius in pixels (0 = sharp). Uses the renderer's rounded-image path.
+    pub fn radius(self, radius: f32) -> Self {
+        unsafe {
+            (*self.ptr).radius = if radius < 0.0 { 0.0 } else { radius };
+        }
+        self
+    }
+
     /// Size of the decoded texture in texels, once it exists (always for
     /// [`Image::from_memory`]).
     pub fn texture_size(&self) -> Option<(f32, f32)> {

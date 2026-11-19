@@ -1363,14 +1363,45 @@ static SDL_Texture* GetGlassNoiseTexture(SDL_Renderer* r, int w, int h) {
     return g_glassNoise;
 }
 
+// Reused TARGET textures for the glass mip chain. Creating/destroying a full
+// pyramid every Glass paint blows the WebGL texture budget and stalls GLES;
+// keep one persistent chain sized to the last capture.
+#define GLASS_BLUR_LEVELS 8
+static SDL_Texture* g_glassBlurCap = NULL;
+static int g_glassBlurCapW = 0, g_glassBlurCapH = 0;
+static SDL_Texture* g_glassBlurLevels[GLASS_BLUR_LEVELS];
+static int g_glassBlurLevelW[GLASS_BLUR_LEVELS];
+static int g_glassBlurLevelH[GLASS_BLUR_LEVELS];
+
+static SDL_Texture* GlassAcquireTarget(SDL_Renderer* r, SDL_Texture** slot,
+                                       int* ow, int* oh, int w, int h) {
+    if (!r || w < 2 || h < 2) return NULL;
+    if (*slot && *ow == w && *oh == h) return *slot;
+    if (*slot) { SDL_DestroyTexture(*slot); *slot = NULL; }
+    *slot = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32,
+                              SDL_TEXTUREACCESS_TARGET, w, h);
+    if (*slot) {
+        SDL_SetTextureScaleMode(*slot, SDL_SCALEMODE_LINEAR);
+        *ow = w;
+        *oh = h;
+    } else {
+        *ow = *oh = 0;
+    }
+    return *slot;
+}
+
 // In-app glass "backdrop filter": blur the already-rendered framebuffer BEHIND
-// `rect` and paint the blurred result back into it, so a UIGlass widget frosts the
-// app content under it (macOS-vibrancy style). SDL_Renderer exposes no fragment
-// shaders, so the blur is a chain of bilinear half-resolution down-samples (each a
-// box blur) finished by one linear up-sample — wide, smooth, cheap. `blurPx` =
-// strength. When the frame renders to an offscreen target (forced by g_glassBlurSeen)
-// the snapshot is a pure-GPU copy; otherwise it falls back to one readback.
-void DrawGlassBackdropBlur(SDL_Renderer* r, SDL_FRect rect, float blurPx) {
+// `rect` and paint the blurred result back into it (CSS backdrop-filter /
+// macOS vibrancy style). SDL_Renderer has no fragment shaders, so the blur is
+// a dual-filter mip chain. `refraction` > 0 adds a liquid-glass approximation
+// (lens inset + RGB chromatic fringe) inspired by liquid-glass-js /
+// liquid-glass-canvas — no GLSL required.
+//
+// WebGL: SDL_RenderReadPixels from the default framebuffer is unreliable and
+// stalls; we require an offscreen target (window.c forces one on MOCIDA_WEB)
+// and reuse TARGET textures across frames.
+void DrawGlassBackdropBlur(SDL_Renderer* r, SDL_FRect rect,
+                           float blurPx, float refraction) {
     if (!r || rect.w < 2.0f || rect.h < 2.0f || blurPx < 1.0f) return;
     g_glassBlurSeen = 1; // ask the next frame to render offscreen (no readback)
 
@@ -1380,29 +1411,48 @@ void DrawGlassBackdropBlur(SDL_Renderer* r, SDL_FRect rect, float blurPx) {
     int sh = (int)(rect.h * sy + 0.5f);
     if (sw < 2 || sh < 2) return;
 
+#if defined(MOCIDA_WEB)
+    // Cap capture size so the mip chain fits typical WebGL2 texture budgets
+    // and stays cheap on mobile GPUs.
+    const int maxEdge = 640;
+    if (sw > maxEdge || sh > maxEdge) {
+        if (sw >= sh) { sh = (int)((float)sh * (float)maxEdge / (float)sw); sw = maxEdge; }
+        else          { sw = (int)((float)sw * (float)maxEdge / (float)sh); sh = maxEdge; }
+        if (sw < 2) sw = 2;
+        if (sh < 2) sh = 2;
+    }
+#endif
+
     SDL_Texture* target = SDL_GetRenderTarget(r); // offscreen texture, or NULL=backbuffer
-    SDL_Texture* cap = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32,
-                                         SDL_TEXTUREACCESS_TARGET, sw, sh);
+#if defined(MOCIDA_WEB)
+    // Never ReadPixels on WebGL — arm offscreen and skip this paint if we are
+    // still on the default framebuffer (first tick before window.c reacts).
+    if (!target) return;
+#endif
+
+    SDL_Texture* cap = GlassAcquireTarget(r, &g_glassBlurCap,
+                                          &g_glassBlurCapW, &g_glassBlurCapH, sw, sh);
     if (!cap) return;
-    SDL_SetTextureScaleMode(cap, SDL_SCALEMODE_LINEAR);
 
     // Grab the glass region into `cap`.
     if (target) {
         // GPU copy from the offscreen target (no readback, no swapchain touch).
-        SDL_FRect srcF = { rect.x * sx, rect.y * sy, (float)sw, (float)sh };
+        SDL_FRect srcF = { rect.x * sx, rect.y * sy,
+                           rect.w * sx, rect.h * sy };
         SDL_SetRenderTarget(r, cap);
         SDL_SetRenderScale(r, 1.0f, 1.0f);
         SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
         SDL_SetTextureBlendMode(target, SDL_BLENDMODE_NONE);
         SDL_RenderTexture(r, target, &srcF, NULL);
     } else {
-        // Backbuffer fallback (first frame before offscreen kicks in): one readback.
-        SDL_Rect rr = { (int)(rect.x * sx), (int)(rect.y * sy), sw, sh };
+        // Backbuffer fallback (desktop first frame before offscreen kicks in).
+        SDL_Rect rr = { (int)(rect.x * sx), (int)(rect.y * sy),
+                        (int)(rect.w * sx + 0.5f), (int)(rect.h * sy + 0.5f) };
         SDL_Surface* snap = SDL_RenderReadPixels(r, &rr);
-        if (!snap) { SDL_DestroyTexture(cap); return; }
+        if (!snap) return;
         SDL_Texture* t = SDL_CreateTextureFromSurface(r, snap);
         SDL_DestroySurface(snap);
-        if (!t) { SDL_DestroyTexture(cap); return; }
+        if (!t) return;
         SDL_SetTextureScaleMode(t, SDL_SCALEMODE_LINEAR);
         SDL_SetTextureBlendMode(t, SDL_BLENDMODE_NONE);
         SDL_SetRenderTarget(r, cap);
@@ -1413,63 +1463,95 @@ void DrawGlassBackdropBlur(SDL_Renderer* r, SDL_FRect rect, float blurPx) {
     }
 
     // Progressive halving — more passes = wider blur (scaled by blurPx).
-    // Cap at 12 so Glass Intensity Strong (blur×~2) is visibly heavier than
-    // Medium; the old cap of 6 made Medium and Strong identical for typical
-    // dialog blur values (~34 px).
+#if defined(MOCIDA_WEB)
+    const int maxPasses = 6; // GLES-friendly
+#else
+    const int maxPasses = GLASS_BLUR_LEVELS; // Strong intensity still reads heavier
+#endif
     int passes = (int)(blurPx / 4.0f);
     if (passes < 1) passes = 1;
-    if (passes > 12) passes = 12;
-    SDL_Texture* levels[12] = { 0 };
+    if (passes > maxPasses) passes = maxPasses;
+
+    SDL_Texture* levels[GLASS_BLUR_LEVELS] = { 0 };
     int nLevels = 0;
     SDL_Texture* cur = cap;
     int dw = sw, dh = sh;
     for (int p = 0; p < passes; p++) {
         int nw = dw / 2, nh = dh / 2;
         if (nw < 2 || nh < 2) break;
-        SDL_Texture* down = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32,
-                                              SDL_TEXTUREACCESS_TARGET, nw, nh);
+        SDL_Texture* down = GlassAcquireTarget(r, &g_glassBlurLevels[p],
+                                               &g_glassBlurLevelW[p],
+                                               &g_glassBlurLevelH[p], nw, nh);
         if (!down) break;
-        SDL_SetTextureScaleMode(down, SDL_SCALEMODE_LINEAR);
         SDL_SetRenderTarget(r, down);
         SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
         SDL_SetTextureBlendMode(cur, SDL_BLENDMODE_NONE);
+        SDL_SetTextureAlphaMod(cur, 255);
+        SDL_SetTextureColorMod(cur, 255, 255, 255);
         SDL_RenderTexture(r, cur, NULL, NULL); // half-res bilinear down-sample
         cur = down;
         levels[nLevels++] = down;
         dw = nw; dh = nh;
     }
 
-    // Reconstruct the blur by walking the mip chain back UP one level at a time,
-    // each step a bilinear 2× up-sample (dual-filter / Kawase style). This is the
-    // key to a smooth result: stretching the smallest level straight to full size
-    // in a single blit produces visible blocky facets (a piecewise-linear "tent"),
-    // which is exactly the pixelation seen at high blur. Doubling step-by-step lets
-    // each interpolation smooth the previous one, approximating a Gaussian. All
-    // blits use NORMAL (never additive) blending, so the result is an average of
-    // the source and can only darken — bright wallpapers no longer blow out.
+    // Reconstruct the blur by walking the mip chain back UP one level at a time
+    // (dual-filter / Kawase style). Avoids the blocky single-shot upscale.
     for (int i = nLevels - 2; i >= 0; i--) {
         SDL_SetRenderTarget(r, levels[i]);
         SDL_SetRenderScale(r, 1.0f, 1.0f);
         SDL_SetTextureAlphaMod(cur, 255);
+        SDL_SetTextureColorMod(cur, 255, 255, 255);
         SDL_SetTextureScaleMode(cur, SDL_SCALEMODE_LINEAR);
         SDL_SetTextureBlendMode(cur, SDL_BLENDMODE_NONE);
         SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
-        SDL_RenderTexture(r, cur, NULL, NULL); // up-sample the smaller level into the larger
+        SDL_RenderTexture(r, cur, NULL, NULL);
         cur = levels[i];
     }
 
-    // Final blit of the (now smoothly up-sampled) largest mip to the screen rect.
+    // Final composite into the live target.
     SDL_SetRenderTarget(r, target);
     SDL_SetRenderScale(r, sx, sy);
-    SDL_SetTextureAlphaMod(cur, 255);
     SDL_SetTextureScaleMode(cur, SDL_SCALEMODE_LINEAR);
+    SDL_SetTextureColorMod(cur, 255, 255, 255);
+    SDL_SetTextureAlphaMod(cur, 255);
     SDL_SetTextureBlendMode(cur, SDL_BLENDMODE_NONE);
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
-    SDL_RenderTexture(r, cur, NULL, &rect);
+
+    if (refraction > 0.01f) {
+        // Liquid-glass lens: slight inward scale so the rim magnifies the
+        // backdrop (cheap stand-in for SDF edge normals without a shader).
+        const float r01 = refraction > 1.0f ? 1.0f : refraction;
+        const float insetX = rect.w * (0.012f + 0.04f * r01);
+        const float insetY = rect.h * (0.012f + 0.04f * r01);
+        SDL_FRect lens = {
+            rect.x + insetX, rect.y + insetY,
+            rect.w - insetX * 2.0f, rect.h - insetY * 2.0f
+        };
+        if (lens.w < 2.0f) lens.w = rect.w;
+        if (lens.h < 2.0f) lens.h = rect.h;
+        SDL_RenderTexture(r, cur, NULL, &lens);
+
+        // Chromatic aberration: R/B channel ghosts offset along X, additive at
+        // low alpha — matches liquid-glass-js / WebGL glass demos.
+        const float ca = (2.0f + 6.0f * r01);
+        const Uint8 caA = (Uint8)(28.0f + 70.0f * r01);
+        SDL_SetTextureBlendMode(cur, SDL_BLENDMODE_ADD);
+        SDL_SetTextureAlphaMod(cur, caA);
+        SDL_SetTextureColorMod(cur, 255, 40, 40);
+        SDL_FRect rR = rect; rR.x -= ca;
+        SDL_RenderTexture(r, cur, NULL, &rR);
+        SDL_SetTextureColorMod(cur, 40, 40, 255);
+        SDL_FRect rB = rect; rB.x += ca;
+        SDL_RenderTexture(r, cur, NULL, &rB);
+        SDL_SetTextureColorMod(cur, 255, 255, 255);
+        SDL_SetTextureAlphaMod(cur, 255);
+        SDL_SetTextureBlendMode(cur, SDL_BLENDMODE_NONE);
+    } else {
+        SDL_RenderTexture(r, cur, NULL, &rect);
+    }
 
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND); // restore for widget draws
-    for (int i = 0; i < nLevels; i++) SDL_DestroyTexture(levels[i]);
-    SDL_DestroyTexture(cap);
+    // Persistent mip textures — do not destroy here.
 }
 
 // Cleanup circle cache

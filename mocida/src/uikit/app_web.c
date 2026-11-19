@@ -1,4 +1,5 @@
 #include <emscripten.h>
+#include <emscripten/eventloop.h>
 #include <SDL3/SDL.h>
 #include <uikit/app.h>
 
@@ -69,10 +70,10 @@ void UIApp_RunWeb(UIApp* app) {
     s_webLastTickPC = SDL_GetPerformanceCounter();
     s_accumMs = 0.0;
     s_webFreq = SDL_GetPerformanceFrequency();
-    // emscripten_set_main_loop with simulate_infinite_loop=1 does not return;
-    // it throws a JavaScript exception to transfer control to the browser.
-    // Consequently, any UIApp_Destroy call after UIApp_RunWeb in the host's
-    // main() is unreachable on web. Cleanup happens implicitly when the user
-    // navigates away or closes the page (the browser reclaims the WASM heap).
-    emscripten_set_main_loop(mocida_web_loop, 0, 1);
+    // simulate_infinite_loop=1 unwinds via a JS exception that Rust +
+    // -fwasm-exceptions can swallow, leaving a scheduled loop that never
+    // runs (black canvas). Schedule the loop, then unwind with the
+    // Emscripten helper that is safe under wasm exceptions.
+    emscripten_set_main_loop(mocida_web_loop, 0, 0);
+    emscripten_unwind_to_js_event_loop();
 }
