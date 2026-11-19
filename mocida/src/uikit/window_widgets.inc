@@ -1512,17 +1512,46 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
 
         UIImage *img = (UIImage*)base;
         if (!img->source || !el->width || !el->height) return;
+        // Rasterise at draw size (device pixels) so icons/previews stay crisp.
+        const int px = (int)ceilf(SDL_max(*el->width, *el->height) * g_drawDensity);
+#if defined(MOCIDA_WEB)
+        /* Boot stages screenshots into MEMFS after first paint. A prior HTTP
+           miss must not stick forever as FAILURE — retry local MEMFS cheaply. */
+        if (!img->__SDL_texture && img->loadState == IMAGE_LOAD_FAILURE &&
+            UIImage_IsRemoteSource(img->source) && !img->__download) {
+            img->__SDL_texture = UIAsset_LoadTextureSized(
+                window->sdlRenderer, img->source, px);
+            if (img->__SDL_texture) {
+                img->loadState = IMAGE_LOAD_SUCCESS;
+                SDL_SetTextureScaleMode(img->__SDL_texture,
+                    img->antialiasing ? SDL_SCALEMODE_LINEAR
+                                      : SDL_SCALEMODE_NEAREST);
+            }
+        }
+#endif
         if (!img->__SDL_texture && img->loadState != IMAGE_LOAD_FAILURE) {
             if (UIImage_IsRemoteSource(img->source)) {
-                // http/https: fetched on a background thread and decoded once
-                // it lands. Stays IN_PROGRESS (texture NULL) until then; we
-                // re-pump every frame, so the image pops in when ready.
-                UIImage_PumpRemote(img, window->sdlRenderer);
+                // Web marks relative "media/x.png" as remote (emscripten_fetch).
+                // Boot already stages those into MEMFS — try sync local first so
+                // docs ZoomImages paint immediately instead of spinning forever
+                // on a stalled fetch. Fall back to HTTP only when MEMFS misses.
+                if (!img->__download) {
+                    img->__SDL_texture = UIAsset_LoadTextureSized(
+                        window->sdlRenderer, img->source, px);
+                    if (img->__SDL_texture) {
+                        img->loadState = IMAGE_LOAD_SUCCESS;
+                        SDL_SetTextureScaleMode(img->__SDL_texture,
+                            img->antialiasing ? SDL_SCALEMODE_LINEAR
+                                              : SDL_SCALEMODE_NEAREST);
+                    } else {
+                        UIImage_PumpRemote(img, window->sdlRenderer);
+                    }
+                } else {
+                    UIImage_PumpRemote(img, window->sdlRenderer);
+                }
             } else {
-                // Vector sources are rasterised at the size they're drawn
-                // (device pixels), so icons and previews stay crisp.
-                const int px = (int)ceilf(SDL_max(*el->width, *el->height) * g_drawDensity);
-                img->__SDL_texture = UIAsset_LoadTextureSized(window->sdlRenderer, img->source, px);
+                img->__SDL_texture = UIAsset_LoadTextureSized(
+                    window->sdlRenderer, img->source, px);
                 if (img->__SDL_texture) {
                     img->loadState = IMAGE_LOAD_SUCCESS;
                     SDL_SetTextureScaleMode(img->__SDL_texture,
@@ -4526,7 +4555,16 @@ static void RenderWidget_NavBar(UIWindow* window, UIWidget* el,
     TTF_Font* font = ChromeGetFont(nb->fontFamily, nb->fontSize * g_textSS);
     if (font) TTF_SetFontStyle(font, TTF_STYLE_NORMAL);
 
-    if (!nb->menuVisible && nb->itemCount > 0) {
+    /* Same compact rule as hit-testing: hamburger when menuVisible OR the
+     * bar is too narrow for brand + centered links (stops Film-over-logo). */
+    int compact = nb->menuVisible;
+    if (!compact && nb->itemCount > 0) {
+        float need = 140.0f + 32.0f + (float)nb->itemCount * 72.0f + 44.0f;
+        if (nb->brandLogo && nb->brandLogo[0]) need += nb->iconSize;
+        if (W < need) compact = 1;
+    }
+
+    if (!compact && nb->itemCount > 0) {
         float linkW = 72.0f;
         float startX = el->x + (W - linkW * (float)nb->itemCount) * 0.5f;
         for (int i = 0; i < nb->itemCount; i++) {
@@ -4561,7 +4599,7 @@ static void RenderWidget_NavBar(UIWindow* window, UIWidget* el,
         }
     }
 
-    if (nb->menuVisible) {
+    if (compact) {
         float mw = 44.0f;
         float mx = el->x + W - pad - mw;
         UIColor mb = nb->menuOpen ? nb->menuBgOpen : nb->menuBg;

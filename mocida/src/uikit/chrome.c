@@ -541,6 +541,16 @@ static float NavBarMenuWidth(const UINavBar* nb) {
     return (nb && nb->menuVisible) ? 44.0f : 0.0f;
 }
 
+/* Compact (= hamburger, hide center links) when the author asked for a menu
+ * OR the bar is too narrow for brand + centered links without overlapping. */
+static int NavBarCompact(const UINavBar* nb, float W) {
+    if (!nb) return 0;
+    if (nb->menuVisible) return 1;
+    if (nb->itemCount <= 0) return 0;
+    float need = NavBarBrandWidth(nb) + 32.0f + (float)nb->itemCount * 72.0f + 44.0f;
+    return W < need;
+}
+
 static int NavBarHit(UINavBar* nb, UIWidget* w, float x, float y,
                      int* outItem, int* outBrand, int* outMenu) {
     if (outItem) *outItem = -1;
@@ -550,8 +560,9 @@ static int NavBarHit(UINavBar* nb, UIWidget* w, float x, float y,
     if (!InsideRect(x, y, w->x, w->y, *w->width, *w->height)) return 0;
 
     float brandW = NavBarBrandWidth(nb);
-    float menuW = NavBarMenuWidth(nb);
     float pad = 16.0f;
+    int compact = NavBarCompact(nb, *w->width);
+    float menuW = compact ? 44.0f : 0.0f;
 
     if (x >= w->x + pad && x < w->x + pad + brandW) {
         if (outBrand) *outBrand = 1;
@@ -562,8 +573,8 @@ static int NavBarHit(UINavBar* nb, UIWidget* w, float x, float y,
         return 1;
     }
 
-    /* Center links — hide when menu is the primary nav (menuVisible). */
-    if (nb->menuVisible || nb->itemCount <= 0) return 1;
+    /* Center links — hide in compact / hamburger mode. */
+    if (compact || nb->itemCount <= 0) return 1;
     float linkAreaW = (float)nb->itemCount * 72.0f;
     float startX = w->x + (*w->width - linkAreaW) * 0.5f;
     if (x >= startX && x < startX + linkAreaW) {
@@ -604,7 +615,13 @@ void UINavBar_DispatchMouseDown(UIChildren* children, float x, float y, int butt
         UINavBar* nb = (UINavBar*)base;
         int item = -1, brand = 0, menu = 0;
         if (!NavBarHit(nb, w, x, y, &item, &brand, &menu)) continue;
-        if (menu) { nb->menuPressed = 1; return; }
+        /* Fire menu on press (not release) so a tiny finger/pan slop — or a
+         * ContentPan cancel that skips MouseUp — can't swallow the hamburger. */
+        if (menu) {
+            nb->menuPressed = 1;
+            if (nb->onMenuClick) nb->onMenuClick(nb, nb->menuUserdata);
+            return;
+        }
         if (brand) { nb->pressed = -2; return; } /* -2 = brand */
         if (item >= 0) { nb->pressed = item; return; }
     }
@@ -622,9 +639,13 @@ void UINavBar_DispatchMouseUp(UIChildren* children, float x, float y, int button
         UINavBar* nb = (UINavBar*)base;
         int item = -1, brand = 0, menu = 0;
         NavBarHit(nb, w, x, y, &item, &brand, &menu);
-        if (nb->menuPressed && menu) {
-            if (nb->onMenuClick) nb->onMenuClick(nb, nb->menuUserdata);
-        } else if (nb->pressed == -2 && brand) {
+        /* Menu already fired on MouseDown. */
+        if (nb->menuPressed) {
+            nb->menuPressed = 0;
+            nb->pressed = -1;
+            continue;
+        }
+        if (nb->pressed == -2 && brand) {
             if (nb->onBrandClick) nb->onBrandClick(nb, nb->brandUserdata);
         } else if (nb->pressed >= 0 && item == nb->pressed) {
             if (item != nb->selected) {

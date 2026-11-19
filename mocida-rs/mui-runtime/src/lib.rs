@@ -1863,7 +1863,20 @@ fn prop_value_string(value: &PropValue, outer: &Env) -> Option<String> {
         PropValue::Expr(e) if is_bool_expr(e) => {
             Some(eval_bool_expr_env(e, outer).unwrap_or(false).to_string())
         }
-        PropValue::Expr(e) => Some(render_text_expr_env(e, outer)),
+        // Numeric exprs (`Window.width - 80`) must evaluate to a number string.
+        // Text-render drops arithmetic (`_ => ""`), which left component float
+        // params empty and Image/MouseArea fell back to the 120×120 default.
+        PropValue::Expr(e) => {
+            if let Some(n) = eval_f32_env(e, outer) {
+                Some(if n.fract() == 0.0 {
+                    format!("{}", n as i64)
+                } else {
+                    n.to_string()
+                })
+            } else {
+                Some(render_text_expr_env(e, outer))
+            }
+        }
         // A color / enum literal passed as a component arg (`badge_color: #a5b4fc`,
         // or positionally). Stringify so it lands in the component env as a usable
         // value — `#rrggbbaa` for a color, the bare member for an enum — instead of
@@ -2939,7 +2952,9 @@ fn build_link(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
     let (topic, open) = resolve_link_href(&href);
     let docs_topic = ctx.string_signal("docs_topic").cloned();
     let page = ctx.string_signal("page").cloned();
-    let docs_nav = ctx.string_signal("docs_nav").cloned();
+    // Prefer bool/int `docs_nav` (signal(false)); fall back to legacy string "0"/"1".
+    let docs_nav_i = ctx.signal("docs_nav").cloned();
+    let docs_nav_s = ctx.string_signal("docs_nav").cloned();
     let mut user_click = handler_apply_closure(ctx, el, "onClick");
     button = button.on_click(move |_btn| {
         if let Some(ref t) = topic {
@@ -2949,7 +2964,9 @@ fn build_link(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
             if let Some(ref sig) = page {
                 let _ = sig.borrow_mut().set("docs".to_string());
             }
-            if let Some(ref sig) = docs_nav {
+            if let Some(ref sig) = docs_nav_i {
+                let _ = sig.borrow_mut().set(0);
+            } else if let Some(ref sig) = docs_nav_s {
                 let _ = sig.borrow_mut().set("0".to_string());
             }
         }
@@ -3797,8 +3814,14 @@ fn build_segmented(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
 
     let w = dim_prop(ctx, el, "width").unwrap_or(ctx.avail_w.max(200.0));
     let h = dim_prop(ctx, el, "height").unwrap_or(36.0);
-    let _ = layout;
-    Ok(sc.into_widget_sized(w, h)?)
+    let (mut x, mut y) = place(el, layout, w, h);
+    if let Some(px) = dim_prop(ctx, el, "x") {
+        x = px;
+    }
+    if let Some(py) = dim_prop(ctx, el, "y") {
+        y = py;
+    }
+    Ok(sc.into_widget_sized(w, h)?.position(x, y))
 }
 
 /// `TabBar(selected:, onChange:) { TabItem("Home", symbol: "⌂") … }`
@@ -3870,8 +3893,14 @@ fn build_tabbar(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
 
     let w = dim_prop(ctx, el, "width").unwrap_or(ctx.avail_w.max(280.0));
     let h = dim_prop(ctx, el, "height").unwrap_or(56.0);
-    let _ = layout;
-    Ok(tb.into_widget_sized(w, h)?)
+    let (mut x, mut y) = place(el, layout, w, h);
+    if let Some(px) = dim_prop(ctx, el, "x") {
+        x = px;
+    }
+    if let Some(py) = dim_prop(ctx, el, "y") {
+        y = py;
+    }
+    Ok(tb.into_widget_sized(w, h)?.position(x, y))
 }
 
 /// `NavBar(brand:, logo:, menu:, selected:, onChange:, onBrandClick:, onMenuClick:) { NavItem("Film", value: "home") … }`
@@ -3917,7 +3946,7 @@ fn build_navbar(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
         .unwrap_or(false);
     let menu_open = eval_bool_prop(ctx, el, "menuOpen").unwrap_or(false);
     nb = nb.menu_visible(menu).menu_open(menu_open);
-    // Reactive menu / menuOpen (string "0"/"1" or bool-ish signals).
+    // Reactive menu / menuOpen (bool signals, or legacy string "0"/"1").
     {
         let ptr = nb.as_ptr();
         subscribe_bool_prop(ctx, el, "menu", move |b| unsafe {
@@ -4003,8 +4032,17 @@ fn build_navbar(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
 
     let w = dim_prop(ctx, el, "width").unwrap_or(ctx.avail_w.max(320.0));
     let h = dim_prop(ctx, el, "height").unwrap_or(56.0);
-    let _ = layout;
-    Ok(nb.into_widget_sized(w, h)?)
+    // Honour x:/y: (and advance flow) like every other widget — without this,
+    // freeLayout parents leave the bar at whatever Create defaulted to and the
+    // site body paints through / under it.
+    let (mut x, mut y) = place(el, layout, w, h);
+    if let Some(px) = dim_prop(ctx, el, "x") {
+        x = px;
+    }
+    if let Some(py) = dim_prop(ctx, el, "y") {
+        y = py;
+    }
+    Ok(nb.into_widget_sized(w, h)?.position(x, y))
 }
 
 fn build_switch(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
@@ -4264,7 +4302,7 @@ fn build_image(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     if prop_bool(el, "antialiasing") == Some(false) {
         img = img.antialiasing(false);
     }
-    if let Some(r) = style::f32_prop(el, "radius") {
+    if let Some(r) = style::f32_prop(el, "radius").or_else(|| dim_prop(ctx, el, "radius")) {
         img = img.radius(r);
     }
     let w = dim_prop(ctx, el, "width").unwrap_or(120.0);
@@ -6819,15 +6857,22 @@ fn eval_bool_prop(ctx: &Ctx, el: &Element, name: &str) -> Option<bool> {
 fn eval_bool_expr_env(e: &Expr, env: &Env) -> Option<bool> {
     match &e.kind {
         ExprKind::Literal(Literal::Bool(b)) => Some(*b),
-        ExprKind::Ident(_) => {
+        // Bare names AND members (`Platform.isMobile`, `Window.width` via
+        // comparisons below). Without Member here, `menu: Platform.isMobile`
+        // silently became false and the NavBar never showed a hamburger.
+        ExprKind::Ident(_) | ExprKind::Member { .. } => {
             let v = operand_value_env(e, env);
             Some(!(v.is_empty() || v == "false" || v == "0"))
         }
         ExprKind::Binary { op, lhs, rhs } => match op {
             BinOp::And => Some(eval_bool_expr_env(lhs, env)? && eval_bool_expr_env(rhs, env)?),
             BinOp::Or => Some(eval_bool_expr_env(lhs, env)? || eval_bool_expr_env(rhs, env)?),
-            BinOp::Eq => Some(operand_value_env(lhs, env) == operand_value_env(rhs, env)),
-            BinOp::Ne => Some(operand_value_env(lhs, env) != operand_value_env(rhs, env)),
+            // Normalize true/false ↔ 1/0 so `nav_open == true` matches a bool
+            // signal (int channel) the same way string `if` conditions already do.
+            BinOp::Eq => Some(boolish_norm(&operand_value_env(lhs, env))
+                == boolish_norm(&operand_value_env(rhs, env))),
+            BinOp::Ne => Some(boolish_norm(&operand_value_env(lhs, env))
+                != boolish_norm(&operand_value_env(rhs, env))),
             BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                 let a = operand_value_env(lhs, env).parse::<f64>().ok()?;
                 let b = operand_value_env(rhs, env).parse::<f64>().ok()?;
@@ -6842,6 +6887,16 @@ fn eval_bool_expr_env(e: &Expr, env: &Env) -> Option<bool> {
         },
         ExprKind::Block(b) => b.tail.as_ref().and_then(|t| eval_bool_expr_env(t, env)),
         _ => None,
+    }
+}
+
+/// Map bool-ish display forms onto one another so `true`/`1` and `false`/`0`
+/// compare equal (bool signals live as int 0/1 in the env).
+fn boolish_norm(s: &str) -> String {
+    match s {
+        "true" | "1" => "1".to_string(),
+        "false" | "0" => "0".to_string(),
+        _ => s.to_string(),
     }
 }
 
@@ -6977,6 +7032,31 @@ fn screen_member(base: &Expr, field: &str) -> Option<String> {
                 std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
             }
         }),
+        _ => None,
+    }
+}
+
+/// Numeric expr against a string [`Env`] (component args, no `Ctx`): literals,
+/// `Window.*` / `Screen.*` / `Platform.*`, arithmetic, and env idents.
+fn eval_f32_env(e: &Expr, env: &Env) -> Option<f32> {
+    match &e.kind {
+        ExprKind::Literal(Literal::Int(i)) => Some(*i as f32),
+        ExprKind::Literal(Literal::Float(f)) => Some(*f as f32),
+        ExprKind::Member { base, field, .. } => {
+            screen_member(base, field).and_then(|s| s.parse::<f32>().ok())
+        }
+        ExprKind::Binary { op, lhs, rhs } => {
+            let a = eval_f32_env(lhs, env)?;
+            let b = eval_f32_env(rhs, env)?;
+            match op {
+                BinOp::Add => Some(a + b),
+                BinOp::Sub => Some(a - b),
+                BinOp::Mul => Some(a * b),
+                BinOp::Div if b != 0.0 => Some(a / b),
+                _ => None,
+            }
+        }
+        ExprKind::Ident(n) => env.get(n).and_then(|v| v.parse::<f32>().ok()),
         _ => None,
     }
 }

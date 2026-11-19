@@ -110,12 +110,8 @@ int UIImage_IsRemoteSource(const char* source) {
     if (!source || !source[0]) return 0;
     if (SDL_strncasecmp(source, "http://", 7) == 0 ||
         SDL_strncasecmp(source, "https://", 8) == 0) return 1;
-#if defined(MOCIDA_WEB)
-    /* Same-origin site assets ("logo.png", "media/x.png", "/fonts/a.ttf")
-       fetch on demand so the WASM build never has to --preload-file them. */
-    if (source[0] == '/') return 1;
-    if (!strchr(source, ':')) return 1;
-#endif
+    /* Web: same-origin "media/x.png" / "/media/x.png" load from MEMFS
+       (listen_boot stages them). Only real http(s) URLs use emscripten_fetch. */
     return 0;
 }
 

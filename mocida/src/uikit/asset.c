@@ -15,11 +15,6 @@ static int BuildCandidates(const char* path,
                            char buf3[ASSET_PATH_BUF],
                            const char* out[3]) {
     if (!path) return 0;
-    // A user-supplied path may not climb out of the asset folder, embed a
-    // null, or point at a device. The loader only accepts a relative name.
-    if (path[0] == '/' || path[0] == '\\') {
-        return 0;
-    }
     for (const char* p = path; *p; p++) {
         if (p[0] == '.' && p[1] == '.' && (p[2] == '/' || p[2] == '\\' || p[2] == '\0')) {
             return 0;
@@ -30,6 +25,23 @@ static int BuildCandidates(const char* path,
     path = UIApp_ResolveBundle(path);
     if (!path) return 0;
     int n = 0;
+
+#if defined(MOCIDA_WEB)
+    /* MEMFS is rooted at "/". Boot stages "/media/x.png" and "media/x.png"
+       (same inode). Absolute site paths must be loadable here — rejecting
+       them forced every Image through emscripten_fetch, which was failing
+       permanently for docs ZoomImages. */
+    if (path[0] == '/' || path[0] == '\\') {
+        out[n++] = path;
+        return n;
+    }
+#else
+    // Desktop: a user-supplied path may not climb out of the asset folder,
+    // embed a null, or point at a device. Prefer relative names.
+    if (path[0] == '/' || path[0] == '\\') {
+        return 0;
+    }
+#endif
 
     // (1) The original path (resolved relative to the CWD).
     out[n++] = path;
