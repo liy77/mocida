@@ -110,8 +110,14 @@ int UIImage_IsRemoteSource(const char* source) {
     if (!source || !source[0]) return 0;
     if (SDL_strncasecmp(source, "http://", 7) == 0 ||
         SDL_strncasecmp(source, "https://", 8) == 0) return 1;
-    /* Web: same-origin "media/x.png" / "/media/x.png" load from MEMFS
-       (listen_boot stages them). Only real http(s) URLs use emscripten_fetch. */
+#if defined(MOCIDA_WEB)
+    /* Same-origin site assets ("media/x.png", "/logo.png"): the render path
+       tries MEMFS first (boot may have staged them). If that misses — first
+       paint races lazy staging — fall back to emscripten_fetch. Without this,
+       ZoomImages stay blank after the fast-boot change. */
+    if (source[0] == '/') return 1;
+    if (!strchr(source, ':')) return 1;
+#endif
     return 0;
 }
 
@@ -411,6 +417,56 @@ static int SDLCALL RemoteJob_Thread(void* ud) {
     return 0;
 }
 
+#if defined(MOCIDA_WEB)
+/* Per-frame decode budget: marketing PNGs decode on the main thread; doing
+   several (or one huge) IMG_Load during scroll freezes the site. One decode
+   per frame, and only if the frame still has headroom. */
+static Uint32 s_webDecodeFrameStartMs = 0;
+static int    s_webDecodeCount = 0;
+enum { UI_WEB_DECODE_BUDGET_MS = 6 };
+
+void UIImage_WebDecodeFrameBegin(void) {
+    s_webDecodeFrameStartMs = SDL_GetTicks();
+    s_webDecodeCount = 0;
+}
+
+/* Read a same-origin path from MEMFS as raw bytes (no decode). Returns 1 and
+   malloc'd *outData on success. Used so boot's lazy stage does not force a
+   sync IMG_Load on the first paint that sees the file. */
+static int UIImage_TryReadMemfsBytes(const char* path, void** outData, size_t* outSize) {
+    if (!path || !outData || !outSize) return 0;
+    *outData = NULL;
+    *outSize = 0;
+    char buf[1024];
+    const char* p = path;
+    if (path[0] != '/') {
+        snprintf(buf, sizeof(buf), "/%s", path);
+        p = buf;
+    }
+    SDL_IOStream* io = SDL_IOFromFile(p, "rb");
+    if (!io) return 0;
+    Sint64 sz = SDL_GetIOSize(io);
+    if (sz <= 0 || sz > 32 * 1024 * 1024) {
+        SDL_CloseIO(io);
+        return 0;
+    }
+    void* data = malloc((size_t)sz);
+    if (!data) {
+        SDL_CloseIO(io);
+        return 0;
+    }
+    size_t got = SDL_ReadIO(io, data, (size_t)sz);
+    SDL_CloseIO(io);
+    if (got != (size_t)sz) {
+        free(data);
+        return 0;
+    }
+    *outData = data;
+    *outSize = (size_t)sz;
+    return 1;
+}
+#endif
+
 void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer) {
     if (!image || !renderer) return;
     RemoteEnsureInit();
@@ -419,15 +475,42 @@ void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer) {
     image->loadState = IMAGE_LOAD_FAILURE;
     return;
 #elif defined(MOCIDA_WEB)
-    typedef struct { void* cookie; } WebJob;
+    /* Hold fetched bytes until a decode slot is free — one RGBA decode per
+       frame (time-budgeted) keeps scroll fluid under MAXIMUM_MEMORY. */
+    typedef struct {
+        void* cookie;
+        void* data;
+        size_t size;
+        int ready;
+        char* url;
+    } WebJob;
     WebJob* job = (WebJob*)image->__download;
     if (!job) {
         job = (WebJob*)calloc(1, sizeof(WebJob));
         if (!job) { image->loadState = IMAGE_LOAD_FAILURE; return; }
         char urlBuf[1024];
         const char* url = UIImage_WebFetchUrl(image->source, urlBuf, sizeof(urlBuf));
+        job->url = _strdup(url);
+        /* Rebuilds (nav drawer, docs topic) remount Images — serve bytes from
+           the process cache so mobile clicks don't re-fetch every time. */
+        if (image->cache && job->url &&
+            RemoteCache_Get(job->url, &job->data, &job->size)) {
+            job->ready = 1;
+            image->__download = job;
+            return;
+        }
+        /* Boot may have staged the file into MEMFS — copy bytes only, decode
+           on a later budgeted pump (never IMG_Load here). */
+        if (UIImage_TryReadMemfsBytes(url, &job->data, &job->size)) {
+            job->ready = 1;
+            if (image->cache && job->url && job->data && job->size)
+                RemoteCache_Put(job->url, job->data, job->size);
+            image->__download = job;
+            return;
+        }
         job->cookie = UIImage_RemoteHttpStart_Web(url);
         if (!job->cookie) {
+            free(job->url);
             free(job);
             image->loadState = IMAGE_LOAD_FAILURE;
             return;
@@ -436,18 +519,44 @@ void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer) {
         return;
     }
 
-    void* data = NULL;
-    size_t size = 0;
-    if (!UIImage_RemoteHttpPoll_Web(job->cookie, &data, &size)) return;
+    if (!job->ready) {
+        void* data = NULL;
+        size_t size = 0;
+        if (!UIImage_RemoteHttpPoll_Web(job->cookie, &data, &size)) return;
+        UIImage_RemoteHttpFree_Web(job->cookie);
+        job->cookie = NULL;
+        job->data = data;
+        job->size = size;
+        job->ready = 1;
+        if (image->cache && job->url && data && size)
+            RemoteCache_Put(job->url, data, size);
+    }
 
-    if (data && size) {
-        SDL_Surface* surf = UIAsset_LoadSurfaceFromMemory(data, size);
+    /* Budget: at most one decode per frame, and only early in the frame. */
+    if (s_webDecodeCount >= 1) return;
+    if (s_webDecodeFrameStartMs != 0 &&
+        (SDL_GetTicks() - s_webDecodeFrameStartMs) > (Uint32)UI_WEB_DECODE_BUDGET_MS) {
+        return;
+    }
+    s_webDecodeCount++;
+
+    if (job->data && job->size) {
+        SDL_Surface* surf = UIAsset_LoadSurfaceFromMemory(job->data, job->size);
+        free(job->data);
+        job->data = NULL;
+        job->size = 0;
         if (surf) {
-            image->__SDL_texture = SDL_CreateTextureFromSurface(renderer, surf);
+            /* Cap keeps wasm heap safe; allow up to 1600 so lightbox ZoomImage
+               2×/3× stays sharp (thumbs still pass a smaller __loadPixels). */
+            int maxEdge = image->__loadPixels > 0 ? image->__loadPixels : 960;
+            if (maxEdge < 320) maxEdge = 320;
+            if (maxEdge > 1600) maxEdge = 1600;
+            image->__SDL_texture =
+                UIAsset_CreateTextureFromSurface(renderer, surf, maxEdge);
             SDL_DestroySurface(surf);
         }
-        free(data);   /* always free the downloaded bytes after decode attempt */
     }
+
     if (image->__SDL_texture) {
         image->loadState = IMAGE_LOAD_SUCCESS;
         SDL_SetTextureScaleMode(image->__SDL_texture,
@@ -456,7 +565,7 @@ void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer) {
         image->loadState = IMAGE_LOAD_FAILURE;
     }
 
-    UIImage_RemoteHttpFree_Web(job->cookie);
+    free(job->url);
     free(job);
     image->__download = NULL;
     return;
@@ -492,7 +601,9 @@ void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer) {
     if (job->ok && job->data && job->size) {
         SDL_Surface* surf = UIAsset_LoadSurfaceFromMemory(job->data, job->size);
         if (surf) {
-            image->__SDL_texture = SDL_CreateTextureFromSurface(renderer, surf);
+            const int maxEdge = image->__loadPixels > 0 ? image->__loadPixels : 0;
+            image->__SDL_texture =
+                UIAsset_CreateTextureFromSurface(renderer, surf, maxEdge);
             SDL_DestroySurface(surf);
         }
         if (image->__SDL_texture) {
@@ -518,10 +629,14 @@ void UIImage_Destroy(UIImage* image) {
            when it finishes (it may keep running, but writes only into its
            own job, never into this freed image). */
 #if defined(MOCIDA_WEB)
-        typedef struct { void* cookie; } WebJob;
+        typedef struct {
+            void* cookie; void* data; size_t size; int ready; char* url;
+        } WebJob;
         WebJob* job = (WebJob*)image->__download;
         image->__download = NULL;
-        UIImage_RemoteHttpFree_Web(job->cookie);
+        if (job->cookie) UIImage_RemoteHttpFree_Web(job->cookie);
+        free(job->data);
+        free(job->url);
         free(job);
 #else
         RemoteJob* job = (RemoteJob*)image->__download;

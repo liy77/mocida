@@ -124,6 +124,7 @@ static void RenderScroll(UIWindow* window, UIWidget* el, UIScroll* s) {
         else clip = (SDL_Rect){ __scPrevClip.x, __scPrevClip.y, 0, 0 };
     }
     SDL_SetRenderClipRect(window->sdlRenderer, &clip);
+    UILogicalClip_Push(viewport.x, viewport.y, viewport.w, viewport.h);
 
     if (s->content) {
         s->content->x = viewport.x - s->scrollX;
@@ -152,6 +153,13 @@ static void RenderScroll(UIWindow* window, UIWidget* el, UIScroll* s) {
                 if (horiz) s->contentW = extent;
                 else       s->contentH = extent;
             }
+            // Cross-axis: a vertical stack of wide rows (docs code lines) must
+            // widen contentW so horizontal Scroll can pan; flowExtent only
+            // tracks the main axis.
+            if (s->content->width && *s->content->width > s->contentW)
+                s->contentW = *s->content->width;
+            if (s->content->height && *s->content->height > s->contentH)
+                s->contentH = *s->content->height;
         } else if (s->content->width && s->content->height) {
             if (*s->content->width  > s->contentW) s->contentW = *s->content->width;
             if (*s->content->height > s->contentH) s->contentH = *s->content->height;
@@ -159,6 +167,7 @@ static void RenderScroll(UIWindow* window, UIWidget* el, UIScroll* s) {
     }
 
     FlushRenderBatch(window->sdlRenderer);
+    UILogicalClip_Pop();
     SDL_SetRenderClipRect(window->sdlRenderer, __scHadClip ? &__scPrevClip : NULL);
 
     // Scrollbar(s) drawn over the content (not clipped), on the trailing edges.

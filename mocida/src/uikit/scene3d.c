@@ -238,6 +238,11 @@ typedef struct {
     float y;
 } SortKey;
 
+typedef struct {
+    int t;
+    float depth;
+} MeshTriKey;
+
 static int CmpSortKey(const void* a, const void* b) {
     const SortKey* ka = (const SortKey*)a;
     const SortKey* kb = (const SortKey*)b;
@@ -245,6 +250,14 @@ static int CmpSortKey(const void* a, const void* b) {
     if (ka->depth > kb->depth) return 1;
     if (ka->y < kb->y) return -1;
     if (ka->y > kb->y) return 1;
+    return 0;
+}
+
+static int CmpMeshTriKey(const void* a, const void* b) {
+    const MeshTriKey* ka = (const MeshTriKey*)a;
+    const MeshTriKey* kb = (const MeshTriKey*)b;
+    if (ka->depth < kb->depth) return -1;
+    if (ka->depth > kb->depth) return 1;
     return 0;
 }
 
@@ -286,7 +299,18 @@ static void AccumLight(const UIScene3D* scene, float x, float y, float z,
 
 static void EnsureSpriteTexture(UISprite3D* sp, SDL_Renderer* r) {
     if (!sp || sp->texture || !sp->source || !r) return;
+#if defined(MOCIDA_WEB)
+    /* Same lazy/downscale path as ZoomImage — full-res sprite PNGs on web
+       spiked heap + hitch on first Scene3D paint. */
+    int edge = (int)ceilf(fmaxf(sp->w, sp->h));
+    if (edge < 64) edge = 64;
+    if (edge > 720) edge = 720;
+    sp->texture = UIAsset_TryLoadTextureSized(r, sp->source, edge);
+    if (!sp->texture)
+        sp->texture = UIAsset_LoadTextureSized(r, sp->source, edge);
+#else
     sp->texture = UIAsset_LoadTexture(r, sp->source);
+#endif
     if (!sp->texture) {
         UI_WARN(UI_CAT_RENDER, "UIScene3D: failed to load '%s'", sp->source);
     }
@@ -376,21 +400,36 @@ void UIScene3D_Render(UIScene3D* scene, SDL_Renderer* renderer,
         }
     }
 
-    /* ---- meshes (flat fill; GPU path later) ---- */
+    /* ---- meshes (painter-sorted flat fill + edge outline) ---- */
     for (int i = 0; i < scene->meshCount; i++) {
         UIMesh3D* m = &scene->meshes[i];
         if (!m->visible || !m->positions) continue;
         float lr, lg, lb;
         AccumLight(scene, m->x, m->y, m->z, &lr, &lg, &lb);
-        Uint8 cr = (Uint8)fminf(255.0f, (float)m->color.r * lr);
-        Uint8 cg = (Uint8)fminf(255.0f, (float)m->color.g * lg);
-        Uint8 cb = (Uint8)fminf(255.0f, (float)m->color.b * lb);
-        Uint8 ca = (Uint8)(m->color.a * opacity * 255.0f);
-        SDL_SetRenderDrawColor(renderer, cr, cg, cb, ca);
+        float fr = fminf(1.0f, ((float)m->color.r / 255.0f) * lr);
+        float fg = fminf(1.0f, ((float)m->color.g / 255.0f) * lg);
+        float fb = fminf(1.0f, ((float)m->color.b / 255.0f) * lb);
+        float fa = m->color.a * opacity;
+        Uint8 er = (Uint8)fminf(255.0f, fr * 0.55f * 255.0f);
+        Uint8 eg = (Uint8)fminf(255.0f, fg * 0.55f * 255.0f);
+        Uint8 eb = (Uint8)fminf(255.0f, fb * 0.55f * 255.0f);
+        Uint8 ea = (Uint8)(fa * 255.0f);
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
         int triCount = m->indexCount > 0 ? m->indexCount / 3
                                          : m->vertexCount / 3;
+        if (triCount <= 0) continue;
+        if (triCount > 256) triCount = 256;
+
+        /* Orbit camera: yaw around Y, pitch around X — applied in view space so
+           dragging Scene3D.yaw/pitch really rotates the solid (not a flat stamp). */
+        const float yawR = cam->yaw * 0.01745329252f;
+        const float pitchR = cam->pitch * 0.01745329252f;
+        const float cy = cosf(yawR), sy = sinf(yawR);
+        const float cp = cosf(pitchR), sp = sinf(pitchR);
+
+        MeshTriKey order[256];
+        int nTri = 0;
         for (int t = 0; t < triCount; t++) {
             uint32_t i0, i1, i2;
             if (m->indices && m->indexCount >= (t + 1) * 3) {
@@ -404,16 +443,80 @@ void UIScene3D_Render(UIScene3D* scene, SDL_Renderer* renderer,
             }
             if ((int)i0 >= m->vertexCount || (int)i1 >= m->vertexCount
                 || (int)i2 >= m->vertexCount) continue;
+            float* p0 = &m->positions[i0 * 3];
+            float* p1 = &m->positions[i1 * 3];
+            float* p2 = &m->positions[i2 * 3];
+            float ax = 0.0f, ay = 0.0f, az = 0.0f;
+            float* verts[3] = { p0, p1, p2 };
+            for (int v = 0; v < 3; v++) {
+                float lx = verts[v][0] * m->scale;
+                float ly = verts[v][1] * m->scale;
+                float lz = verts[v][2] * m->scale;
+                float x1 = lx * cy + lz * sy;
+                float z1 = -lx * sy + lz * cy;
+                float y2 = ly * cp - z1 * sp;
+                float z2 = ly * sp + z1 * cp;
+                ax += x1;
+                ay += y2;
+                az += z2;
+            }
+            order[nTri].t = t;
+            order[nTri].depth = az * (1.0f / 3.0f) + m->z;
+            nTri++;
+            (void)ay;
+            (void)ax;
+        }
+        qsort(order, (size_t)nTri, sizeof(MeshTriKey), CmpMeshTriKey);
+
+        for (int k = 0; k < nTri; k++) {
+            int t = order[k].t;
+            uint32_t i0, i1, i2;
+            if (m->indices && m->indexCount >= (t + 1) * 3) {
+                i0 = m->indices[t * 3 + 0];
+                i1 = m->indices[t * 3 + 1];
+                i2 = m->indices[t * 3 + 2];
+            } else {
+                i0 = (uint32_t)(t * 3 + 0);
+                i1 = (uint32_t)(t * 3 + 1);
+                i2 = (uint32_t)(t * 3 + 2);
+            }
             SDL_FPoint pts[3];
             for (int v = 0; v < 3; v++) {
                 uint32_t idx = (v == 0) ? i0 : (v == 1) ? i1 : i2;
                 float* p = &m->positions[idx * 3];
-                float px = (p[0] * m->scale + m->x - cam->x) * zoom;
-                float py = (p[1] * m->scale + m->y - cam->y) * zoom;
-                py += (p[2] * m->scale + m->z) * parallax * zoom;
+                float lx = p[0] * m->scale;
+                float ly = p[1] * m->scale;
+                float lz = p[2] * m->scale;
+                /* yaw then pitch */
+                float x1 = lx * cy + lz * sy;
+                float z1 = -lx * sy + lz * cy;
+                float y2 = ly * cp - z1 * sp;
+                float z2 = ly * sp + z1 * cp;
+                float wx = x1 + m->x - cam->x;
+                float wy = y2 + m->y - cam->y;
+                float wz = z2 + m->z;
+                float px = wx * zoom;
+                float py = wy * zoom + wz * parallax * zoom;
                 pts[v].x = originX + px;
                 pts[v].y = originY + py;
             }
+            /* Face shade from average depth — solid props read in 2.5D. */
+            float shade = 0.70f + 0.30f * (0.5f + 0.5f * tanhf(order[k].depth * 0.025f));
+            SDL_FColor face = {
+                fminf(1.0f, fr * shade),
+                fminf(1.0f, fg * shade),
+                fminf(1.0f, fb * shade),
+                fa
+            };
+            SDL_Vertex gv[3];
+            for (int v = 0; v < 3; v++) {
+                gv[v].position = pts[v];
+                gv[v].color = face;
+                gv[v].tex_coord = (SDL_FPoint){ 0.0f, 0.0f };
+            }
+            SDL_RenderGeometry(renderer, NULL, gv, 3, NULL, 0);
+
+            SDL_SetRenderDrawColor(renderer, er, eg, eb, ea);
             SDL_RenderLine(renderer, pts[0].x, pts[0].y, pts[1].x, pts[1].y);
             SDL_RenderLine(renderer, pts[1].x, pts[1].y, pts[2].x, pts[2].y);
             SDL_RenderLine(renderer, pts[2].x, pts[2].y, pts[0].x, pts[0].y);

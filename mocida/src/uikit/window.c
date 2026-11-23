@@ -23,6 +23,7 @@
 #include "canvas_internal.h"
 #include "device_simulator_internal.h"
 #include <uikit/asset.h>
+#include <uikit/image.h>
 #include <uikit/overlay.h>
 #include <uikit/debug.h>
 #include <uikit/perf.h>
@@ -185,6 +186,39 @@ static Uint64 g_shadowCacheTick = 0;
 // Pre-allocated frequently used rectangles
 static SDL_FRect g_tempRect1 = {0};
 static SDL_FRect g_tempRect2 = {0};
+
+// Logical-space clip stack (widget coordinates). GLES2/web has been seen
+// ignoring SDL_SetRenderClipRect for textured glyph blits, so Text trims
+// src/dst against this stack — same numbers Scroll/Stack push.
+#define UI_LOGICAL_CLIP_MAX 16
+static SDL_FRect g_logicalClip[UI_LOGICAL_CLIP_MAX];
+static int       g_logicalClipDepth = 0;
+
+static void UILogicalClip_Push(float x, float y, float w, float h) {
+    if (g_logicalClipDepth >= UI_LOGICAL_CLIP_MAX) return;
+    SDL_FRect r = { x, y, w, h };
+    if (g_logicalClipDepth > 0) {
+        const SDL_FRect* p = &g_logicalClip[g_logicalClipDepth - 1];
+        const float x0 = SDL_max(r.x, p->x);
+        const float y0 = SDL_max(r.y, p->y);
+        const float x1 = SDL_min(r.x + r.w, p->x + p->w);
+        const float y1 = SDL_min(r.y + r.h, p->y + p->h);
+        r.x = x0; r.y = y0;
+        r.w = (x1 > x0) ? (x1 - x0) : 0.0f;
+        r.h = (y1 > y0) ? (y1 - y0) : 0.0f;
+    }
+    g_logicalClip[g_logicalClipDepth++] = r;
+}
+
+static void UILogicalClip_Pop(void) {
+    if (g_logicalClipDepth > 0) g_logicalClipDepth--;
+}
+
+static int UILogicalClip_Active(SDL_FRect* out) {
+    if (g_logicalClipDepth <= 0) return 0;
+    if (out) *out = g_logicalClip[g_logicalClipDepth - 1];
+    return 1;
+}
 
 // Forward declarations to fix compilation errors
 static SDL_Texture* GetCachedCircleTexture(SDL_Renderer* renderer, float diameter);
@@ -472,7 +506,13 @@ static void SyncTextSupersample(UIWindow* window, float density) {
     if (s_lightProfile) return;
     int want = (int)SDL_ceilf(density - 0.001f);
     if (want < 2) want = 2;
+#if defined(MOCIDA_WEB)
+    /* Phones often report 3× DPR; rasterizing every glyph at 3× during scroll
+       spikes main-thread time. Cap at 2× — presentation still scales cleanly. */
+    if (want > 2) want = 2;
+#else
     if (want > 4) want = 4;
+#endif
     if (want == g_textSS) return;
     g_textSS = want;
     if (window && window->children) {
@@ -639,6 +679,10 @@ int UIWindow_Render(UIWindow* window) {
     SDL_RenderClear(window->sdlRenderer);
 
     // Render all UI elements
+    g_logicalClipDepth = 0;
+#if defined(MOCIDA_WEB)
+    UIImage_WebDecodeFrameBegin();
+#endif
     if (window->children) {
         UIChildren_SortByZ(window->children);
         
@@ -648,6 +692,7 @@ int UIWindow_Render(UIWindow* window) {
 
         FlushRenderBatch(window->sdlRenderer);
     }
+    g_logicalClipDepth = 0;
 
 
     if (needsOffscreen) {

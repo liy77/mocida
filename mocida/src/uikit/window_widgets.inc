@@ -42,6 +42,35 @@ static void RenderWidget_Stack(UIWindow* window, UIWidget* el,
                                           (int)s->borderWidth, borderC);
             }
         }
+        // `clip: true` — scissor children to this stack's box (docs code blocks,
+        // overflow panels). Mirrors RenderScroll: flush, intersect, restore.
+        const int __stClip = el->clipChildren && el->width && el->height
+            && *el->width > 0.0f && *el->height > 0.0f;
+        bool __stHadClip = false;
+        SDL_Rect __stPrevClip = {0, 0, 0, 0};
+        if (__stClip) {
+            FlushRenderBatch(window->sdlRenderer);
+            __stHadClip = SDL_RenderClipEnabled(window->sdlRenderer);
+            if (__stHadClip) SDL_GetRenderClipRect(window->sdlRenderer, &__stPrevClip);
+            SDL_Rect clip = {
+                (int)el->x, (int)el->y,
+                (int)ceilf(*el->width), (int)ceilf(*el->height)
+            };
+            if (__stHadClip) {
+                SDL_Rect isect;
+                if (SDL_GetRectIntersection(&clip, &__stPrevClip, &isect)) clip = isect;
+                else clip = (SDL_Rect){ __stPrevClip.x, __stPrevClip.y, 0, 0 };
+            }
+            SDL_SetRenderClipRect(window->sdlRenderer, &clip);
+            // Inset by border so AA glyph edges stay inside the stroked frame.
+            {
+                const float bw = (s->borderWidth > 0.0f) ? s->borderWidth : 0.0f;
+                const float inset = bw + 1.0f;
+                UILogicalClip_Push(el->x + inset, el->y + inset,
+                                   SDL_max(0.0f, *el->width  - 2.0f * inset),
+                                   SDL_max(0.0f, *el->height - 2.0f * inset));
+            }
+        }
         // Cross-axis extents (inside padding) for `align` (center/end).
         const float innerW = (el->width  ? *el->width  : 0.0f) - s->paddingLeft - s->paddingRight;
         const float innerH = (el->height ? *el->height : 0.0f) - s->paddingTop  - s->paddingBottom;
@@ -136,6 +165,11 @@ static void RenderWidget_Stack(UIWindow* window, UIWidget* el,
             ? flowEnd + ((s->orientation == UI_STACK_HORIZONTAL) ? s->paddingRight : s->paddingBottom)
             : 0.0f;
         (void)shrunk;
+        if (__stClip) {
+            FlushRenderBatch(window->sdlRenderer);
+            UILogicalClip_Pop();
+            SDL_SetRenderClipRect(window->sdlRenderer, __stHadClip ? &__stPrevClip : NULL);
+        }
 }
 
 // Glass: a styled container. Where the OS provides a native region backdrop
@@ -632,6 +666,25 @@ static void RenderWidget_Rectangle(UIWindow* window, UIWidget* el,
         if (rect->children && ((UIChildren*)rect->children)->count > 0) {
             UIChildren* kids = (UIChildren*)rect->children;
             UIChildren_SortByZ(kids);
+            const int __rcClip = el->clipChildren && el->width && el->height
+                && *el->width > 0.0f && *el->height > 0.0f;
+            bool __rcHadClip = false;
+            SDL_Rect __rcPrevClip = {0, 0, 0, 0};
+            if (__rcClip) {
+                FlushRenderBatch(window->sdlRenderer);
+                __rcHadClip = SDL_RenderClipEnabled(window->sdlRenderer);
+                if (__rcHadClip) SDL_GetRenderClipRect(window->sdlRenderer, &__rcPrevClip);
+                SDL_Rect clip = {
+                    (int)el->x, (int)el->y,
+                    (int)ceilf(*el->width), (int)ceilf(*el->height)
+                };
+                if (__rcHadClip) {
+                    SDL_Rect isect;
+                    if (SDL_GetRectIntersection(&clip, &__rcPrevClip, &isect)) clip = isect;
+                    else clip = (SDL_Rect){ __rcPrevClip.x, __rcPrevClip.y, 0, 0 };
+                }
+                SDL_SetRenderClipRect(window->sdlRenderer, &clip);
+            }
             float cursorX = el->x + rect->paddingLeft;
             float cursorY = el->y + rect->paddingTop;
             for (int i = 0; i < kids->count; i++) {
@@ -645,6 +698,10 @@ static void RenderWidget_Rectangle(UIWindow* window, UIWidget* el,
                 item->y = cursorY;
                 RenderSingleWidget(window, item);
                 cursorY += ih + item->marginBottom + rect->gap;
+            }
+            if (__rcClip) {
+                FlushRenderBatch(window->sdlRenderer);
+                SDL_SetRenderClipRect(window->sdlRenderer, __rcHadClip ? &__rcPrevClip : NULL);
             }
         }
 }
@@ -1344,15 +1401,45 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
         g_tempRect2.w = txw;
         g_tempRect2.h = txh;
 
+        // Trim glyph blit to the logical clip stack (Scroll / clip:true).
+        // Does not use SDL_GetRenderClipRect — that path disagrees with
+        // render-scale on web and previously corrupted every glyph.
+        SDL_FRect srcBlit = srcGlyph;
+        {
+            SDL_FRect lc;
+            if (UILogicalClip_Active(&lc) && lc.w > 0.0f && lc.h > 0.0f) {
+                const float x0 = SDL_max(g_tempRect2.x, lc.x);
+                const float y0 = SDL_max(g_tempRect2.y, lc.y);
+                const float x1 = SDL_min(g_tempRect2.x + g_tempRect2.w, lc.x + lc.w);
+                const float y1 = SDL_min(g_tempRect2.y + g_tempRect2.h, lc.y + lc.h);
+                if (x1 <= x0 || y1 <= y0) {
+                    SDL_SetTextureAlphaMod(twid->__SDL_textTexture, 255);
+                    return;
+                }
+                // Scale factor if FIT shrunk the dst relative to src.
+                const float sx = (srcGlyph.w > 0.0f) ? (g_tempRect2.w / srcGlyph.w) : 1.0f;
+                const float sy = (srcGlyph.h > 0.0f) ? (g_tempRect2.h / srcGlyph.h) : 1.0f;
+                const float dx = x0 - g_tempRect2.x;
+                const float dy = y0 - g_tempRect2.y;
+                srcBlit.x = srcGlyph.x + (sx > 0.0f ? dx / sx : 0.0f);
+                srcBlit.y = srcGlyph.y + (sy > 0.0f ? dy / sy : 0.0f);
+                srcBlit.w = (sx > 0.0f) ? ((x1 - x0) / sx) : 0.0f;
+                srcBlit.h = (sy > 0.0f) ? ((y1 - y0) / sy) : 0.0f;
+                g_tempRect2.x = x0;
+                g_tempRect2.y = y0;
+                g_tempRect2.w = x1 - x0;
+                g_tempRect2.h = y1 - y0;
+            }
+        }
+
         if (twid->hasGradient && el->rotation == 0.0f) {
             // Gradient fill: draw the (white) glyph texture as a textured quad
             // whose vertex colors carry the 2-stop gradient. SDL multiplies the
             // per-vertex color by the sampled texel, so white glyphs take the
             // interpolated gradient color and the glyph alpha masks it.
-            // UV coords map to the glyph-only region of the padded texture
-            // (same as srcGlyph above), so the sampler stays inside the ink.
-            const float u0 = pad_px / raw_w, u1 = 1.0f - u0;
-            const float v0 = pad_px / raw_h, v1 = 1.0f - v0;
+            // UV coords map to the (possibly clipped) glyph region.
+            const float u0 = srcBlit.x / raw_w, u1 = (srcBlit.x + srcBlit.w) / raw_w;
+            const float v0 = srcBlit.y / raw_h, v1 = (srcBlit.y + srcBlit.h) / raw_h;
             const float gx0 = g_tempRect2.x,            gy0 = g_tempRect2.y;
             const float gx1 = g_tempRect2.x + g_tempRect2.w;
             const float gy1 = g_tempRect2.y + g_tempRect2.h;
@@ -1381,11 +1468,11 @@ static void RenderWidget_Text(UIWindow* window, UIWidget* el,
         } else if (el->rotation != 0.0f) {
             SDL_FPoint pivot = { g_tempRect2.w * 0.5f, g_tempRect2.h * 0.5f };
             SDL_RenderTextureRotated(window->sdlRenderer, twid->__SDL_textTexture,
-                                     &srcGlyph, &g_tempRect2,
+                                     &srcBlit, &g_tempRect2,
                                      (double)el->rotation, &pivot, SDL_FLIP_NONE);
         } else {
             SDL_RenderTexture(window->sdlRenderer, twid->__SDL_textTexture,
-                              &srcGlyph, &g_tempRect2);
+                              &srcBlit, &g_tempRect2);
         }
         // Reset alpha mod so subsequent users of the same texture aren't
         // affected by our opacity.
@@ -1515,40 +1602,57 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
         // Rasterise at draw size (device pixels) so icons/previews stay crisp.
         const int px = (int)ceilf(SDL_max(*el->width, *el->height) * g_drawDensity);
 #if defined(MOCIDA_WEB)
-        /* Boot stages screenshots into MEMFS after first paint. A prior HTTP
-           miss must not stick forever as FAILURE — retry local MEMFS cheaply. */
-        if (!img->__SDL_texture && img->loadState == IMAGE_LOAD_FAILURE &&
-            UIImage_IsRemoteSource(img->source) && !img->__download) {
-            img->__SDL_texture = UIAsset_LoadTextureSized(
-                window->sdlRenderer, img->source, px);
-            if (img->__SDL_texture) {
-                img->loadState = IMAGE_LOAD_SUCCESS;
-                SDL_SetTextureScaleMode(img->__SDL_texture,
-                    img->antialiasing ? SDL_SCALEMODE_LINEAR
-                                      : SDL_SCALEMODE_NEAREST);
-            }
-        }
+        /* Cap draw-size decode on web — marketing PNGs are huge; keep decode
+           cheap enough that one-per-frame stays under the scroll budget. */
+        /* Thumbs stay modest; lightbox / large ZoomImages need up to ~1600
+           device px so 2×/3× pan stays sharp on phone DPR. */
+        img->__loadPixels = px > 0 ? px : 960;
+        if (img->__loadPixels > 1600) img->__loadPixels = 1600;
+#else
+        img->__loadPixels = px > 0 ? px : 1280;
 #endif
-        if (!img->__SDL_texture && img->loadState != IMAGE_LOAD_FAILURE) {
-            if (UIImage_IsRemoteSource(img->source)) {
-                // Web marks relative "media/x.png" as remote (emscripten_fetch).
-                // Boot already stages those into MEMFS — try sync local first so
-                // docs ZoomImages paint immediately instead of spinning forever
-                // on a stalled fetch. Fall back to HTTP only when MEMFS misses.
-                if (!img->__download) {
-                    img->__SDL_texture = UIAsset_LoadTextureSized(
-                        window->sdlRenderer, img->source, px);
-                    if (img->__SDL_texture) {
-                        img->loadState = IMAGE_LOAD_SUCCESS;
-                        SDL_SetTextureScaleMode(img->__SDL_texture,
-                            img->antialiasing ? SDL_SCALEMODE_LINEAR
-                                              : SDL_SCALEMODE_NEAREST);
-                    } else {
-                        UIImage_PumpRemote(img, window->sdlRenderer);
+#if defined(MOCIDA_WEB)
+        /* 100% lazy by default: never sync-decode from MEMFS on the render
+           path (that froze scroll when boot staged screenshots). Only start
+           fetch/decode when near the visible window AND (if nested in a
+           Scroll) the active logical clip — so below-fold shots inside a
+           tall page Scroll do not decode until the user pans to them. */
+        {
+            const float margin = 96.0f;
+            float vx0 = -margin, vy0 = -margin;
+            float vx1 = (float)window->width + margin;
+            float vy1 = (float)window->height + margin;
+            SDL_FRect lc;
+            if (UILogicalClip_Active(&lc) && lc.w > 0.0f && lc.h > 0.0f) {
+                vx0 = lc.x - margin;
+                vy0 = lc.y - margin;
+                vx1 = lc.x + lc.w + margin;
+                vy1 = lc.y + lc.h + margin;
+            }
+            const float x0 = el->x, y0 = el->y;
+            const float x1 = el->x + *el->width, y1 = el->y + *el->height;
+            const int nearView =
+                (x1 > vx0) && (y1 > vy0) && (x0 < vx1) && (y0 < vy1);
+            /* Start loads only near the viewport; always finish in-flight jobs. */
+            if (!img->__SDL_texture && (nearView || img->__download)) {
+                if (nearView && img->loadState == IMAGE_LOAD_FAILURE &&
+                    !img->__download) {
+                    /* Soft retry after a prior miss (boot race) — pump only. */
+                    const Uint32 now = SDL_GetTicks();
+                    if (now - img->__memfsRetryMs >= 400u) {
+                        img->__memfsRetryMs = now;
+                        img->loadState = IMAGE_LOAD_IN_PROGRESS;
                     }
-                } else {
+                }
+                if (img->loadState != IMAGE_LOAD_FAILURE || img->__download) {
                     UIImage_PumpRemote(img, window->sdlRenderer);
                 }
+            }
+        }
+#else
+        if (!img->__SDL_texture && img->loadState != IMAGE_LOAD_FAILURE) {
+            if (UIImage_IsRemoteSource(img->source)) {
+                UIImage_PumpRemote(img, window->sdlRenderer);
             } else {
                 img->__SDL_texture = UIAsset_LoadTextureSized(
                     window->sdlRenderer, img->source, px);
@@ -1558,9 +1662,11 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
                         img->antialiasing ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
                 } else {
                     img->loadState = IMAGE_LOAD_FAILURE;
+                    img->__memfsRetryMs = SDL_GetTicks();
                 }
             }
         }
+#endif
 
         SDL_FRect bounds = { el->x, el->y, *el->width, *el->height };
         ApplyMargins(&bounds, img->marginLeft, img->marginTop,
@@ -1689,7 +1795,7 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
             }
             default: dst = bounds; break;
         }
-        const int wantRound = (img->radius > 0.0f);
+        int wantRound = (img->radius > 0.0f);
         const int wantBorder = (img->borderWidth > 0.0f);
 
         // Porter-Duff DST_IN: dst' = dst * src_alpha (both color + alpha).
@@ -1742,6 +1848,38 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
             SDL_SetTextureBlendMode(scratch, SDL_BLENDMODE_BLEND);
             SDL_Texture* prevTarget = SDL_GetRenderTarget(window->sdlRenderer);
 
+            SDL_FRect localDst = { dst.x - bounds.x, dst.y - bounds.y, dst.w, dst.h };
+            SDL_FRect maskRect = { 0, 0, bounds.w, bounds.h };
+            const UIColor white = { 255, 255, 255, 1.0f };
+
+#if defined(MOCIDA_WEB)
+            /* GLES2: DST_IN custom blends often yield a black thumb. Build the
+               rounded plate as white first, then MODULATE the photo onto it —
+               MOD is widely supported and keeps corners transparent. */
+            SDL_SetRenderTarget(window->sdlRenderer, scratch);
+            SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_NONE);
+            SDL_SetRenderDrawColor(window->sdlRenderer, 0, 0, 0, 0);
+            SDL_RenderClear(window->sdlRenderer);
+            SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_BLEND);
+            DrawRoundedRectFill(window->sdlRenderer, maskRect, white, img->radius);
+            SDL_SetTextureBlendMode(img->__SDL_texture, SDL_BLENDMODE_MOD);
+            if (useClipForOverflow) {
+                SDL_Rect clipLocal = { 0, 0, tw, th };
+                SDL_SetRenderClipRect(window->sdlRenderer, &clipLocal);
+            }
+            if (el->rotation != 0.0f) {
+                SDL_FPoint pivot = { localDst.w * 0.5f, localDst.h * 0.5f };
+                SDL_RenderTextureRotated(window->sdlRenderer, img->__SDL_texture,
+                                         NULL, &localDst,
+                                         (double)el->rotation, &pivot, SDL_FLIP_NONE);
+            } else {
+                SDL_RenderTexture(window->sdlRenderer, img->__SDL_texture, NULL, &localDst);
+            }
+            if (useClipForOverflow) {
+                SDL_SetRenderClipRect(window->sdlRenderer, NULL);
+            }
+            SDL_SetTextureBlendMode(img->__SDL_texture, SDL_BLENDMODE_BLEND);
+#else
             // (1) Image -> scratch.
             SDL_SetRenderTarget(window->sdlRenderer, scratch);
             SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_NONE);
@@ -1749,7 +1887,6 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
             SDL_RenderClear(window->sdlRenderer);
             SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_BLEND);
 
-            SDL_FRect localDst = { dst.x - bounds.x, dst.y - bounds.y, dst.w, dst.h };
             if (useClipForOverflow) {
                 SDL_Rect clipLocal = { 0, 0, tw, th };
                 SDL_SetRenderClipRect(window->sdlRenderer, &clipLocal);
@@ -1766,9 +1903,7 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
                 SDL_SetRenderClipRect(window->sdlRenderer, NULL);
             }
 
-            // (2) Rounded mask -> a separate texture, drawn with normal
-            // blending so DrawRoundedRectFill's internal AA corner
-            // textures composite correctly.
+            // (2) Rounded mask -> DST_IN (desktop GL/Metal/D3D).
             SDL_Texture* mask = SDL_CreateTexture(window->sdlRenderer,
                 SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, tw, th);
             if (mask) {
@@ -1779,13 +1914,8 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
                 SDL_RenderClear(window->sdlRenderer);
                 SDL_SetRenderDrawBlendMode(window->sdlRenderer, SDL_BLENDMODE_BLEND);
 
-                SDL_FRect maskRect = { 0, 0, bounds.w, bounds.h };
-                const UIColor white = { 255, 255, 255, 1.0f };
                 DrawRoundedRectFill(window->sdlRenderer, maskRect, white, img->radius);
 
-                // (3) Apply mask to scratch via DST_IN. SetTextureBlend
-                // controls how the *texture* blends onto the render
-                // target, so SDL's batched texture path honours it.
                 SDL_SetRenderTarget(window->sdlRenderer, scratch);
                 SDL_SetTextureBlendMode(mask, kDstIn);
                 SDL_FRect full = { 0, 0, bounds.w, bounds.h };
@@ -1793,6 +1923,7 @@ static void RenderWidget_Image(UIWindow* window, UIWidget* el,
 
                 SDL_DestroyTexture(mask);
             }
+#endif
 
             // (4) Border ring on top of the masked image (still in scratch).
             if (wantBorder) {
@@ -4521,8 +4652,11 @@ static void RenderWidget_NavBar(UIWindow* window, UIWidget* el,
     float x = el->x + pad;
     float cy = el->y + H * 0.5f;
 
-    if (nb->brandLogo && nb->brandLogo[0] && !nb->logoTex) {
+    /* Try the brand logo once. A missing file must NOT retry every frame —
+       that spammed UIAsset_LoadTexture errors and froze the web boot bar. */
+    if (nb->brandLogo && nb->brandLogo[0] && !nb->logoTex && !nb->logoLoadFailed) {
         nb->logoTex = UIAsset_LoadTexture(window->sdlRenderer, nb->brandLogo);
+        if (!nb->logoTex) nb->logoLoadFailed = 1;
     }
     if (nb->logoTex) {
         ChromeBlitTex(window->sdlRenderer, nb->logoTex,

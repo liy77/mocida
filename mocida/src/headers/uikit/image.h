@@ -85,6 +85,11 @@ typedef struct {
     void* __download;          /**< Opaque in-flight remote-download job, or NULL.
                                     Set while an http(s) source is being fetched on a
                                     background thread; cleared once consumed. */
+    Uint32 __memfsRetryMs;     /**< Web: last MEMFS retry tick after a miss (boot
+                                    lazy-stages screenshots after first paint). */
+    int    __loadPixels;       /**< Preferred long-edge decode size (device px).
+                                    Set by the renderer before PumpRemote so
+                                    remote bitmaps downscale like MEMFS loads. */
 } UIImage;
 
 /**
@@ -207,6 +212,15 @@ int UIImage_GetTextureSize(const UIImage* image, float* w, float* h);
  * @param renderer Active SDL renderer (used to create the texture).
  */
 void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer);
+
+#if defined(MOCIDA_WEB)
+/**
+ * Call once at the start of each UI frame on web. Resets the per-frame image
+ * decode budget so at most one (time-capped) PNG→texture conversion runs per
+ * frame — keeps scroll/orbit fluid while screenshots stream in lazily.
+ */
+void UIImage_WebDecodeFrameBegin(void);
+#endif
 
 /**
  * Drops every entry from the process-wide remote-image cache, freeing the
