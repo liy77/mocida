@@ -149,6 +149,73 @@ impl Scene3D {
         Ok(unsafe { sys::UIScene3D_LightCount(self.ptr) as usize - 1 })
     }
 
+    /// Add a triangle mesh from interleaved `xyz` positions.
+    ///
+    /// `positions.len()` must be `vertex_count * 3`. When `indices` is
+    /// `None` or empty the vertices are treated as a triangle list.
+    pub fn add_mesh(&mut self, positions: &[f32], indices: Option<&[u32]>) -> Result<usize> {
+        if positions.len() < 9 || positions.len() % 3 != 0 {
+            return Err(Error::Null("UIScene3D_AddMesh"));
+        }
+        let vertex_count = (positions.len() / 3) as i32;
+        let (idx_ptr, idx_count) = match indices {
+            Some(idx) if !idx.is_empty() => (idx.as_ptr(), idx.len() as i32),
+            _ => (ptr::null(), 0),
+        };
+        let m = unsafe {
+            sys::UIScene3D_AddMesh(self.ptr, positions.as_ptr(), vertex_count, idx_ptr, idx_count)
+        };
+        if m.is_null() {
+            return Err(Error::Null("UIScene3D_AddMesh"));
+        }
+        Ok(unsafe { sys::UIScene3D_MeshCount(self.ptr) as usize - 1 })
+    }
+
+    /// World position of a mesh by index.
+    pub fn mesh_position(&mut self, index: usize, x: f32, y: f32, z: f32) -> &mut Self {
+        let m = unsafe { sys::UIScene3D_MeshAt(self.ptr, index as i32) };
+        if !m.is_null() {
+            unsafe {
+                (*m).x = x;
+                (*m).y = y;
+                (*m).z = z;
+            }
+        }
+        self
+    }
+
+    /// Uniform scale of a mesh by index.
+    pub fn mesh_scale(&mut self, index: usize, scale: f32) -> &mut Self {
+        let m = unsafe { sys::UIScene3D_MeshAt(self.ptr, index as i32) };
+        if !m.is_null() {
+            unsafe { (*m).scale = scale };
+        }
+        self
+    }
+
+    /// Flat fill / wire tint of a mesh by index.
+    pub fn mesh_color(&mut self, index: usize, color: Color) -> &mut Self {
+        let m = unsafe { sys::UIScene3D_MeshAt(self.ptr, index as i32) };
+        if !m.is_null() {
+            unsafe { (*m).color = color.into_raw() };
+        }
+        self
+    }
+
+    /// Show or hide a mesh by index.
+    pub fn mesh_visible(&mut self, index: usize, visible: bool) -> &mut Self {
+        let m = unsafe { sys::UIScene3D_MeshAt(self.ptr, index as i32) };
+        if !m.is_null() {
+            unsafe { (*m).visible = visible as i32 };
+        }
+        self
+    }
+
+    /// Number of meshes currently in the scene.
+    pub fn mesh_count(&self) -> usize {
+        unsafe { sys::UIScene3D_MeshCount(self.ptr) as usize }
+    }
+
     /// Camera yaw / pitch / zoom / position.
     pub fn camera_look(&mut self, x: f32, y: f32, z: f32, yaw: f32, pitch: f32, zoom: f32) {
         let cam = unsafe { sys::UIScene3D_Camera(self.ptr) };

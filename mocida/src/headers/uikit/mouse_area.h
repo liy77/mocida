@@ -174,6 +174,14 @@ void UIMouseArea_DispatchMouseMotion(UIChildren* children, float x, float y);
 void UIMouseArea_DispatchMouseDown  (UIChildren* children, float x, float y, int button);
 void UIMouseArea_DispatchMouseUp    (UIChildren* children, float x, float y, int button);
 
+/** True if any enabled MouseArea is pressed and draggable — Scroll content-pan
+ *  must yield so orbit / splitter / dragXSignal gestures aren't stolen. */
+int  UIMouseArea_AnyPressedDraggable(UIChildren* children);
+
+/** True if (x,y) hits an enabled draggable MouseArea — use on press so Scroll
+ *  never arms content-pan over an orbit / drag surface. */
+int  UIMouseArea_DraggableContains(UIChildren* children, float x, float y);
+
 /* On mouse-up: if an internal drag is active, find the topmost drop target whose
  * bounds contain (x,y) and fire its onDrop with the active payload. Returns 1 if
  * a target handled it. Always call UIMouseArea_ClearDrag() afterwards. */

@@ -427,6 +427,7 @@ UINavBar* UINavBar_SetBrand(UINavBar* nb, const char* title, const char* logo) {
     free(nb->brandLogo);
     if (nb->logoTex) { SDL_DestroyTexture(nb->logoTex); nb->logoTex = NULL; }
     if (nb->brandTex) { SDL_DestroyTexture(nb->brandTex); nb->brandTex = NULL; }
+    nb->logoLoadFailed = 0;
     nb->brandLenCached = -1;
     nb->brandTitle = ChromeDup(title);
     nb->brandLogo = ChromeDup(logo);

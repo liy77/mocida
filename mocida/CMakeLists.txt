@@ -320,6 +320,8 @@ file(GLOB_RECURSE MOCIDA_SOURCES_CXX "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/*.cp
 # Web-only sources (Emscripten headers) must not be compiled on desktop.
 # They are added back explicitly below when MOCIDA_WEB is ON.
 list(FILTER MOCIDA_SOURCES EXCLUDE REGEX "_web\\.c$")
+# sfsymbol_stub.c is linked only on non-Apple (Apple uses sfsymbol_cocoa.mm).
+list(FILTER MOCIDA_SOURCES EXCLUDE REGEX "sfsymbol_stub\\.c$")
 
 # macOS: the WKWebView backend (webview_cocoa.mm) is Objective-C++. The
 # globs above only catch .c/.cpp, so it's added explicitly. OBJCXX must
@@ -364,11 +366,23 @@ if(APPLE)
         # which AppKit refreshes synchronously. See cursor_cocoa.mm.
         list(APPEND MOCIDA_SOURCES_OBJCXX
             "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/cursor_cocoa.mm")
+        # SF Symbols (`sf://name`) via AppKit NSImage systemSymbolName.
+        list(APPEND MOCIDA_SOURCES_OBJCXX
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/sfsymbol_cocoa.mm")
         if(NOT MOCIDA_WEB)
             list(APPEND MOCIDA_SOURCES_OBJCXX
                 "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/metalfx.mm")
         endif()
     endif()
+    # iOS: same SF Symbol loader (UIImage systemImageNamed).
+    if(MOCIDA_IOS)
+        list(APPEND MOCIDA_SOURCES_OBJCXX
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/sfsymbol_cocoa.mm")
+    endif()
+else()
+    # Non-Apple: sf:// returns NULL (hosts should ship PNG fallbacks).
+    list(APPEND MOCIDA_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/uikit/sfsymbol_stub.c")
 endif()
 
 # winmain.c is the executable-side entry-point shim that delegates
@@ -406,8 +420,8 @@ if(MOCIDA_WEB)
         "-sFETCH=1"
         "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
         "-sALLOW_MEMORY_GROWTH=1"
-        "-sINITIAL_MEMORY=64MB"
-        "-sMAXIMUM_MEMORY=256MB"
+        "-sINITIAL_MEMORY=128MB"
+        "-sMAXIMUM_MEMORY=512MB"
         "-fwasm-exceptions"
         "-sSUPPORT_LONGJMP=wasm")
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets)

@@ -68,6 +68,7 @@ pub mod file_dialog;
 pub mod file_drop;
 pub mod gesture;
 pub mod glass;
+pub mod icon;
 pub mod image;
 pub mod input;
 pub mod menu_bar;
@@ -122,6 +123,7 @@ pub use glass::{
     set_glass_blur_scale, set_glass_enabled, set_glass_tint_scale, BackdropMaterial, Glass,
     GlassThickness, VibrancyState,
 };
+pub use icon::Icon;
 pub use image::{FillMode, Image, ImageLoadState};
 pub use mouse_area::{MouseArea, MouseAreaEvent, MouseEvent};
 pub use overlay::OverlayFlag;

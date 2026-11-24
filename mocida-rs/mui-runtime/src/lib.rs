@@ -1664,6 +1664,7 @@ fn build_element(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wid
             "ProgressBar" => build_progressbar(ctx, el, layout)?,
             "Spinner" => build_spinner(ctx, el, layout)?,
             "Image" => build_image(ctx, el, layout)?,
+            "Icon" => build_icon(ctx, el, layout)?,
             "Video" => build_video(ctx, el, layout)?,
             "Canvas" if find_prop(el, "tabs").is_none() && id_name(el).is_some() => {
                 build_painted_canvas(ctx, el, layout)?
@@ -1760,12 +1761,15 @@ fn is_builtin(name: &str) -> bool {
             | "ProgressBar"
             | "Spinner"
             | "Image"
+            | "Icon"
             | "Video"
             | "Canvas"
             | "TabBarCanvas"
             | "Scene3D"
             | "Scene25D"
             | "Sprite3D"
+            | "Mesh3D"
+            | "Mesh"
             | "PointLight"
             | "ShaderPass"
             | "WebView"
@@ -4275,6 +4279,77 @@ fn fill_mode_from(name: Option<&str>) -> FillMode {
     }
 }
 
+/// `Icon("play.fill", size:, tint:, fallback:)` — SF Symbol **on Apple only**,
+/// PNG / `mocida://` elsewhere.
+///
+/// - Positional / `name:` → SF name (Apple) or built-in / `fallback:` PNG map.
+/// - `fallback:` / `image:` → used on non-Apple (and when name is already a path).
+/// - `glyph:` + `fontFamily:` → Text glyph (all platforms; not SF Symbols).
+///
+/// Defaults to a square `size:` (or `width:`/`height:`), tint white.
+fn build_icon(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
+    use mocida::Icon;
+
+    let size = dim_prop(ctx, el, "size")
+        .or_else(|| dim_prop(ctx, el, "width"))
+        .or_else(|| dim_prop(ctx, el, "height"))
+        .unwrap_or(18.0);
+    let w = dim_prop(ctx, el, "width").unwrap_or(size);
+    let h = dim_prop(ctx, el, "height").unwrap_or(size);
+    let tint = style::color_prop(el, "tint")
+        .or_else(|| style::color_prop(el, "color"))
+        .map(to_color)
+        .unwrap_or(Color::WHITE);
+
+    if let Some(glyph) = prop_string_value(ctx, el, "glyph").filter(|s| !s.is_empty()) {
+        let fam = prop_string_value(ctx, el, "fontFamily")
+            .or_else(|| prop_string_value(ctx, el, "font"))
+            .unwrap_or_else(|| {
+                if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
+                    "SF Pro Text".into()
+                } else {
+                    "sans-serif".into()
+                }
+            });
+        let mut text = Text::new(&glyph, size)?.color(tint);
+        if let Some(path) = mocida::text::get_font(&fam) {
+            text = text.font_family(&path)?;
+        }
+        let (x, y) = place(el, layout, w, h);
+        return Ok(apply_anchor(
+            text.into_widget_sized(w, h)?.position(x, y),
+            style::anchor(el),
+        ));
+    }
+
+    let name = el
+        .positional
+        .as_ref()
+        .map(|e| render_text_expr(e, ctx))
+        .filter(|s| !s.is_empty())
+        .or_else(|| prop_string_value(ctx, el, "name"))
+        .or_else(|| prop_string_value(ctx, el, "source"))
+        .or_else(|| prop_string_value(ctx, el, "src"))
+        .unwrap_or_default();
+    if name.is_empty() {
+        return sized_text("", 1.0, Color::rgb(0, 0, 0), layout);
+    }
+    let fallback = prop_string_value(ctx, el, "fallback")
+        .or_else(|| prop_string_value(ctx, el, "image"))
+        .filter(|s| !s.is_empty());
+
+    let mut img = Icon::with_fallback(&name, fallback.as_deref(), tint)?;
+    if prop_bool(el, "antialiasing") == Some(false) {
+        img = img.antialiasing(false);
+    }
+    if let Some(r) = style::f32_prop(el, "radius").or_else(|| dim_prop(ctx, el, "radius")) {
+        img = img.radius(r);
+    }
+    let (x, y) = place(el, layout, w, h);
+    let widget = img.into_widget_sized(w, h)?.position(x, y);
+    Ok(apply_anchor(widget, style::anchor(el)))
+}
+
 /// `Image(source, fillMode:, tint:, animated:)` — image widget. The source is
 /// the positional arg or `source:`/`src:` (a `mocida://` URI resolves through
 /// the bundle). `fillMode` accepts the full set (none/stretch/scale/tile/
@@ -4359,10 +4434,120 @@ fn build_video(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     Ok(apply_anchor(widget, style::anchor(el)))
 }
 
+/// Bake yaw/pitch (degrees) into a unit-space vertex. `UIMesh3D` has no
+/// rotation fields — oriented demos rotate vertices at build time.
+fn mesh3d_rotate(p: [f32; 3], yaw_deg: f32, pitch_deg: f32) -> [f32; 3] {
+    let yr = yaw_deg.to_radians();
+    let pr = pitch_deg.to_radians();
+    let (ys, yc) = (yr.sin(), yr.cos());
+    let (ps, pc) = (pr.sin(), pr.cos());
+    // Yaw around Y, then pitch around X.
+    let x1 = p[0] * yc + p[2] * ys;
+    let z1 = -p[0] * ys + p[2] * yc;
+    let y2 = p[1] * pc - z1 * ps;
+    let z2 = p[1] * ps + z1 * pc;
+    [x1, y2, z2]
+}
+
+/// Named unit primitives → interleaved xyz + triangle indices.
+fn mesh3d_primitive(shape: &str, yaw: f32, pitch: f32) -> Option<(Vec<f32>, Vec<u32>)> {
+    let rot = |p: [f32; 3]| mesh3d_rotate(p, yaw, pitch);
+    let push = |out: &mut Vec<f32>, p: [f32; 3]| {
+        let q = rot(p);
+        out.extend_from_slice(&q);
+    };
+    match shape.to_ascii_lowercase().as_str() {
+        "box" | "cube" => {
+            // Unit cube centered at origin. Faces ordered for painter sort.
+            let c: [[f32; 3]; 8] = [
+                [-0.5, -0.5, -0.5],
+                [0.5, -0.5, -0.5],
+                [0.5, 0.5, -0.5],
+                [-0.5, 0.5, -0.5],
+                [-0.5, -0.5, 0.5],
+                [0.5, -0.5, 0.5],
+                [0.5, 0.5, 0.5],
+                [-0.5, 0.5, 0.5],
+            ];
+            let mut pos = Vec::with_capacity(24);
+            for p in c {
+                push(&mut pos, p);
+            }
+            let idx = vec![
+                0, 1, 2, 0, 2, 3, // -Z
+                5, 4, 7, 5, 7, 6, // +Z
+                4, 0, 3, 4, 3, 7, // -X
+                1, 5, 6, 1, 6, 2, // +X
+                3, 2, 6, 3, 6, 7, // +Y
+                4, 5, 1, 4, 1, 0, // -Y
+            ];
+            Some((pos, idx))
+        }
+        "pyramid" | "cone" => {
+            let tip = [0.0, 0.55, 0.0];
+            let base: [[f32; 3]; 4] = [
+                [-0.5, -0.45, -0.5],
+                [0.5, -0.45, -0.5],
+                [0.5, -0.45, 0.5],
+                [-0.5, -0.45, 0.5],
+            ];
+            let mut pos = Vec::with_capacity(15);
+            push(&mut pos, tip);
+            for p in base {
+                push(&mut pos, p);
+            }
+            let idx = vec![
+                0, 1, 2, // front
+                0, 2, 3, // right
+                0, 3, 4, // back
+                0, 4, 1, // left
+                1, 4, 3, 1, 3, 2, // base
+            ];
+            Some((pos, idx))
+        }
+        "plane" | "quad" | "ground" => {
+            let c: [[f32; 3]; 4] = [
+                [-0.5, 0.0, -0.5],
+                [0.5, 0.0, -0.5],
+                [0.5, 0.0, 0.5],
+                [-0.5, 0.0, 0.5],
+            ];
+            let mut pos = Vec::with_capacity(12);
+            for p in c {
+                push(&mut pos, p);
+            }
+            let idx = vec![0, 1, 2, 0, 2, 3];
+            Some((pos, idx))
+        }
+        // Dual-pyramid octahedron — reads as a solid "gem" in the painter path.
+        "octahedron" | "diamond" | "gem" => {
+            let verts: [[f32; 3]; 6] = [
+                [0.0, 0.6, 0.0],
+                [0.0, -0.6, 0.0],
+                [0.55, 0.0, 0.0],
+                [-0.55, 0.0, 0.0],
+                [0.0, 0.0, 0.55],
+                [0.0, 0.0, -0.55],
+            ];
+            let mut pos = Vec::with_capacity(18);
+            for p in verts {
+                push(&mut pos, p);
+            }
+            let idx = vec![
+                0, 2, 4, 0, 4, 3, 0, 3, 5, 0, 5, 2, // upper
+                1, 4, 2, 1, 3, 4, 1, 5, 3, 1, 2, 5, // lower
+            ];
+            Some((pos, idx))
+        }
+        _ => None,
+    }
+}
+
 /// `Scene3D` / `Scene25D` — native 2.5D scene (mocida `UIScene3D`).
 ///
 /// Children (not regular widgets):
 ///   `Sprite3D(source, x:, y:, z:, width:, height:, billboard:, castsShadow:)`
+///   `Mesh3D(shape: "box"|"cube"|"pyramid"|"plane"|"octahedron", x:, y:, z:, scale:, color:, yaw:, pitch:)`
 ///   `PointLight(x:, y:, z:, radius:, intensity:, color:)`
 ///   `ShaderPass(name, vertex:, fragment:, compute:)` — custom GPU pass
 ///
@@ -4425,6 +4610,40 @@ fn build_scene3d(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wid
                     scene.sprite_casts_shadow(idx, true);
                 }
             }
+            "Mesh3D" | "Mesh" => {
+                let shape = child
+                    .positional
+                    .as_ref()
+                    .map(|e| render_text_expr(e, ctx))
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| prop_string_value(ctx, child, "shape"))
+                    .or_else(|| prop_string_value(ctx, child, "primitive"))
+                    .or_else(|| style::enum_member(child, "shape"))
+                    .unwrap_or_else(|| "box".into());
+                let yaw = dim_prop(ctx, child, "yaw")
+                    .or_else(|| dim_prop(ctx, child, "rotation"))
+                    .unwrap_or(35.0);
+                let pitch = dim_prop(ctx, child, "pitch").unwrap_or(-22.0);
+                let Some((positions, indices)) = mesh3d_primitive(&shape, yaw, pitch) else {
+                    continue;
+                };
+                let idx = scene.add_mesh(&positions, Some(&indices))?;
+                let x = dim_prop(ctx, child, "x").unwrap_or(0.0);
+                let y = dim_prop(ctx, child, "y").unwrap_or(0.0);
+                let z = dim_prop(ctx, child, "z")
+                    .or_else(|| dim_prop(ctx, child, "depth"))
+                    .unwrap_or(0.0);
+                let scale = dim_prop(ctx, child, "scale").unwrap_or(48.0);
+                scene.mesh_position(idx, x, y, z).mesh_scale(idx, scale);
+                if let Some(c) = style::color_prop(child, "color")
+                    .or_else(|| style::color_prop(child, "tint"))
+                {
+                    scene.mesh_color(idx, to_color(c));
+                }
+                if prop_bool(child, "visible").unwrap_or(true) == false {
+                    scene.mesh_visible(idx, false);
+                }
+            }
             "PointLight" | "Light" => {
                 let x = dim_prop(ctx, child, "x").unwrap_or(0.0);
                 let y = dim_prop(ctx, child, "y").unwrap_or(0.0);
@@ -4475,6 +4694,23 @@ fn build_scene3d(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wid
         .or_else(|| prop_string_value(ctx, el, "useShader"))
         .unwrap_or_else(|| "hd2d".into());
     scene = scene.own_shader_library(lib).use_shader(&shader)?;
+
+    // Camera: static props + optional live signal-bound yaw/pitch/zoom (orbit drag).
+    let yaw = dim_prop(ctx, el, "yaw").unwrap_or(0.0);
+    let pitch = dim_prop(ctx, el, "pitch").unwrap_or(0.0);
+    let zoom = dim_prop(ctx, el, "zoom").unwrap_or(1.0);
+    let cam_x = dim_prop(ctx, el, "camX")
+        .or_else(|| dim_prop(ctx, el, "cameraX"))
+        .unwrap_or(0.0);
+    let cam_y = dim_prop(ctx, el, "camY")
+        .or_else(|| dim_prop(ctx, el, "cameraY"))
+        .unwrap_or(0.0);
+    let cam_z = dim_prop(ctx, el, "camZ")
+        .or_else(|| dim_prop(ctx, el, "cameraZ"))
+        .unwrap_or(0.0);
+    scene.camera_look(cam_x, cam_y, cam_z, yaw, pitch, zoom);
+    let scene_ptr = scene.as_ptr();
+    subscribe_reactive_scene_camera(ctx, el, scene_ptr);
 
     let (x, y) = place(el, layout, w, h);
     let widget = scene.into_widget_sized(w, h)?.position(x, y);
@@ -5008,6 +5244,8 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
     let mut child_layout = Layout::root();
     let mut content_w: f32 = 0.0;
     let mut content_h: f32 = 0.0;
+    // Scene3D children — for float orbit (sub-degree, no int-signal stepping).
+    let mut orbit_scenes: Vec<*mut mocida::sys::UIScene3D> = Vec::new();
     for node in &el.children {
         let before_h = child_layout.content_height();
         if let Some(widget) = build_node(ctx, node, &mut child_layout)? {
@@ -5021,6 +5259,14 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
                     ((*p).width.as_ref().copied().unwrap_or(0.0), (*p).height.as_ref().copied().unwrap_or(0.0))
                 }
             };
+            if let Node::Element(child) = node {
+                if child.name == "Scene3D" || child.name == "Scene25D" {
+                    let sp = unsafe { mocida::sys::UIScene3D_FromWidget(widget.as_ptr()) };
+                    if !sp.is_null() {
+                        orbit_scenes.push(sp);
+                    }
+                }
+            }
             let advanced = (child_layout.content_height() - before_h).max(0.0);
             rect.add_child(widget);
             content_w = content_w.max(child_layout.content_width()).max(ww);
@@ -5050,6 +5296,38 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
     if prop_bool(el, "draggable").unwrap_or(false) {
         area = area.draggable(true);
     }
+    // Float orbit: `orbit: true` (default when a Scene3D child is present) writes
+    // yaw/pitch in degrees with sub-pixel deltas — buttery 360° spin, no int
+    // signal rounding. `orbitSpeed:` degrees per pixel (default 0.55).
+    let want_orbit = !orbit_scenes.is_empty() && prop_bool(el, "orbit").unwrap_or(true);
+    if want_orbit {
+        area = area.draggable(true);
+        if find_prop(el, "cursor").is_none() {
+            area = area.cursor(Cursor::Move);
+        }
+        let speed = style::f32_prop(el, "orbitSpeed")
+            .or_else(|| style::f32_prop(el, "orbitSensitivity"))
+            .unwrap_or(0.55)
+            .clamp(0.05, 4.0);
+        let inv_y: f32 = if prop_bool(el, "dragInvertY").unwrap_or(true) {
+            -1.0
+        } else {
+            1.0
+        };
+        let scenes = orbit_scenes;
+        area = area.on(MouseAreaEvent::Drag, move |ev| {
+            for &sp in &scenes {
+                let cam = unsafe { mocida::sys::UIScene3D_Camera(sp) };
+                if cam.is_null() {
+                    continue;
+                }
+                unsafe {
+                    (*cam).yaw += ev.dx * speed;
+                    (*cam).pitch += ev.dy * inv_y * speed;
+                }
+            }
+        });
+    }
     // Drag-to-resize splitter: `dragXSignal`/`dragYSignal: "name"` accumulate the
     // per-tick drag delta into an int signal, then flag the tree dirty so the host
     // rebuilds with the new size (numeric props are evaluated at build time, so a
@@ -5061,7 +5339,7 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
         prop_string_value(ctx, el, "dragXSignal").and_then(|n| ctx.signal(&n).cloned());
     let drag_y_sig =
         prop_string_value(ctx, el, "dragYSignal").and_then(|n| ctx.signal(&n).cloned());
-    if drag_x_sig.is_some() || drag_y_sig.is_some() {
+    if !want_orbit && (drag_x_sig.is_some() || drag_y_sig.is_some()) {
         area = area.draggable(true);
         // A resize handle gets the matching resize cursor automatically (↔ for a
         // horizontal/width drag, ↕ for a vertical/height drag) — like a browser —
@@ -5305,9 +5583,12 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
         });
     }
 
+    // Overlay above content (Scene3D etc.) so drag/orbit hit-tests win over the
+    // visual child and over Scroll content-pan arbitration.
     let area_widget = area
         .into_widget_sized(w, h)?
-        .margin(0.0, -content_h, 0.0, 0.0);
+        .margin(0.0, -content_h, 0.0, 0.0)
+        .z_index(50);
     rect.add_child(area_widget);
 
     // Absolute placement: honour `x:`/`y:` (resolved via dim_prop so they can be
@@ -5504,9 +5785,12 @@ fn build_gesture_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Resul
         }
     }
 
+    // Overlay above content (Scene3D etc.) so drag/orbit hit-tests win over the
+    // visual child and over Scroll content-pan arbitration.
     let area_widget = area
         .into_widget_sized(w, h)?
-        .margin(0.0, -content_h, 0.0, 0.0);
+        .margin(0.0, -content_h, 0.0, 0.0)
+        .z_index(50);
     rect.add_child(area_widget);
 
     let (mut x, mut y) = place(el, layout, w, h);
@@ -7126,6 +7410,110 @@ fn eval_f32_live(e: &Expr, vals: &HashMap<String, f32>) -> Option<f32> {
 /// mocida re-lays-out from child sizes every render frame, so the change applies
 /// LIVE — no tree rebuild (which is what makes drag-resize smooth, and avoids
 /// cancelling an in-flight MouseArea drag). Called once per element at build.
+/// Live Scene3D camera: signal-bound `yaw`/`pitch`/`zoom` write into `UICamera3D`
+/// without a rebuild — MouseArea `dragXSignal`/`dragYSignal` drive orbit.
+fn subscribe_reactive_scene_camera(
+    ctx: &mut Ctx,
+    el: &Element,
+    scene: *mut mocida::sys::UIScene3D,
+) {
+    if scene.is_null() {
+        return;
+    }
+    let expr_of = |name: &str| match find_prop(el, name).map(|p| &p.value) {
+        Some(PropValue::Expr(e)) => Some(e.clone()),
+        _ => None,
+    };
+    let yaw_expr = expr_of("yaw");
+    let pitch_expr = expr_of("pitch");
+    let zoom_expr = expr_of("zoom");
+    if yaw_expr.is_none() && pitch_expr.is_none() && zoom_expr.is_none() {
+        return;
+    }
+    let mut reads: Vec<String> = Vec::new();
+    if let Some(e) = &yaw_expr {
+        reads.extend(names_read(e));
+    }
+    if let Some(e) = &pitch_expr {
+        reads.extend(names_read(e));
+    }
+    if let Some(e) = &zoom_expr {
+        reads.extend(names_read(e));
+    }
+    reads.retain(|n| ctx.signal(n).is_some() || ctx.string_signal(n).is_some());
+    reads.sort();
+    reads.dedup();
+    if reads.is_empty() {
+        return;
+    }
+    let baked: HashMap<String, f32> = ctx
+        .env
+        .vars
+        .iter()
+        .filter_map(|(k, v)| v.parse::<f32>().ok().map(|f| (k.clone(), f)))
+        .collect();
+    let int_ptrs: Vec<(String, *mut mocida::sys::UISignal)> = reads
+        .iter()
+        .filter_map(|n| ctx.signal(n).map(|s| (n.clone(), s.borrow().as_ptr())))
+        .collect();
+    let str_ptrs: Vec<(String, *mut mocida::sys::UISignal)> = reads
+        .iter()
+        .filter_map(|n| {
+            ctx.string_signal(n)
+                .map(|s| (n.clone(), s.borrow().as_ptr()))
+        })
+        .collect();
+    let updater = move || {
+        let mut vals = baked.clone();
+        for (n, p) in &int_ptrs {
+            vals.insert(n.clone(), unsafe { mocida::sys::UISignal_GetInt(*p) } as f32);
+        }
+        for (n, p) in &str_ptrs {
+            if let Ok(f) = unsafe { str_from_signal(*p) }.parse::<f32>() {
+                vals.insert(n.clone(), f);
+            }
+        }
+        let cam = unsafe { mocida::sys::UIScene3D_Camera(scene) };
+        if cam.is_null() {
+            return;
+        }
+        unsafe {
+            if let Some(e) = &yaw_expr {
+                if let Some(v) = eval_f32_live(e, &vals) {
+                    (*cam).yaw = v;
+                }
+            }
+            if let Some(e) = &pitch_expr {
+                if let Some(v) = eval_f32_live(e, &vals) {
+                    /* Full 360° tumble — no pitch clamp (yaw already free). */
+                    (*cam).pitch = v;
+                }
+            }
+            if let Some(e) = &zoom_expr {
+                if let Some(v) = eval_f32_live(e, &vals) {
+                    (*cam).zoom = v.max(0.05);
+                }
+            }
+        }
+    };
+    // Apply once now so the first frame matches the signal (not only on drag).
+    updater();
+    let mut subs = Vec::new();
+    for n in &reads {
+        let u = updater.clone();
+        if let Some(sig) = ctx.signal(n) {
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_| u()) {
+                subs.push(sub);
+            }
+        } else if let Some(sig) = ctx.string_signal(n) {
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_| u()) {
+                subs.push(sub);
+            }
+        }
+    }
+    ctx.reactive._subs.extend(subs);
+}
+
 /// Live position: mirrors [`subscribe_reactive_size`] but writes the widget's
 /// `x`/`y` (plain f32 fields, not pointers) when a signal-bound `x:`/`y:` changes,
 /// so the widget moves WITHOUT a structural rebuild. The swatch overlay binds its

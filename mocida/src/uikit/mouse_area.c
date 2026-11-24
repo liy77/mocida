@@ -306,8 +306,12 @@ void UIMouseArea_DispatchMouseMotion(UIChildren* children, float x, float y) {
                     // drives the global drag (a ghost rendered elsewhere follows
                     // the cursor; the drop target is resolved at mouse-up).
                     if (!g_activeDrag) g_activeDrag = dup_or_null(area->dragData);
+                } else if (area->onDrag) {
+                    // Custom onDrag (dragXSignal orbit / splitter, etc.): the
+                    // callback owns the gesture — do NOT pan this hit box.
+                    // Auto-moving the area broke Scene3D orbit and splitters.
                 } else {
-                    // Move the area widget by delta, then clamp.
+                    // Legacy free-drag: move the area widget by delta, then clamp.
                     if (w->width && w->height) {
                         w->x += dx;
                         w->y += dy;
@@ -416,6 +420,40 @@ static int DispatchDown(UIChildren* children, float x, float y, int button, int 
 
 void UIMouseArea_DispatchMouseDown(UIChildren* children, float x, float y, int button) {
     DispatchDown(children, x, y, button, 0);
+}
+
+int UIMouseArea_AnyPressedDraggable(UIChildren* children) {
+    if (!children) return 0;
+    for (int i = 0; i < children->count; i++) {
+        UIWidget* w = children->children[i];
+        UIMouseArea* area = AsArea(w);
+        if (area) {
+            if (area->enabled && area->pressed && area->draggable) return 1;
+            continue;
+        }
+        UIChildren* kids = ContainerChildren(w);
+        if (kids && UIMouseArea_AnyPressedDraggable(kids)) return 1;
+    }
+    return 0;
+}
+
+int UIMouseArea_DraggableContains(UIChildren* children, float x, float y) {
+    if (!children) return 0;
+    /* Back-to-front: topmost draggable area wins (same order as DispatchDown). */
+    for (int i = children->count - 1; i >= 0; i--) {
+        UIWidget* w = children->children[i];
+        UIMouseArea* area = AsArea(w);
+        if (area) {
+            if (area->enabled && area->draggable && InsideWidget(w, x, y)
+                && UIWidget_EventOcclusionAllows(w)) {
+                return 1;
+            }
+            continue;
+        }
+        UIChildren* kids = PressChildren(w, x, y);
+        if (kids && UIMouseArea_DraggableContains(kids, x, y)) return 1;
+    }
+    return 0;
 }
 
 void UIMouseArea_DispatchMouseUp(UIChildren* children, float x, float y, int button) {

@@ -175,6 +175,7 @@ struct UINavBar {
     char* brandTitle;
     char* brandLogo;       /**< Image path or NULL. */
     SDL_Texture* logoTex;
+    int logoLoadFailed;    /**< 1 after a failed LoadTexture — do not retry every frame. */
     SDL_Texture* brandTex;
     int brandLenCached;
 

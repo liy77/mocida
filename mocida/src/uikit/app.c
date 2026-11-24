@@ -173,7 +173,11 @@ static void ContentPanBegin(UIChildren* children, float x, float y) {
     ContentPanClearInertia();
     g_panVelX = g_panVelY = 0.0f;
     g_panSampleMs = SDL_GetTicks();
-    if (!s || !s->allowDragScroll || !w) {
+    /* Orbit / splitter MouseArea under the pointer owns the gesture — never arm
+       Scroll content-pan here or the page scrolls while the user spins 3D. */
+    if (UIMouseArea_DraggableContains(children, x, y)
+        || UIMouseArea_AnyPressedDraggable(children)
+        || !s || !s->allowDragScroll || !w) {
         g_contentPan = NULL;
         g_contentPanW = NULL;
         g_contentPanMoved = 0;
@@ -189,6 +193,14 @@ static void ContentPanBegin(UIChildren* children, float x, float y) {
 
 static int ContentPanMove(UIChildren* children, float x, float y) {
     if (!g_contentPan || !g_contentPanW) return 0;
+    if (UIMouseArea_AnyPressedDraggable(children)
+        || UIMouseArea_DraggableContains(children, x, y)) {
+        g_contentPan->isDragging = 0;
+        g_contentPan = NULL;
+        g_contentPanW = NULL;
+        g_contentPanMoved = 0;
+        return 0;
+    }
     const float dx = x - g_contentPanX;
     const float dy = y - g_contentPanY;
     if (!g_contentPanMoved) {
@@ -1093,6 +1105,8 @@ void HandleEvent(UIApp* app, SDL_Event* event) {
             float rx, ry;
             WindowToRenderCoords(app, event->wheel.mouse_x, event->wheel.mouse_y, &rx, &ry);
             ApplySimulatorMouseTransform(app, &rx, &ry);
+            /* Don't scroll the docs page while an orbit / drag surface is held. */
+            if (UIMouseArea_AnyPressedDraggable(app->window->children)) break;
             const SDL_Keymod mods = SDL_GetModState();
             const int shift = (mods & SDL_KMOD_SHIFT) != 0;
             // Occlusion: a wheel over an overlay must not scroll the editor

@@ -51,6 +51,15 @@ pub struct Image {
 }
 
 impl Image {
+    /// Wrap an existing `UIImage*` (takes ownership). Used by [`crate::icon::Icon`].
+    ///
+    /// # Safety
+    /// `ptr` must be a valid `UIImage*` from mocida that is not already owned
+    /// elsewhere.
+    pub unsafe fn from_raw(ptr: *mut sys::UIImage) -> Self {
+        Self { ptr, moved: false }
+    }
+
     /// Creates an image from a file path with default settings
     /// (no tint, [`FillMode::None`]).
     pub fn load(source: &str) -> Result<Self> {

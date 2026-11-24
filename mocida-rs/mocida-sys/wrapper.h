@@ -23,6 +23,7 @@
 #include <uikit/bind.h>
 #include <uikit/arena.h>
 #include <uikit/asset.h>
+#include <uikit/icon.h>
 #include <uikit/walker.h>
 #include <uikit/menu_bar.h>
 #include <uikit/input.h>
