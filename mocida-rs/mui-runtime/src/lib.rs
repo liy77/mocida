@@ -292,6 +292,10 @@ struct TimerEntry {
     /// Analog dial frames 0..11 (30°). Derived from `orbit_secs` each poll.
     hour_hand: Option<Rc<RefCell<Signal<i32>>>>,
     min_hand: Option<Rc<RefCell<Signal<i32>>>>,
+    /// Continuous hand angles in degrees (0..359). Prefer these over frames:
+    /// bind `rotation: hourRot` on a single Image — no structural rebuild/spinner.
+    hour_rot: Option<Rc<RefCell<Signal<i32>>>>,
+    min_rot: Option<Rc<RefCell<Signal<i32>>>>,
 }
 
 /// Non-visual `Gamepad` poller: hotplug + edge-triggered virtual keys.
@@ -1509,6 +1513,8 @@ fn build_node(ctx: &mut Ctx, node: &Node, layout: &mut Layout) -> Result<Option<
             // Live visibility: `visible: <signal>` shows/hides without a rebuild
             // (the color picker toggles this instead of a structural `if`).
             subscribe_reactive_visible(ctx, el, w.as_ptr());
+            // Live rotation: `rotation: hourRot` updates in place (clock hands).
+            subscribe_reactive_rotation(ctx, el, w.as_ptr());
             // `clip: true` clips children to this widget's box (UIWidget_SetClipChildren)
             // — the swatch overlay clips so scrolled-out swatches don't paint over the
             // toolbar/gutter.
@@ -5532,22 +5538,26 @@ fn apply_timer_orbit(t: &TimerEntry, now_ms: u64) -> bool {
     if let Some(sig) = &t.hand_y {
         changed |= set_int_if_changed(sig, (hand_yf * unit).round() as i32);
     }
-    // Analog hands from the same seconds: 12 frames × 30°.
-    // Hour: 30° per hour + 0.5° per minute → frame = floor((h%12)*30 + m*0.5) / 30
-    // Minute: 6° per minute → frame = floor(m / 5)  (5 min per spoke)
-    let h24 = (s_i / 3600) as i32;
-    let mins = ((s_i % 3600) / 60) as i32;
-    let hour_frame = {
-        let h12 = h24.rem_euclid(12);
-        let deg = h12 * 30 + mins / 2; // ≈ 30h + 0.5m
-        (deg / 30).rem_euclid(12)
-    };
-    let min_frame = (mins / 5).rem_euclid(12);
+    // Analog hands from the same seconds (use smooth `s` so motion is continuous).
+    // Hour: 0.5° per game-minute (30°/h). Minute: 6° per game-minute.
+    let mins_f = (s % 3600.0) / 60.0;
+    let h12 = (s / 3600.0).rem_euclid(12.0);
+    let hour_deg = ((h12 * 30.0 + mins_f * 0.5).rem_euclid(360.0)).round() as i32;
+    let min_deg = ((mins_f * 6.0).rem_euclid(360.0)).round() as i32;
+    // Legacy 12-frame indices (still written if bound — prefer hourRotation).
+    let hour_frame = (hour_deg / 30).rem_euclid(12);
+    let min_frame = (min_deg / 30).rem_euclid(12);
     if let Some(sig) = &t.hour_hand {
         changed |= set_int_if_changed(sig, hour_frame);
     }
     if let Some(sig) = &t.min_hand {
         changed |= set_int_if_changed(sig, min_frame);
+    }
+    if let Some(sig) = &t.hour_rot {
+        changed |= set_int_if_changed(sig, hour_deg);
+    }
+    if let Some(sig) = &t.min_rot {
+        changed |= set_int_if_changed(sig, min_deg);
     }
     changed
 }
@@ -5597,7 +5607,8 @@ fn build_timer(ctx: &mut Ctx, el: &Element) -> Result<()> {
     let interval = style::f32_prop(el, "interval")
         .or_else(|| dim_prop(ctx, el, "interval"))
         .unwrap_or(1000.0)
-        .max(16.0) as u64;
+        // Allow sub-frame intervals so game clocks can tick +1 sec many times/s.
+        .max(4.0) as u64;
     let step_secs = style::f32_prop(el, "step")
         .or_else(|| dim_prop(ctx, el, "step"))
         .unwrap_or(1.0)
@@ -5659,6 +5670,10 @@ fn build_timer(ctx: &mut Ctx, el: &Element) -> Result<()> {
     let hand_y = int_signal_prop(ctx, el, "handY");
     let hour_hand = int_signal_prop(ctx, el, "hourHand");
     let min_hand = int_signal_prop(ctx, el, "minHand");
+    let hour_rot = int_signal_prop(ctx, el, "hourRotation")
+        .or_else(|| int_signal_prop(ctx, el, "hourRot"));
+    let min_rot = int_signal_prop(ctx, el, "minRotation")
+        .or_else(|| int_signal_prop(ctx, el, "minRot"));
     // hourHand/minHand alone still need orbitSeconds as the time source.
     if clock.is_none() && on_tick.is_none() && orbit_secs.is_none() {
         return Ok(());
@@ -5687,6 +5702,8 @@ fn build_timer(ctx: &mut Ctx, el: &Element) -> Result<()> {
         hand_y,
         hour_hand,
         min_hand,
+        hour_rot,
+        min_rot,
     };
     // Seed dial positions once so the first frame isn't stuck at (0,0).
     let _ = apply_timer_orbit(&entry, now);
@@ -8232,6 +8249,79 @@ fn subscribe_reactive_scene_camera(
     let mut subs = Vec::new();
     for n in &reads {
         let u = updater.clone();
+        if let Some(sig) = ctx.signal(n) {
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_| u()) {
+                subs.push(sub);
+            }
+        } else if let Some(sig) = ctx.string_signal(n) {
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_| u()) {
+                subs.push(sub);
+            }
+        }
+    }
+    ctx.reactive._subs.extend(subs);
+}
+
+/// Live `rotation:` (degrees) from an int signal / expression — updates
+/// `UIWidget.rotation` in place so clock hands turn without rebuilding Images.
+fn subscribe_reactive_rotation(ctx: &mut Ctx, el: &Element, ptr: *mut mocida::sys::UIWidget) {
+    if ptr.is_null() {
+        return;
+    }
+    let expr = match find_prop(el, "rotation").map(|p| &p.value) {
+        Some(PropValue::Expr(e)) => e.clone(),
+        _ => return,
+    };
+    let mut reads: Vec<String> = names_read(&expr);
+    reads.retain(|n| ctx.signal(n).is_some() || ctx.string_signal(n).is_some());
+    reads.sort();
+    reads.dedup();
+    if reads.is_empty() {
+        // Literal rotation already applied at build; nothing live.
+        if let Some(v) = eval_f32_live(&expr, &HashMap::new()) {
+            unsafe {
+                (*ptr).rotation = v;
+            }
+        }
+        return;
+    }
+    let baked: HashMap<String, f32> = ctx
+        .env
+        .vars
+        .iter()
+        .filter_map(|(k, v)| v.parse::<f32>().ok().map(|f| (k.clone(), f)))
+        .collect();
+    let int_ptrs: Vec<(String, *mut mocida::sys::UISignal)> = reads
+        .iter()
+        .filter_map(|n| ctx.signal(n).map(|s| (n.clone(), s.borrow().as_ptr())))
+        .collect();
+    let str_ptrs: Vec<(String, *mut mocida::sys::UISignal)> = reads
+        .iter()
+        .filter_map(|n| {
+            ctx.string_signal(n)
+                .map(|s| (n.clone(), s.borrow().as_ptr()))
+        })
+        .collect();
+    let apply = move || {
+        let mut vals = baked.clone();
+        for (n, p) in &int_ptrs {
+            vals.insert(n.clone(), unsafe { mocida::sys::UISignal_GetInt(*p) } as f32);
+        }
+        for (n, p) in &str_ptrs {
+            if let Ok(f) = unsafe { str_from_signal(*p) }.parse::<f32>() {
+                vals.insert(n.clone(), f);
+            }
+        }
+        if let Some(v) = eval_f32_live(&expr, &vals) {
+            unsafe {
+                (*ptr).rotation = v;
+            }
+        }
+    };
+    apply();
+    let mut subs = Vec::new();
+    for n in &reads {
+        let u = apply.clone();
         if let Some(sig) = ctx.signal(n) {
             if let Ok(sub) = sig.borrow_mut().subscribe(move |_| u()) {
                 subs.push(sub);
