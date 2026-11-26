@@ -71,6 +71,10 @@ static const char* BuiltinPngFallback(const char* symbol) {
         || SDL_strcasecmp(symbol, "curlybraces") == 0
         || SDL_strcasecmp(symbol, "chevron.left.slash.chevron.right") == 0)
         return "mocida://icons/code.png";
+    if (SDL_strcasecmp(symbol, "ant.fill") == 0 || SDL_strcasecmp(symbol, "ant") == 0
+        || SDL_strcasecmp(symbol, "ladybug") == 0 || SDL_strcasecmp(symbol, "ladybug.fill") == 0
+        || SDL_strcasecmp(symbol, "bug") == 0 || SDL_strcasecmp(symbol, "bug.fill") == 0)
+        return "mocida://icons/bug.png";
     return NULL;
 }
 
