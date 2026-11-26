@@ -9,10 +9,13 @@
 //! Members: `os` (`macos`, `windows`, `linux`, `ios`, `android`, or a console:
 //! `playstation`, `xbox`, `switch`), `device` (a simulated device's id, else
 //! the os), and `isMobile`, `isTouch`, `isDesktop`, `isConsole`, `isIOS`,
-//! `isAndroid`, `isMacOS`, `isWindows`, `isLinux`, `isWeb`,
+//! `isAndroid`, `isMacOS`, `isWindows`, `isLinux`, `isWeb`, `debug`,
 //! `prefersReducedMotion` (`1` / `0`, so both `if Platform.isTouch` and
 //! `Platform.isTouch == true` work). On the web build, `isIOS` / `isAndroid`
 //! follow the live User-Agent so a phone visiting the listen site lights up.
+//!
+//! `Platform.debug` is `1` for Rust debug builds, when `MOCIDA_DEBUG=1`, or
+//! when the page URL has `debug=1` / `admin=1` (web). Use it to gate admin HUD.
 //!
 //! A simulator sets `MOCIDA_PLATFORM` (the os), `MOCIDA_PLATFORM_DEVICE` and
 //! `MOCIDA_PLATFORM_TOUCH` (`1` / `0`) before the view is built.
@@ -109,6 +112,12 @@ pub fn member(field: &str) -> Option<String> {
             mocida::web::prefers_reduced_motion()
         } else {
             false
+        }),
+        // Admin / cheat HUD: Rust debug build, MOCIDA_DEBUG=1, or cookie mocida_debug=1.
+        "debug" | "isDebug" => flag({
+            let env_on = env("MOCIDA_DEBUG").map_or(false, |v| v == "1" || v == "true");
+            let cookie_on = cfg!(target_arch = "wasm32") && mocida::web::cookie("mocida_debug") == "1";
+            cfg!(debug_assertions) || env_on || cookie_on
         }),
         _ => return None,
     })

@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+#[cfg(not(target_os = "emscripten"))]
 use mocida::menu_bar::Menu;
 use mocida::text::{get_font, search_fonts};
 use mocida::{App, Children, Color};
@@ -611,43 +612,46 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
         unsafe { mocida::sys::UIApp_SetAlwaysOnTop(1) };
         sim_title(app.as_ptr(), &sim, orientation);
 
-        // ── Menu bar: "Simulator" ──────────────────────────────────────────
-        // Works as the macOS app menu on macOS and is tracked (with shortcuts)
-        // on all platforms via SDL's accelerator system.
-        // iPhones, Android phones, then tablets, split by separators.
-        let mut devices = Menu::new("Device");
-        let mut group = ("", "");
-        for (i, id) in MENU_DEVICES.iter().enumerate() {
-            let Some(d) = device_frames::lookup(id) else { continue };
-            if !group.0.is_empty() && group != (d.os, d.kind) {
-                devices = devices.separator();
+        // ── Menu bar: "Simulator" (native only; no AppKit menu on wasm) ──
+        #[cfg(not(target_os = "emscripten"))]
+        {
+            // Works as the macOS app menu on macOS and is tracked (with shortcuts)
+            // on all platforms via SDL's accelerator system.
+            // iPhones, Android phones, then tablets, split by separators.
+            let mut devices = Menu::new("Device");
+            let mut group = ("", "");
+            for (i, id) in MENU_DEVICES.iter().enumerate() {
+                let Some(d) = device_frames::lookup(id) else { continue };
+                if !group.0.is_empty() && group != (d.os, d.kind) {
+                    devices = devices.separator();
+                }
+                group = (d.os, d.kind);
+                devices = devices.item(d.name, None, SIM_DEVICE_BASE + i as u32);
             }
-            group = (d.os, d.kind);
-            devices = devices.item(d.name, None, SIM_DEVICE_BASE + i as u32);
-        }
-        Menu::new("Simulator")
-            .submenu(devices)
-            .submenu(
-                Menu::new("View")
-                    .item("Rotate", Some("CmdOrCtrl+Shift+R"), SIM_ROTATE)
-                    .item("Screenshot", Some("CmdOrCtrl+S"), SIM_SCREENSHOT)
-                    .item("Restart App", Some("CmdOrCtrl+Shift+K"), SIM_RESTART)
-                    .separator()
-                    .item("Fit the Display", Some("CmdOrCtrl+0"), SIM_SCALE_FIT)
-                    .item("Scale 100%", Some("CmdOrCtrl+1"), SIM_SCALE_100)
-                    .item("Scale 75%", Some("CmdOrCtrl+2"), SIM_SCALE_75)
-                    .item("Scale 50%", Some("CmdOrCtrl+3"), SIM_SCALE_50),
-            )
-            .set_as_app_menu_bar();
+            Menu::new("Simulator")
+                .submenu(devices)
+                .submenu(
+                    Menu::new("View")
+                        .item("Rotate", Some("CmdOrCtrl+Shift+R"), SIM_ROTATE)
+                        .item("Screenshot", Some("CmdOrCtrl+S"), SIM_SCREENSHOT)
+                        .item("Restart App", Some("CmdOrCtrl+Shift+K"), SIM_RESTART)
+                        .separator()
+                        .item("Fit the Display", Some("CmdOrCtrl+0"), SIM_SCALE_FIT)
+                        .item("Scale 100%", Some("CmdOrCtrl+1"), SIM_SCALE_100)
+                        .item("Scale 75%", Some("CmdOrCtrl+2"), SIM_SCALE_75)
+                        .item("Scale 50%", Some("CmdOrCtrl+3"), SIM_SCALE_50),
+                )
+                .set_as_app_menu_bar();
 
-        // Register the extern "C" callback that writes the activated item's
-        // ID into sim_action. Safety: sim_action outlives the run loop.
-        unsafe {
-            mocida::sys::menu_bar::set_item_callback(
-                Some(sim_menu_cb),
-                sim_action_ptr as *mut c_void,
-            )
-        };
+            // Register the extern "C" callback that writes the activated item's
+            // ID into sim_action. Safety: sim_action outlives the run loop.
+            unsafe {
+                mocida::sys::menu_bar::set_item_callback(
+                    Some(sim_menu_cb),
+                    sim_action_ptr as *mut c_void,
+                )
+            };
+        }
 
         println!(
             "mui-dev: simulating {}  (Simulator menu: devices; Ctrl+Shift+R = rotate, Ctrl+0-3 = scale)",
@@ -691,13 +695,44 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
         let source_cell = Rc::new(RefCell::new(source.clone()));
         let path_owned = path.clone();
         let last_size = Rc::new(Cell::new((0i32, 0i32)));
+        let size_cooldown = Rc::new(Cell::new(0u32));
         install_web_frame_poll(move || {
+            // Mirror desktop: Window.width/height props are baked at build time,
+            // so a CSS/viewport size change must rebuild or the UI stays stuck at
+            // the App() create size (narrow strip + black bars on phones/Safari).
+            // Debounce + 1px slack: Safari visualViewport can oscillate by a
+            // pixel and an every-frame rebuild paints black.
+            let tick = size_cooldown.get().wrapping_add(1);
+            size_cooldown.set(tick);
+            let cur_size = unsafe {
+                (
+                    mocida::sys::UIApp_GetWidthG(),
+                    mocida::sys::UIApp_GetHeightG(),
+                )
+            };
+            let prev = last_size.get();
+            let dx = (cur_size.0 - prev.0).abs();
+            let dy = (cur_size.1 - prev.1).abs();
+            let pending = cur_size.0 > 0
+                && cur_size.1 > 0
+                && (prev.0 == 0 || prev.1 == 0 || dx > 1 || dy > 1);
+            // First sync immediately; later changes wait a few frames so Safari
+            // visualViewport jitter doesn't thrash rebuilds into a black screen.
+            let size_changed = pending && (prev.0 == 0 || prev.1 == 0 || tick % 8 == 0);
+            if size_changed {
+                last_size.set(cur_size);
+            }
+            // Timers must run every frame even when the tree is clean — they
+            // update string/int signals in place (e.g. a live HH:MM:SS clock).
+            if let Some(r) = reactive_slot.borrow().as_ref() {
+                r.poll_timers();
+            }
             let dirty_signal = reactive_slot
                 .borrow()
                 .as_ref()
                 .map(|r| r.take_dirty())
                 .unwrap_or(false);
-            if !dirty_signal {
+            if !size_changed && !dirty_signal {
                 return;
             }
             let seed = with_platform(
@@ -717,7 +752,6 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
                 Err(e) => eprintln!("mui-dev: web reactive rebuild failed: {e}"),
             }
         });
-        let _ = last_size; // reserved for a later resize-driven rebuild
     }
 
     #[cfg(not(target_os = "emscripten"))]
@@ -859,7 +893,10 @@ fn run(opts: CliOptions) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            // (2) Structural signal change → reactive rebuild ─────────────────
+            // (2) Timers + structural signal change → reactive rebuild ───────
+            if let Some(r) = reactive_slot.borrow().as_ref() {
+                r.poll_timers();
+            }
             let dirty_signal = reactive_slot
                 .borrow()
                 .as_ref()

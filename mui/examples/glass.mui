@@ -7,7 +7,7 @@
 //
 // or via cforge listen (web):
 //
-//   cforge run --listen=3001 mui/examples/glass.mui
+//   mikasa run --listen=3001 mui/examples/glass.mui
 
 view GlassDemo() {
   mut material = signal("liquid")

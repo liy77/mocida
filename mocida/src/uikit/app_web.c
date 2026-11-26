@@ -5,6 +5,17 @@
 
 extern void UIApp_RunOneFrame(UIApp* app, Uint32 dtMs);
 
+/* Call into the host (mui-dev exports Module._mui_host_frame_poll). Do not
+ * provide a weak C stub here — that can bind at archive-link time and never
+ * reach the Rust strong symbol. */
+static void call_mui_host_frame_poll(void) {
+    EM_ASM({
+        var f = (typeof Module !== 'undefined') &&
+                (Module['_mui_host_frame_poll'] || Module['mui_host_frame_poll']);
+        if (typeof f === 'function') f();
+    });
+}
+
 static UIApp* s_webApp = NULL;
 static Uint64 s_webLastTickPC = 0;
 static Uint64 s_webFreq = 0;
@@ -27,6 +38,10 @@ static void mocida_web_loop(void) {
         dtMs = (Uint32)((nowPC - s_webLastTickPC) * 1000ULL / s_webFreq);
     }
     s_webLastTickPC = nowPC;
+
+    /* Always poll the host first — even on FPS-capped skipped paints — so
+     * MUI Timer clocks keep advancing in real time. */
+    call_mui_host_frame_poll();
 
     // The browser drives this callback (typically via requestAnimationFrame,
     // capped at the display refresh rate). Respect UIApp_SetTargetFPS by

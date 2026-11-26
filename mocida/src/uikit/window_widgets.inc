@@ -113,9 +113,19 @@ static void RenderWidget_Stack(UIWindow* window, UIWidget* el,
             if (!item) continue;
             if (!item->visible) { shrunk = 1; continue; }
             // Free layout: don't flow — render each item at its own explicit
-            // x/y (e.g. game objects on a canvas). No cursor advance.
+            // x/y relative to this stack (e.g. overlays inside a positioned
+            // HUD). Parent origin is added so nested freeLayout stacks work;
+            // a root canvas at (0,0) keeps window-absolute coords unchanged.
+            // Save/restore so we don't mutate authored local coords across frames
+            // (would accumulate) and hit-tests see the same absolute box we drew.
             if (s->freeLayout) {
+                const float localX = item->x;
+                const float localY = item->y;
+                item->x = el->x + s->paddingLeft + localX;
+                item->y = el->y + s->paddingTop + localY;
                 RenderSingleWidget(window, item);
+                item->x = localX;
+                item->y = localY;
                 continue;
             }
             const float iw = item->width  ? *item->width  : 0.0f;
@@ -368,8 +378,15 @@ static void RenderWidget_Glass(UIWindow* window, UIWidget* el,
         for (int i = 0; i < g->items->count; i++) {
             UIWidget* item = g->items->children[i];
             if (!item || !item->visible) continue;
+            // Same parent-local freeLayout contract as UIStack (see above).
             if (g->freeLayout) {
+                const float localX = item->x;
+                const float localY = item->y;
+                item->x = el->x + g->paddingLeft + localX;
+                item->y = el->y + g->paddingTop + localY;
                 RenderSingleWidget(window, item);
+                item->x = localX;
+                item->y = localY;
                 continue;
             }
             const float iw = item->width  ? *item->width  : 0.0f;

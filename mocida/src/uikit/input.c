@@ -3,8 +3,8 @@
 static Uint8 g_keys[SDL_SCANCODE_COUNT];
 static Uint8 g_mouse[8];
 static SDL_Gamepad* g_pad = NULL;
-static int g_padTried = 0;
 static float g_rumbleScale = 1.0f;
+static char g_padKind[32] = "";
 
 static float Clamp01(float v) {
     if (v < 0.0f) return 0.0f;
@@ -67,27 +67,77 @@ void UIInput__OnEvent(const SDL_Event* e) {
                 SDL_RumbleGamepad(g_pad, 0, 0, 0);
                 SDL_CloseGamepad(g_pad);
                 g_pad = NULL;
+                g_padKind[0] = '\0';
             }
             break;
         case SDL_EVENT_GAMEPAD_ADDED:
-            g_padTried = 0;
+            /* Next PollGamepad will open the new pad. */
+            if (!g_pad) { /* keep existing if already open */ }
             break;
         default:
             break;
     }
 }
 
+static void RefreshPadKind(void) {
+    g_padKind[0] = '\0';
+    if (!g_pad) return;
+    SDL_GamepadType t = SDL_GetGamepadType(g_pad);
+    const char* name = SDL_GetGamepadName(g_pad);
+    const char* kind = "generic";
+    switch (t) {
+        case SDL_GAMEPAD_TYPE_PS3:
+        case SDL_GAMEPAD_TYPE_PS4:
+        case SDL_GAMEPAD_TYPE_PS5:
+            kind = "playstation";
+            break;
+        case SDL_GAMEPAD_TYPE_XBOX360:
+        case SDL_GAMEPAD_TYPE_XBOXONE:
+            kind = "xbox";
+            break;
+        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO:
+        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
+        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
+        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:
+            kind = "nintendo";
+            break;
+        default:
+            if (name) {
+                /* Name fallback when SDL type is standard/unknown. */
+                if (SDL_strcasestr(name, "dualshock") || SDL_strcasestr(name, "dualsense")
+                    || SDL_strcasestr(name, "playstation") || SDL_strcasestr(name, "sony"))
+                    kind = "playstation";
+                else if (SDL_strcasestr(name, "xbox") || SDL_strcasestr(name, "xinput"))
+                    kind = "xbox";
+                else if (SDL_strcasestr(name, "switch") || SDL_strcasestr(name, "joy-con")
+                         || SDL_strcasestr(name, "joycon") || SDL_strcasestr(name, "pro controller"))
+                    kind = "nintendo";
+            }
+            break;
+    }
+    SDL_strlcpy(g_padKind, kind, sizeof(g_padKind));
+}
+
 int UIInput_PollGamepad(void) {
-    if (g_pad) return 1;
-    if (g_padTried) return 0;
-    g_padTried = 1;
     if (!(SDL_WasInit(SDL_INIT_GAMEPAD) & SDL_INIT_GAMEPAD)) {
         if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) return 0;
     }
+    /* Still holding a live pad? */
+    if (g_pad) {
+        SDL_JoystickID id = SDL_GetGamepadID(g_pad);
+        if (SDL_IsGamepad(id)) return 1;
+        SDL_CloseGamepad(g_pad);
+        g_pad = NULL;
+        g_padKind[0] = '\0';
+    }
+    /* Hotplug: open the first available pad every time none is held. */
     int count = 0;
     SDL_JoystickID* ids = SDL_GetGamepads(&count);
     if (ids) {
-        if (count > 0) g_pad = SDL_OpenGamepad(ids[0]);
+        if (count > 0) {
+            g_pad = SDL_OpenGamepad(ids[0]);
+            if (g_pad) RefreshPadKind();
+        }
         SDL_free(ids);
     }
     return g_pad != NULL;
@@ -107,6 +157,12 @@ float UIInput_PadAxis(int axis) {
 const char* UIInput_PadName(void) {
     const char* n = g_pad ? SDL_GetGamepadName(g_pad) : NULL;
     return n ? n : "";
+}
+
+const char* UIInput_PadKind(void) {
+    if (!g_pad) return "";
+    if (!g_padKind[0]) RefreshPadKind();
+    return g_padKind;
 }
 
 float UIInput_SetRumbleScale(float scale) {

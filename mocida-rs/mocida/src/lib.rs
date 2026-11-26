@@ -71,6 +71,7 @@ pub mod glass;
 pub mod icon;
 pub mod image;
 pub mod input;
+#[cfg(not(target_os = "emscripten"))]
 pub mod menu_bar;
 pub mod mouse_area;
 pub mod net;

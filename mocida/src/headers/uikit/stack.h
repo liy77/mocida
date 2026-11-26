@@ -55,8 +55,9 @@ typedef struct {
     UIChildren* items;         /**< Owned items. Destroyed with the stack. */
 
     int freeLayout;            /**< 1 = don't flow items; render each at its own
-                                *   explicit x/y (absolute). For freely-positioned
-                                *   content like game objects on a canvas. */
+                                *   explicit x/y relative to this stack (parent
+                                *   origin + padding added at render). A root
+                                *   canvas at (0,0) keeps window-absolute coords. */
     float __flowExtent;        /**< Main-axis extent of the visible items plus
                                 *   padding, recorded by each render when hidden
                                 *   items freed room (0 = the box size applies).

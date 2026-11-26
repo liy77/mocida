@@ -17,8 +17,9 @@ int UIInput_KeyDown(const char* name);
 /** 1 while mouse button `button` (1 = left, 2 = middle, 3 = right) is held. */
 int UIInput_MouseDown(int button);
 
-/** Opens the first connected gamepad (if any). Cheap; call once per frame.
- *  Returns 1 when a gamepad is available. */
+/** Opens / re-opens the first connected gamepad. Hotplug-safe: call once
+ *  per frame; returns 1 when a pad is available (PS / Xbox / Switch / … —
+ *  SDL's gamepad DB maps them to the same button indices). */
 int UIInput_PollGamepad(void);
 
 /** 1 while gamepad button `button` (an SDL_GamepadButton value: 0 = south,
@@ -31,6 +32,12 @@ float UIInput_PadAxis(int axis);
 
 /** The connected gamepad's name, or "" (for picking button labels). */
 const char* UIInput_PadName(void);
+
+/**
+ * Coarse family for UI prompts: "playstation", "xbox", "nintendo", or
+ * "generic". Empty string when no pad. Based on SDL_GamepadType + name.
+ */
+const char* UIInput_PadKind(void);
 
 /**
  * Scales every later rumble. `scale` is 0..1 (0 is off, 1 is full).

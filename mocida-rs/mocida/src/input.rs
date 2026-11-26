@@ -45,6 +45,33 @@ pub fn pad_name() -> String {
     }
 }
 
+/// Coarse family: `"playstation"`, `"xbox"`, `"nintendo"`, `"generic"`, or `""`.
+pub fn pad_kind() -> String {
+    unsafe {
+        let p = sys::UIInput_PadKind();
+        if p.is_null() { String::new() } else { CStr::from_ptr(p).to_string_lossy().into_owned() }
+    }
+}
+
+/// SDL_GamepadButton indices (shared across PS / Xbox / Switch via SDL DB).
+pub mod btn {
+    pub const SOUTH: i32 = 0;
+    pub const EAST: i32 = 1;
+    pub const WEST: i32 = 2;
+    pub const NORTH: i32 = 3;
+    pub const BACK: i32 = 4;
+    pub const GUIDE: i32 = 5;
+    pub const START: i32 = 6;
+    pub const LEFT_STICK: i32 = 7;
+    pub const RIGHT_STICK: i32 = 8;
+    pub const LEFT_SHOULDER: i32 = 9;
+    pub const RIGHT_SHOULDER: i32 = 10;
+    pub const DPAD_UP: i32 = 11;
+    pub const DPAD_DOWN: i32 = 12;
+    pub const DPAD_LEFT: i32 = 13;
+    pub const DPAD_RIGHT: i32 = 14;
+}
+
 /// Scales later rumbles. `scale` is 0..1. Returns the stored scale.
 pub fn set_rumble_scale(scale: f32) -> f32 {
     unsafe { sys::UIInput_SetRumbleScale(scale) }

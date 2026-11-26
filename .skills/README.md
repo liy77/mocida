@@ -22,3 +22,4 @@ machine-specific absolute paths here.
 | [`code-doc-parity.md`](code-doc-parity.md) | **The golden rule: code must match the docs.** |
 | [`rust-bindings.md`](rust-bindings.md) | `mocida-rs` is bindings only — conventions + FFI patterns. |
 | [`conventions.md`](conventions.md) | Formatting, commits, cross-platform, logging, secrets. |
+| [`mui-game-ui.md`](mui-game-ui.md) | Game/VN freeLayout HUD: Glass, clocks, dialogue, listen cache. |

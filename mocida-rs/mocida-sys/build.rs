@@ -266,6 +266,35 @@ fn main() {
         .allowlist_type("UI.*|FontStyle|FontEntry|HWND|HWND__")
         .allowlist_var("UI_.*|MOCIDA_.*");
 
+    // Bindgen parses headers with the *host* clang. When cargo's TARGET is
+    // wasm32-unknown-emscripten, bindgen otherwise passes that to libclang and
+    // drops every `UI*` function (types-only bindings). Force a host triple.
+    if is_web {
+        if cfg!(target_os = "macos") {
+            if let Ok(sdk) = std::process::Command::new("xcrun")
+                .args(["--show-sdk-path"])
+                .output()
+            {
+                if sdk.status.success() {
+                    let path = String::from_utf8_lossy(&sdk.stdout).trim().to_string();
+                    if !path.is_empty() {
+                        builder = builder.clang_arg(format!("-isysroot{path}"));
+                    }
+                }
+            }
+            let host = if cfg!(target_arch = "aarch64") {
+                "aarch64-apple-darwin"
+            } else {
+                "x86_64-apple-darwin"
+            };
+            builder = builder.clang_arg(format!("--target={host}"));
+        } else if cfg!(target_os = "linux") {
+            builder = builder.clang_arg("--target=x86_64-unknown-linux-gnu");
+        } else if cfg!(target_os = "windows") {
+            builder = builder.clang_arg("--target=x86_64-pc-windows-msvc");
+        }
+    }
+
     if env::var_os("CARGO_FEATURE_SDL3_HEADERS").is_some() {
         if let Some(sdl) = env::var_os("SDL3_INCLUDE_DIR") {
             builder = builder.clang_arg(format!("-I{}", PathBuf::from(sdl).display()));

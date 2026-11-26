@@ -47,4 +47,5 @@ pub use bindings::*;
 /// `uikit/menu_bar.h`). The raw `unsafe` bindings are at the crate
 /// root via the `pub use bindings::*` above; the wrappers add `Drop`
 /// and builder ergonomics.
+#[cfg(not(target_os = "emscripten"))]
 pub mod menu_bar;

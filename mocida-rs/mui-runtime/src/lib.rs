@@ -13,6 +13,8 @@
 //! - Handlers: `x += n`, `x -= n`, `x++`, `x--`, `x = x ± n`, `x = <int>`
 //!   (see [`mui_syntax::ast::HandlerAction`]).
 //! - `Button(label, onClick: {…})` is a real button wired to its handler.
+//! - `Timer(interval:, clock:, onTick:)` — host-polled periodic ticker
+//!   ([`Reactive::poll_timers`]); `clock:` advances an `HH:MM:SS` string signal.
 //! Richer expressions / control-flow re-evaluation come later.
 //!
 //! ```no_run
@@ -29,7 +31,7 @@
 //! # }
 //! ```
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::ptr::NonNull;
@@ -250,6 +252,224 @@ impl From<mocida::Error> for BuildError {
 
 type Result<T> = std::result::Result<T, BuildError>;
 
+
+/// A live `Timer(interval:, onTick:, clock:)` registered during build. The host
+/// must call [`Reactive::poll_timers`] once per frame (see mui-dev's
+/// `mui_host_frame_poll` / `App::on_tick`).
+struct TimerEntry {
+    interval_ms: u64,
+    /// Wall time of the last fire (`SDL_GetTicks`).
+    last_ms: Cell<u64>,
+    /// Game seconds added to `clock` each fire (default 1).
+    step_secs: u32,
+    /// When false, the timer is armed but silent (e.g. `running: false`).
+    running: bool,
+    /// Optional int signal that gates running (`running: flag` where flag is 0/1).
+    running_sig: Option<Rc<RefCell<Signal<i32>>>>,
+    on_tick: Option<RefCell<Box<dyn FnMut()>>>,
+    /// Optional string signal holding `HH:MM:SS` — advanced by `step_secs` each fire.
+    clock: Option<Rc<RefCell<Signal<String>>>>,
+    /// Majora-style dial: int seconds-since-midnight → sun/moon/hand positions.
+    orbit_secs: Option<Rc<RefCell<Signal<i32>>>>,
+    /// Dial size in px (default 148). Icon size for centering overlays (default 28).
+    orbit_size: f32,
+    orbit_icon: f32,
+    /// Top-left of the dial in the root freeLayout (added to every orbit coord).
+    orbit_origin_x: f32,
+    orbit_origin_y: f32,
+    /// Fixed-point scale for orbit signals (1 = px, 10 = deci-px). Use
+    /// `x: sunX / orbitUnit` in MUI so sub-pixel motion stays visible on small dials.
+    orbit_unit: f32,
+    /// Game-seconds advanced per timer fire (for smooth orbit interp between ticks).
+    /// Should match `onTick`’s `clockSec += N` (Majora default 24).
+    orbit_step: f32,
+    sun_x: Option<Rc<RefCell<Signal<i32>>>>,
+    sun_y: Option<Rc<RefCell<Signal<i32>>>>,
+    moon_x: Option<Rc<RefCell<Signal<i32>>>>,
+    moon_y: Option<Rc<RefCell<Signal<i32>>>>,
+    hand_x: Option<Rc<RefCell<Signal<i32>>>>,
+    hand_y: Option<Rc<RefCell<Signal<i32>>>>,
+    /// Analog dial frames 0..11 (30°). Derived from `orbit_secs` each poll.
+    hour_hand: Option<Rc<RefCell<Signal<i32>>>>,
+    min_hand: Option<Rc<RefCell<Signal<i32>>>>,
+}
+
+/// Non-visual `Gamepad` poller: hotplug + edge-triggered virtual keys.
+/// Confirm/Cancel follow the pad family (Nintendo A = East; Xbox/PS A/✕ = South).
+struct GamepadEntry {
+    connected: Option<Rc<RefCell<Signal<i32>>>>,
+    kind: Option<Rc<RefCell<Signal<String>>>>,
+    name: Option<Rc<RefCell<Signal<String>>>>,
+    prev_btns: [bool; 15],
+    /// Bit0=Up,1=Down,2=Left,3=Right — stick + d-pad combined, edge-fired.
+    prev_dir: u8,
+    was_connected: bool,
+    on_input: Option<RefCell<Box<dyn FnMut(&str, i32)>>>,
+    on_confirm: Option<RefCell<Box<dyn FnMut()>>>,
+    on_cancel: Option<RefCell<Box<dyn FnMut()>>>,
+    on_up: Option<RefCell<Box<dyn FnMut()>>>,
+    on_down: Option<RefCell<Box<dyn FnMut()>>>,
+    on_left: Option<RefCell<Box<dyn FnMut()>>>,
+    on_right: Option<RefCell<Box<dyn FnMut()>>>,
+    on_start: Option<RefCell<Box<dyn FnMut()>>>,
+}
+
+impl GamepadEntry {
+    fn fire_input(&mut self, key: &str) {
+        if let Some(h) = &self.on_input {
+            if let Ok(mut f) = h.try_borrow_mut() {
+                f(key, 0);
+            }
+        }
+    }
+
+    fn fire_simple(slot: &Option<RefCell<Box<dyn FnMut()>>>) {
+        if let Some(h) = slot {
+            if let Ok(mut f) = h.try_borrow_mut() {
+                f();
+            }
+        }
+    }
+
+    fn poll(&mut self) {
+        let connected = mocida::input::poll_gamepad();
+        if connected != self.was_connected {
+            self.was_connected = connected;
+            if let Some(sig) = &self.connected {
+                let _ = sig.borrow_mut().set(if connected { 1 } else { 0 });
+            }
+            if connected {
+                let kind = mocida::input::pad_kind();
+                let name = mocida::input::pad_name();
+                if let Some(sig) = &self.kind {
+                    let _ = sig.borrow_mut().set(kind.clone());
+                }
+                if let Some(sig) = &self.name {
+                    let _ = sig.borrow_mut().set(name);
+                }
+                self.fire_input("Connect");
+                // Clear edges so a held button at plug-in doesn't instantly fire.
+                for b in &mut self.prev_btns {
+                    *b = false;
+                }
+                self.prev_dir = 0;
+            } else {
+                if let Some(sig) = &self.kind {
+                    let _ = sig.borrow_mut().set(String::new());
+                }
+                if let Some(sig) = &self.name {
+                    let _ = sig.borrow_mut().set(String::new());
+                }
+                self.fire_input("Disconnect");
+                for b in &mut self.prev_btns {
+                    *b = false;
+                }
+                self.prev_dir = 0;
+            }
+        }
+        if !connected {
+            return;
+        }
+        // Refresh kind/name in case SDL refined the type after open.
+        let kind = mocida::input::pad_kind();
+        if let Some(sig) = &self.kind {
+            if sig.borrow().get() != kind {
+                let _ = sig.borrow_mut().set(kind.clone());
+            }
+        }
+        if let Some(sig) = &self.name {
+            let n = mocida::input::pad_name();
+            if sig.borrow().get() != n {
+                let _ = sig.borrow_mut().set(n);
+            }
+        }
+        let nintendo = kind == "nintendo";
+        let confirm_btn = if nintendo {
+            mocida::input::btn::EAST
+        } else {
+            mocida::input::btn::SOUTH
+        };
+        let cancel_btn = if nintendo {
+            mocida::input::btn::SOUTH
+        } else {
+            mocida::input::btn::EAST
+        };
+
+        let mut cur = [false; 15];
+        for i in 0..15 {
+            cur[i] = mocida::input::pad_button(i as i32);
+        }
+        let edge = |i: usize, cur: &[bool; 15], prev: &[bool; 15]| cur[i] && !prev[i];
+
+        if edge(confirm_btn as usize, &cur, &self.prev_btns) {
+            self.fire_input("Confirm");
+            Self::fire_simple(&self.on_confirm);
+        }
+        if edge(cancel_btn as usize, &cur, &self.prev_btns) {
+            self.fire_input("Cancel");
+            Self::fire_simple(&self.on_cancel);
+        }
+        if edge(mocida::input::btn::START as usize, &cur, &self.prev_btns) {
+            self.fire_input("Start");
+            Self::fire_simple(&self.on_start);
+        }
+        if edge(mocida::input::btn::SOUTH as usize, &cur, &self.prev_btns) {
+            self.fire_input("South");
+        }
+        if edge(mocida::input::btn::EAST as usize, &cur, &self.prev_btns) {
+            self.fire_input("East");
+        }
+        if edge(mocida::input::btn::WEST as usize, &cur, &self.prev_btns) {
+            self.fire_input("West");
+        }
+        if edge(mocida::input::btn::NORTH as usize, &cur, &self.prev_btns) {
+            self.fire_input("North");
+        }
+        if edge(mocida::input::btn::LEFT_SHOULDER as usize, &cur, &self.prev_btns) {
+            self.fire_input("L1");
+        }
+        if edge(mocida::input::btn::RIGHT_SHOULDER as usize, &cur, &self.prev_btns) {
+            self.fire_input("R1");
+        }
+
+        // D-pad + left stick → virtual directions (edge on enter).
+        const DEAD: f32 = 0.55;
+        let ax = mocida::input::pad_axis(0);
+        let ay = mocida::input::pad_axis(1);
+        let mut dir: u8 = 0;
+        if cur[mocida::input::btn::DPAD_UP as usize] || ay < -DEAD {
+            dir |= 1;
+        }
+        if cur[mocida::input::btn::DPAD_DOWN as usize] || ay > DEAD {
+            dir |= 2;
+        }
+        if cur[mocida::input::btn::DPAD_LEFT as usize] || ax < -DEAD {
+            dir |= 4;
+        }
+        if cur[mocida::input::btn::DPAD_RIGHT as usize] || ax > DEAD {
+            dir |= 8;
+        }
+        if dir & 1 != 0 && self.prev_dir & 1 == 0 {
+            self.fire_input("Up");
+            Self::fire_simple(&self.on_up);
+        }
+        if dir & 2 != 0 && self.prev_dir & 2 == 0 {
+            self.fire_input("Down");
+            Self::fire_simple(&self.on_down);
+        }
+        if dir & 4 != 0 && self.prev_dir & 4 == 0 {
+            self.fire_input("Left");
+            Self::fire_simple(&self.on_left);
+        }
+        if dir & 8 != 0 && self.prev_dir & 8 == 0 {
+            self.fire_input("Right");
+            Self::fire_simple(&self.on_right);
+        }
+        self.prev_dir = dir;
+        self.prev_btns = cur;
+    }
+}
+
 /// Owns the live reactive state for one rendered view: the signals and their
 /// subscriptions. It **must outlive** `App::run()` — dropping it tears down the
 /// signals (and the text-update closures that capture widget pointers), so keep
@@ -271,6 +491,10 @@ pub struct Reactive {
     /// Loaded `Audio` clips — kept alive so a one-shot sound finishes playing
     /// (dropping a `Sound` stops it). They live for the document's lifetime.
     _sounds: Vec<Sound>,
+    /// Active `Timer` entries (polled by the host each frame).
+    timers: Vec<TimerEntry>,
+    /// Active `Gamepad` pollers (hotplug + edge-triggered buttons each frame).
+    gamepads: Vec<RefCell<GamepadEntry>>,
     /// Flipped whenever a *structural* signal (one read by an `if`/`for`) changes,
     /// so a host loop knows to rebuild + swap the tree. Shared so the per-signal
     /// subscriptions can set it.
@@ -289,6 +513,8 @@ impl Reactive {
             lists: HashMap::new(),
             _subs: Vec::new(),
             _sounds: Vec::new(),
+            timers: Vec::new(),
+            gamepads: Vec::new(),
             dirty: Rc::new(std::cell::Cell::new(false)),
         }
     }
@@ -348,6 +574,60 @@ impl Reactive {
     /// the last check, so the host should rebuild the tree).
     pub fn take_dirty(&self) -> bool {
         self.dirty.replace(false)
+    }
+
+    /// Fire due `Timer` entries. Call once per UI frame from the host loop
+    /// (before checking [`Reactive::take_dirty`]). Safe to call when empty.
+    pub fn poll_timers(&self) {
+        let now = unsafe { mocida::sys::SDL_GetTicks() };
+        for t in &self.timers {
+            let running = if let Some(sig) = &t.running_sig {
+                sig.borrow().get() != 0
+            } else {
+                t.running
+            };
+            if !running {
+                continue;
+            }
+            let last = t.last_ms.get();
+            let due = now.wrapping_sub(last) >= t.interval_ms;
+            let mut clock_changed = false;
+            if due {
+                // Catch up at most one interval behind to avoid burst after stalls.
+                t.last_ms.set(now);
+                if let Some(clock) = &t.clock {
+                    let next = advance_hhmmss(&clock.borrow().get(), t.step_secs);
+                    let prev = clock.borrow().get();
+                    if next != prev {
+                        let _ = clock.borrow_mut().set(next);
+                        clock_changed = true;
+                    }
+                }
+                if let Some(cb) = &t.on_tick {
+                    if let Ok(mut f) = cb.try_borrow_mut() {
+                        f();
+                    }
+                }
+            }
+            // Orbit every frame (smooth frac between ticks). Do NOT dirty the tree:
+            // rebuilds reload Images (spinners). Reactive x/y + HH:MM:SS update in place.
+            let _ = apply_timer_orbit(t, now);
+            if clock_changed {
+                self.dirty.set(true);
+            }
+        }
+        // Gamepads share the host frame poll (web + desktop) — hotplug + buttons.
+        self.poll_gamepads();
+    }
+
+    /// Poll connected pads (PS / Xbox / Switch via SDL). Edge-triggers
+    /// `Gamepad` handlers and updates `connected` / `kind` / `name` signals.
+    pub fn poll_gamepads(&self) {
+        for g in &self.gamepads {
+            if let Ok(mut gp) = g.try_borrow_mut() {
+                gp.poll();
+            }
+        }
     }
 
     /// Append a value to a list signal (`for item in list`) and flag the tree
@@ -1193,6 +1473,14 @@ fn build_node(ctx: &mut Ctx, node: &Node, layout: &mut Layout) -> Result<Option<
             build_audio(ctx, el)?;
             Ok(None)
         }
+        Node::Element(el) if el.name == "Timer" => {
+            build_timer(ctx, el)?;
+            Ok(None)
+        }
+        Node::Element(el) if el.name == "Gamepad" => {
+            build_gamepad(ctx, el)?;
+            Ok(None)
+        }
         // A `Popup` with `visible: false` renders nothing (and doesn't disturb
         // the layout). Otherwise it builds like a floating card.
         Node::Element(el) if el.name == "Popup" && prop_bool(el, "visible") == Some(false) => {
@@ -1344,18 +1632,60 @@ fn build_group(ctx: &mut Ctx, nodes: &[Node], layout: &mut Layout) -> Result<Opt
                 stack = stack.free_layout(true);
             }
             let n = built.len();
+            // Absolute overlays: bounding box must cover each child's x/y + size.
+            // Using only intrinsic content_w left a 148px wrapper at (0,0) that
+            // clipped HUD widgets placed at `Window.width - 156` (right edge).
+            let (mut abs_r, mut abs_b) = (content_w, content_h);
+            if absolute {
+                for w in &built {
+                    let p = w.as_ptr();
+                    unsafe {
+                        let wx = (*p).x;
+                        let wy = (*p).y;
+                        let ww = if (*p).width.is_null() {
+                            0.0
+                        } else {
+                            *(*p).width
+                        };
+                        let wh = if (*p).height.is_null() {
+                            0.0
+                        } else {
+                            *(*p).height
+                        };
+                        abs_r = abs_r.max(wx + ww);
+                        abs_b = abs_b.max(wy + wh);
+                    }
+                }
+                // Prefer full window so right-edge HUDs never clip.
+                if let Some(sw) =
+                    screen_metric("Window", "width").or_else(|| screen_metric("Screen", "width"))
+                {
+                    abs_r = abs_r.max(sw as f32);
+                }
+                if let Some(sh) =
+                    screen_metric("Window", "height").or_else(|| screen_metric("Screen", "height"))
+                {
+                    abs_b = abs_b.max(sh as f32);
+                }
+            }
             for w in built {
                 stack.add(w)?;
             }
             // Recompute height with real inter-item gaps (placed_height already
             // baked a trailing ROW_GAP per child — strip those, then add gap).
-            let gh = if horizontal {
+            let gh = if absolute {
+                abs_b.max(1.0)
+            } else if horizontal {
                 content_h.max(1.0)
             } else {
                 let stripped = (content_h - layout::ROW_GAP * n as f32).max(0.0);
                 (stripped + gap * n.saturating_sub(1) as f32).max(1.0)
             };
-            let gw = content_w.max(1.0);
+            let gw = if absolute {
+                abs_r.max(1.0)
+            } else {
+                content_w.max(1.0)
+            };
             layout.next_sized(gw, gh);
             Ok(Some(stack.into_widget_sized(gw, gh)?))
         }
@@ -1778,6 +2108,8 @@ fn is_builtin(name: &str) -> bool {
             | "Popup"
             | "Audio"
             | "Sound"
+            | "Timer"
+            | "Gamepad"
             | "MouseArea"
             | "GestureArea"
             | "TapGesture"
@@ -2682,11 +3014,35 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
         .filter(|n| ctx.signal(n).is_some() || ctx.string_signal(n).is_some())
         .collect();
 
-    let label = el
-        .positional
-        .as_ref()
-        .map(|e| render_text_expr(e, ctx))
-        .unwrap_or_default();
+    // `format: "HH:MM:SS"` / `format: "time"` — treat an int signal positional as
+    // seconds-since-midnight and render a live clock string.
+    let time_format = style::enum_member(el, "format")
+        .or_else(|| prop_string_value(ctx, el, "format"))
+        .map(|s| s.to_ascii_lowercase())
+        .filter(|s| s == "hh:mm:ss" || s == "time" || s == "clock");
+
+    let label = if time_format.is_some() {
+        if let Some(name) = reads.first() {
+            if let Some(sig) = ctx.signal(name) {
+                format_hhmmss(sig.borrow().get())
+            } else {
+                el.positional
+                    .as_ref()
+                    .map(|e| render_text_expr(e, ctx))
+                    .unwrap_or_default()
+            }
+        } else {
+            el.positional
+                .as_ref()
+                .map(|e| render_text_expr(e, ctx))
+                .unwrap_or_default()
+        }
+    } else {
+        el.positional
+            .as_ref()
+            .map(|e| render_text_expr(e, ctx))
+            .unwrap_or_default()
+    };
 
     // Size from the *current* text; mocida re-measures on update. The label
     // may contain explicit line breaks (`\n`, already unescaped by the
@@ -2799,6 +3155,7 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
             .collect();
 
         // The updater reads current values via raw ptr, re-renders, sets text.
+        let use_time = time_format.is_some();
         let updater = move || {
             let mut live = env.clone();
             for (name, ptr) in &int_ptrs {
@@ -2812,12 +3169,23 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
                 let val = unsafe { str_from_signal(*ptr) };
                 live.vars.insert(name.clone(), val);
             }
-            if let Some(e) = &tmpl_expr {
-                let s = render_text_expr_env(e, &live);
-                // SAFETY: text_ptr points at a live UIText owned by the widget
-                // tree, which outlives these subscriptions. Single-threaded.
-                let _ = unsafe { by_ptr::set_text(text_ptr, &s) };
-            }
+            let s = if use_time {
+                if let Some((_, ptr)) = int_ptrs.first() {
+                    let val = unsafe { mocida::sys::UISignal_GetInt(*ptr) };
+                    format_hhmmss(val)
+                } else if let Some(e) = &tmpl_expr {
+                    render_text_expr_env(e, &live)
+                } else {
+                    String::new()
+                }
+            } else if let Some(e) = &tmpl_expr {
+                render_text_expr_env(e, &live)
+            } else {
+                String::new()
+            };
+            // SAFETY: text_ptr points at a live UIText owned by the widget
+            // tree, which outlives these subscriptions. Single-threaded.
+            let _ = unsafe { by_ptr::set_text(text_ptr, &s) };
         };
 
         // Subscribe to every dependency signal (int + string). The `borrow_mut()`
@@ -4315,7 +4683,13 @@ fn build_icon(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
         if let Some(path) = mocida::text::get_font(&fam) {
             text = text.font_family(&path)?;
         }
-        let (x, y) = place(el, layout, w, h);
+        let (mut x, mut y) = place(el, layout, w, h);
+        if let Some(px) = dim_prop(ctx, el, "x") {
+            x = px;
+        }
+        if let Some(py) = dim_prop(ctx, el, "y") {
+            y = py;
+        }
         return Ok(apply_anchor(
             text.into_widget_sized(w, h)?.position(x, y),
             style::anchor(el),
@@ -4345,7 +4719,15 @@ fn build_icon(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
     if let Some(r) = style::f32_prop(el, "radius").or_else(|| dim_prop(ctx, el, "radius")) {
         img = img.radius(r);
     }
-    let (x, y) = place(el, layout, w, h);
+    // Same as Stack/Rectangle: `x:`/`y:` via dim_prop so expressions work
+    // (e.g. `x: Window.width - 40`), not only numeric literals from `place()`.
+    let (mut x, mut y) = place(el, layout, w, h);
+    if let Some(px) = dim_prop(ctx, el, "x") {
+        x = px;
+    }
+    if let Some(py) = dim_prop(ctx, el, "y") {
+        y = py;
+    }
     let widget = img.into_widget_sized(w, h)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
 }
@@ -4382,7 +4764,17 @@ fn build_image(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     }
     let w = dim_prop(ctx, el, "width").unwrap_or(120.0);
     let h = dim_prop(ctx, el, "height").unwrap_or(120.0);
-    let (x, y) = place(el, layout, w, h);
+    // Absolute placement must honour expression/bound `x:`/`y:` (Window.width,
+    // signals, …). `place()` only reads numeric literals via f32_prop — that
+    // left Image/Icon stuck at the flow cursor whenever a game HUD used
+    // `x: Window.width - N`, so overlays looked "bagunçados" off-center.
+    let (mut x, mut y) = place(el, layout, w, h);
+    if let Some(px) = dim_prop(ctx, el, "x") {
+        x = px;
+    }
+    if let Some(py) = dim_prop(ctx, el, "y") {
+        y = py;
+    }
     let widget = img.into_widget_sized(w, h)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
 }
@@ -5059,6 +5451,345 @@ fn build_webview(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wid
     let (x, y) = place(el, layout, w, h);
     let widget = wv.into_widget_sized(w, h)?.position(x, y);
     Ok(apply_anchor(widget, style::anchor(el)))
+}
+
+
+/// Format seconds-since-midnight as `HH:MM:SS` (wrap 24h).
+fn format_hhmmss(total: i32) -> String {
+    let mut s = total % (24 * 3600);
+    if s < 0 {
+        s += 24 * 3600;
+    }
+    let h = s / 3600;
+    let m = (s % 3600) / 60;
+    let sec = s % 60;
+    format!("{h:02}:{m:02}:{sec:02}")
+}
+
+/// Write an int signal only when the value changes (avoids subscriber spam).
+fn set_int_if_changed(sig: &Rc<RefCell<Signal<i32>>>, value: i32) -> bool {
+    let cur = sig.borrow().get();
+    if cur == value {
+        return false;
+    }
+    let _ = sig.borrow_mut().set(value);
+    true
+}
+
+/// Majora dial: midnight at top, clockwise. Sun at `seconds`; moon opposite;
+/// hand tip slightly inward on the sun angle. Returns true if any signal changed.
+fn apply_timer_orbit(t: &TimerEntry, now_ms: u64) -> bool {
+    let Some(secs_sig) = &t.orbit_secs else {
+        return false;
+    };
+    let mut s_i = secs_sig.borrow().get() % (24 * 3600);
+    if s_i < 0 {
+        s_i += 24 * 3600;
+    }
+    // Smooth between ticks: onTick advances clockSec by orbit_step each interval.
+    let elapsed = now_ms.wrapping_sub(t.last_ms.get());
+    let frac = if t.interval_ms > 0 {
+        (elapsed as f32 / t.interval_ms as f32).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let s = (s_i as f32 + frac * t.orbit_step).rem_euclid(86400.0);
+    let size = t.orbit_size.max(32.0);
+    let icon = t.orbit_icon.max(8.0);
+    let ox = t.orbit_origin_x;
+    let oy = t.orbit_origin_y;
+    let unit = t.orbit_unit.max(1.0);
+    // Dial center; icon top-left = center + offset - icon/2.
+    let dial_cx = ox + size * 0.5;
+    let dial_cy = oy + size * 0.5;
+    // Outer track (near rim), not the hub — old formula inset by icon/2+18 parked
+    // large sprites in the middle of the dial.
+    let r = (size * 0.5 - 10.0).max(size * 0.40);
+    let theta = (s / 86400.0) * std::f32::consts::TAU;
+    let sun_xf = dial_cx + r * theta.sin() - icon * 0.5;
+    let sun_yf = dial_cy - r * theta.cos() - icon * 0.5;
+    let moon_xf = dial_cx + r * (theta + std::f32::consts::PI).sin() - icon * 0.5;
+    let moon_yf = dial_cy - r * (theta + std::f32::consts::PI).cos() - icon * 0.5;
+    let hand_r = r * 0.78;
+    let hand_xf = dial_cx + hand_r * theta.sin() - icon * 0.5;
+    let hand_yf = dial_cy - hand_r * theta.cos() - icon * 0.5;
+    let mut changed = false;
+    if let Some(sig) = &t.sun_x {
+        changed |= set_int_if_changed(sig, (sun_xf * unit).round() as i32);
+    }
+    if let Some(sig) = &t.sun_y {
+        changed |= set_int_if_changed(sig, (sun_yf * unit).round() as i32);
+    }
+    if let Some(sig) = &t.moon_x {
+        changed |= set_int_if_changed(sig, (moon_xf * unit).round() as i32);
+    }
+    if let Some(sig) = &t.moon_y {
+        changed |= set_int_if_changed(sig, (moon_yf * unit).round() as i32);
+    }
+    if let Some(sig) = &t.hand_x {
+        changed |= set_int_if_changed(sig, (hand_xf * unit).round() as i32);
+    }
+    if let Some(sig) = &t.hand_y {
+        changed |= set_int_if_changed(sig, (hand_yf * unit).round() as i32);
+    }
+    // Analog hands from the same seconds: 12 frames × 30°.
+    // Hour: 30° per hour + 0.5° per minute → frame = floor((h%12)*30 + m*0.5) / 30
+    // Minute: 6° per minute → frame = floor(m / 5)  (5 min per spoke)
+    let h24 = (s_i / 3600) as i32;
+    let mins = ((s_i % 3600) / 60) as i32;
+    let hour_frame = {
+        let h12 = h24.rem_euclid(12);
+        let deg = h12 * 30 + mins / 2; // ≈ 30h + 0.5m
+        (deg / 30).rem_euclid(12)
+    };
+    let min_frame = (mins / 5).rem_euclid(12);
+    if let Some(sig) = &t.hour_hand {
+        changed |= set_int_if_changed(sig, hour_frame);
+    }
+    if let Some(sig) = &t.min_hand {
+        changed |= set_int_if_changed(sig, min_frame);
+    }
+    changed
+}
+
+/// Resolve `prop: signalName` to an int signal (ident only).
+fn int_signal_prop(ctx: &Ctx, el: &Element, name: &str) -> Option<Rc<RefCell<Signal<i32>>>> {
+    match &find_prop(el, name).map(|p| &p.value) {
+        Some(PropValue::Expr(e)) => match &e.kind {
+            ExprKind::Ident(n) => ctx.signal(n).cloned(),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Parse `HH:MM:SS` / `H:M:S` and add `step` seconds (wrap 24h).
+fn advance_hhmmss(raw: &str, step: u32) -> String {
+    let parts: Vec<&str> = raw.trim().split(':').collect();
+    let (mut h, mut m, mut s) = (0u32, 0u32, 0u32);
+    if !parts.is_empty() {
+        h = parts[0].parse().unwrap_or(0);
+    }
+    if parts.len() >= 2 {
+        m = parts[1].parse().unwrap_or(0);
+    }
+    if parts.len() >= 3 {
+        s = parts[2].parse().unwrap_or(0);
+    }
+    let mut total = h as u64 * 3600 + m as u64 * 60 + s as u64 + step as u64;
+    total %= 24 * 3600;
+    h = (total / 3600) as u32;
+    m = ((total % 3600) / 60) as u32;
+    s = (total % 60) as u32;
+    format!("{h:02}:{m:02}:{s:02}")
+}
+
+/// `Timer(interval:, step:, running:, clock:, onTick:, orbitSeconds:, …)` —
+/// non-visual periodic ticker. `interval` is milliseconds (default 1000).
+/// `step:` game-seconds added to `clock` each fire (default 1). `clock:` names
+/// a string signal in `HH:MM:SS` form. `onTick:` runs the same handler actions
+/// as a Button click. Optional Majora dial: `orbitSeconds:` int signal +
+/// `sunX`/`sunY`/`moonX`/`moonY`/`handX`/`handY` int signals + `orbitSize:` /
+/// `orbitIcon:` (px). Optional analog frames: `hourHand:` / `minHand:` int
+/// signals (0..11, 30° steps) derived from `orbitSeconds` each poll.
+/// Host must call [`Reactive::poll_timers`] (web: via `mui_host_frame_poll`).
+fn build_timer(ctx: &mut Ctx, el: &Element) -> Result<()> {
+    let interval = style::f32_prop(el, "interval")
+        .or_else(|| dim_prop(ctx, el, "interval"))
+        .unwrap_or(1000.0)
+        .max(16.0) as u64;
+    let step_secs = style::f32_prop(el, "step")
+        .or_else(|| dim_prop(ctx, el, "step"))
+        .unwrap_or(1.0)
+        .max(1.0) as u32;
+    let running = prop_bool(el, "running").unwrap_or(true);
+    let running_sig = find_prop(el, "running").and_then(|p| match &p.value {
+        PropValue::Expr(e) => match &e.kind {
+            ExprKind::Ident(n) => ctx.signal(n).cloned(),
+            _ => None,
+        },
+        _ => None,
+    });
+    // `clock: clockSignal` must be the signal *name* (ident), not its value.
+    let clock = match &find_prop(el, "clock").map(|p| &p.value) {
+        Some(PropValue::Expr(e)) => match &e.kind {
+            ExprKind::Ident(n) => ctx.string_signal(n).cloned(),
+            ExprKind::Literal(Literal::Str(tpl)) => {
+                let name = render_template_raw(tpl).replace("{}", "");
+                ctx.string_signal(&name).cloned()
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    let on_tick = handler_apply_closure(ctx, el, "onTick").map(|f| RefCell::new(f));
+    let orbit_secs = int_signal_prop(ctx, el, "orbitSeconds")
+        .or_else(|| int_signal_prop(ctx, el, "orbit"));
+    let orbit_size = style::f32_prop(el, "orbitSize")
+        .or_else(|| dim_prop(ctx, el, "orbitSize"))
+        .unwrap_or(148.0);
+    let orbit_icon = style::f32_prop(el, "orbitIcon")
+        .or_else(|| dim_prop(ctx, el, "orbitIcon"))
+        .unwrap_or(28.0);
+    let orbit_origin_x = style::f32_prop(el, "orbitX")
+        .or_else(|| dim_prop(ctx, el, "orbitX"))
+        .unwrap_or(0.0);
+    let orbit_origin_y = style::f32_prop(el, "orbitY")
+        .or_else(|| dim_prop(ctx, el, "orbitY"))
+        .unwrap_or(0.0);
+    // 1 = pixel signals (legacy); 10 = deci-px → MUI `x: sunX / 10` for smooth motion.
+    let orbit_unit = style::f32_prop(el, "orbitUnit")
+        .or_else(|| dim_prop(ctx, el, "orbitUnit"))
+        .unwrap_or(1.0)
+        .max(1.0);
+    // Game-seconds per fire for orbit interp; default matches Majora `clockSec += 24`.
+    let orbit_step = style::f32_prop(el, "orbitStep")
+        .or_else(|| dim_prop(ctx, el, "orbitStep"))
+        .unwrap_or(if orbit_secs.is_some() {
+            24.0
+        } else {
+            step_secs as f32
+        })
+        .max(0.0);
+    let sun_x = int_signal_prop(ctx, el, "sunX");
+    let sun_y = int_signal_prop(ctx, el, "sunY");
+    let moon_x = int_signal_prop(ctx, el, "moonX");
+    let moon_y = int_signal_prop(ctx, el, "moonY");
+    let hand_x = int_signal_prop(ctx, el, "handX");
+    let hand_y = int_signal_prop(ctx, el, "handY");
+    let hour_hand = int_signal_prop(ctx, el, "hourHand");
+    let min_hand = int_signal_prop(ctx, el, "minHand");
+    // hourHand/minHand alone still need orbitSeconds as the time source.
+    if clock.is_none() && on_tick.is_none() && orbit_secs.is_none() {
+        return Ok(());
+    }
+    let now = unsafe { mocida::sys::SDL_GetTicks() };
+    let entry = TimerEntry {
+        interval_ms: interval,
+        last_ms: Cell::new(now),
+        step_secs,
+        running,
+        running_sig,
+        on_tick,
+        clock,
+        orbit_secs,
+        orbit_size,
+        orbit_icon,
+        orbit_origin_x,
+        orbit_origin_y,
+        orbit_unit,
+        orbit_step,
+        sun_x,
+        sun_y,
+        moon_x,
+        moon_y,
+        hand_x,
+        hand_y,
+        hour_hand,
+        min_hand,
+    };
+    // Seed dial positions once so the first frame isn't stuck at (0,0).
+    let _ = apply_timer_orbit(&entry, now);
+    ctx.reactive.timers.push(entry);
+    Ok(())
+}
+
+/// `Gamepad(connected:, kind:, name:, onInput:, onConfirm:, …)` — non-visual.
+/// Polls SDL pads every frame (via [`Reactive::poll_timers`]): hotplug, kind
+/// (`playstation`/`xbox`/`nintendo`/`generic`), and edge-triggered virtual
+/// keys. Nintendo Confirm = East (A); Xbox/PS Confirm = South (A/✕).
+fn build_gamepad(ctx: &mut Ctx, el: &Element) -> Result<()> {
+    let connected = int_signal_prop(ctx, el, "connected");
+    let kind = str_signal_prop(ctx, el, "kind");
+    let name = str_signal_prop(ctx, el, "name");
+    let on_input = key_handler_closure(ctx, el, "onInput").map(RefCell::new);
+    let on_confirm = handler_apply_closure(ctx, el, "onConfirm").map(RefCell::new);
+    let on_cancel = handler_apply_closure(ctx, el, "onCancel").map(RefCell::new);
+    let on_up = handler_apply_closure(ctx, el, "onUp").map(RefCell::new);
+    let on_down = handler_apply_closure(ctx, el, "onDown").map(RefCell::new);
+    let on_left = handler_apply_closure(ctx, el, "onLeft").map(RefCell::new);
+    let on_right = handler_apply_closure(ctx, el, "onRight").map(RefCell::new);
+    let on_start = handler_apply_closure(ctx, el, "onStart").map(RefCell::new);
+    if connected.is_none()
+        && kind.is_none()
+        && name.is_none()
+        && on_input.is_none()
+        && on_confirm.is_none()
+        && on_cancel.is_none()
+        && on_up.is_none()
+        && on_down.is_none()
+        && on_left.is_none()
+        && on_right.is_none()
+        && on_start.is_none()
+    {
+        return Ok(());
+    }
+    // Seed from live pad so a structural rebuild doesn't re-fire Connect.
+    let live = mocida::input::poll_gamepad();
+    let mut prev_btns = [false; 15];
+    let mut prev_dir: u8 = 0;
+    if live {
+        if let Some(sig) = &connected {
+            let _ = sig.borrow_mut().set(1);
+        }
+        let k = mocida::input::pad_kind();
+        let n = mocida::input::pad_name();
+        if let Some(sig) = &kind {
+            let _ = sig.borrow_mut().set(k);
+        }
+        if let Some(sig) = &name {
+            let _ = sig.borrow_mut().set(n);
+        }
+        for i in 0..15 {
+            prev_btns[i] = mocida::input::pad_button(i as i32);
+        }
+        const DEAD: f32 = 0.55;
+        let ax = mocida::input::pad_axis(0);
+        let ay = mocida::input::pad_axis(1);
+        if prev_btns[mocida::input::btn::DPAD_UP as usize] || ay < -DEAD {
+            prev_dir |= 1;
+        }
+        if prev_btns[mocida::input::btn::DPAD_DOWN as usize] || ay > DEAD {
+            prev_dir |= 2;
+        }
+        if prev_btns[mocida::input::btn::DPAD_LEFT as usize] || ax < -DEAD {
+            prev_dir |= 4;
+        }
+        if prev_btns[mocida::input::btn::DPAD_RIGHT as usize] || ax > DEAD {
+            prev_dir |= 8;
+        }
+    }
+    ctx.reactive.gamepads.push(RefCell::new(GamepadEntry {
+        connected,
+        kind,
+        name,
+        prev_btns,
+        prev_dir,
+        was_connected: live,
+        on_input,
+        on_confirm,
+        on_cancel,
+        on_up,
+        on_down,
+        on_left,
+        on_right,
+        on_start,
+    }));
+    Ok(())
+}
+
+fn str_signal_prop(ctx: &Ctx, el: &Element, name: &str) -> Option<Rc<RefCell<Signal<String>>>> {
+    match &find_prop(el, name).map(|p| &p.value) {
+        Some(PropValue::Expr(e)) => match &e.kind {
+            ExprKind::Ident(n) => ctx.string_signal(n).cloned(),
+            ExprKind::Literal(Literal::Str(tpl)) => {
+                let n = render_template_raw(tpl).replace("{}", "");
+                ctx.string_signal(&n).cloned()
+            }
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// `Audio("clip.wav", volume:, gain:, autoplay:)` — a non-visual one-shot sound
@@ -7956,6 +8687,13 @@ fn collect_idents(e: &Expr, out: &mut Vec<String>) {
         ExprKind::Ident(n) => {
             if !out.contains(n) {
                 out.push(n.clone());
+            }
+        }
+        ExprKind::Literal(Literal::Str(t)) => {
+            for p in &t.parts {
+                if let StrPart::Expr(ex) = p {
+                    collect_idents(ex, out);
+                }
             }
         }
         ExprKind::Call { callee, args, .. } => {
