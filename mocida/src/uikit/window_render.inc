@@ -351,14 +351,18 @@ static void RenderSingleWidget_Inner(UIWindow* window, UIWidget* el) {
     // A hidden widget hides its whole subtree, so an off-screen screen kept
     // built for an instant phase switch costs nothing per frame.
     if (UI_UNLIKELY(!el || !el->visible || !el->data)) return;
+
+    // Align BEFORE the cull test. Anchored widgets often still sit at a
+    // stale/flow position (e.g. parent top-left) until Align runs; culling
+    // on the pre-align box would park them and skip the anchor forever.
+    if (el->alignment) UIAlignment_Align(el);
+
     // Skip widgets fully outside the window. Big win for scrolls /
     // lists with off-screen content; cheap when the widget has bounds.
     if (UI_UNLIKELY(WidgetCulled(window, el))) {
         ParkSubtree(el, el->x, el->y);
         return;
     }
-
-    if (el->alignment) UIAlignment_Align(el);
     UIWidgetBase* base = (UIWidgetBase*)el->data;
 
     // Opacity: skip fully transparent widgets to save GPU work, otherwise

@@ -45,8 +45,9 @@ Stack(
   background: #121218e8,
   borderColor: #3a3a42,
   borderWidth: 1,
-  x: 10,
-  y: Window.height - 178,
+  anchor: bottom left,
+  marginLeft: 10,
+  marginBottom: 10,
   width: Window.width - 20,
   height: 168,
   padding: 10,
@@ -54,6 +55,10 @@ Stack(
   // dock content
 }
 ```
+
+Prefer **`anchor:` + `margin:`** over `x:`/`y:` for HUD chrome (corners, docks,
+safe insets). `x`/`y` are parent-local and break when the window / letterbox
+changes. Keep `x:`/`y:` only for dynamic freeLayout (orbits, cursors, drag).
 
 On native backends where Glass composites as intended:
 
@@ -64,7 +69,9 @@ Glass(
   tint: #121218,
   tintOpacity: 0.62,
   blur: 22,
-  x: 10, y: Window.height - 178,
+  anchor: bottom left,
+  marginLeft: 10,
+  marginBottom: 10,
   width: Window.width - 20, height: 168, padding: 10,
 ) { /* dock */ }
 ```

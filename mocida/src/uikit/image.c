@@ -154,6 +154,48 @@ int UIImage_GetTextureSize(const UIImage* image, float* w, float* h) {
     return 1;
 }
 
+/* --- process-wide decoded texture cache (survives widget remounts) ----- */
+/* Bytes cache alone still re-decodes (1/frame on web) → visible flash on
+   every screen change. Keep the SDL_Texture itself keyed by path so a
+   rebuild that remounts Image("bg.jpg") is instant. Cache owns the tex;
+   UIImage_Destroy must not SDL_DestroyTexture a cached one. */
+
+typedef struct TexCacheNode {
+    char* path;
+    SDL_Texture* tex;
+    struct TexCacheNode* next;
+} TexCacheNode;
+
+static TexCacheNode* g_texCache = NULL;
+
+static SDL_Texture* TexCache_Get(const char* path) {
+    if (!path || !*path) return NULL;
+    for (TexCacheNode* n = g_texCache; n; n = n->next) {
+        if (n->path && strcmp(n->path, path) == 0) return n->tex;
+    }
+    return NULL;
+}
+
+static void TexCache_Put(const char* path, SDL_Texture* tex) {
+    if (!path || !*path || !tex) return;
+    if (TexCache_Get(path)) return;
+    TexCacheNode* n = (TexCacheNode*)calloc(1, sizeof(TexCacheNode));
+    if (!n) return;
+    n->path = _strdup(path);
+    if (!n->path) { free(n); return; }
+    n->tex = tex;
+    n->next = g_texCache;
+    g_texCache = n;
+}
+
+static int TexCache_Owns(SDL_Texture* tex) {
+    if (!tex) return 0;
+    for (TexCacheNode* n = g_texCache; n; n = n->next) {
+        if (n->tex == tex) return 1;
+    }
+    return 0;
+}
+
 /* --- process-wide URL -> bytes cache (FIFO eviction past a size cap) --- */
 
 typedef struct RemoteCacheNode {
@@ -484,6 +526,23 @@ void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer) {
         int ready;
         char* url;
     } WebJob;
+
+    /* Instant remount: reuse a previously decoded texture (screen changes
+       rebuild the tree; without this every Image flashes blank for N frames). */
+    if (image->cache && image->source && image->source[0] && !image->__SDL_texture) {
+        char urlBuf[1024];
+        const char* url = UIImage_WebFetchUrl(image->source, urlBuf, sizeof(urlBuf));
+        SDL_Texture* hit = TexCache_Get(url);
+        if (!hit && url != image->source) hit = TexCache_Get(image->source);
+        if (hit) {
+            image->__SDL_texture = hit;
+            image->loadState = IMAGE_LOAD_SUCCESS;
+            SDL_SetTextureScaleMode(image->__SDL_texture,
+                image->antialiasing ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+            return;
+        }
+    }
+
     WebJob* job = (WebJob*)image->__download;
     if (!job) {
         job = (WebJob*)calloc(1, sizeof(WebJob));
@@ -561,6 +620,8 @@ void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer) {
         image->loadState = IMAGE_LOAD_SUCCESS;
         SDL_SetTextureScaleMode(image->__SDL_texture,
             image->antialiasing ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+        if (image->cache && job->url)
+            TexCache_Put(job->url, image->__SDL_texture);
     } else {
         image->loadState = IMAGE_LOAD_FAILURE;
     }
@@ -572,6 +633,17 @@ void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer) {
 #else
     RemoteJob* job = (RemoteJob*)image->__download;
     if (!job) {
+        /* Instant remount from decoded-texture cache (desktop / native). */
+        if (image->cache && image->source && image->source[0] && !image->__SDL_texture) {
+            SDL_Texture* hit = TexCache_Get(image->source);
+            if (hit) {
+                image->__SDL_texture = hit;
+                image->loadState = IMAGE_LOAD_SUCCESS;
+                SDL_SetTextureScaleMode(image->__SDL_texture,
+                    image->antialiasing ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+                return;
+            }
+        }
         /* First visit: spin up the background download. */
         job = (RemoteJob*)calloc(1, sizeof(RemoteJob));
         if (!job) { image->loadState = IMAGE_LOAD_FAILURE; return; }
@@ -610,6 +682,8 @@ void UIImage_PumpRemote(UIImage* image, SDL_Renderer* renderer) {
             image->loadState = IMAGE_LOAD_SUCCESS;
             SDL_SetTextureScaleMode(image->__SDL_texture,
                 image->antialiasing ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+            if (image->cache && job->url)
+                TexCache_Put(job->url, image->__SDL_texture);
         } else {
             image->loadState = IMAGE_LOAD_FAILURE;
         }
@@ -645,7 +719,9 @@ void UIImage_Destroy(UIImage* image) {
 #endif
     }
     if (image->__SDL_texture) {
-        SDL_DestroyTexture(image->__SDL_texture);
+        /* Cached textures outlive the widget — remounts reuse them. */
+        if (!TexCache_Owns(image->__SDL_texture))
+            SDL_DestroyTexture(image->__SDL_texture);
         image->__SDL_texture = NULL;
     }
     if (image->__roundedCache) {

@@ -19,16 +19,30 @@ static int NameOk(const char* s) {
 int UIWeb_IsWeb(void) { return 1; }
 
 void UIWeb_GetViewport(int* out_w, int* out_h) {
-    /* visualViewport tracks the *visible* CSS viewport on iOS/Android when
-     * the browser chrome shows/hides. Fall back to innerWidth/Height. */
+    /* Match listen_boot.js viewportSize(): prefer layout clientWidth/Height.
+     * Using visualViewport alone while the canvas is sized to the layout
+     * viewport (or the reverse) shifts every anchored HUD chip — classic
+     * "JOGAR bleeds off the right edge" on iPhone Safari. */
     int w = EM_ASM_INT({
+        var doc = document.documentElement;
+        var n = (doc && doc.clientWidth) || window.innerWidth || 0;
         var vv = window.visualViewport;
-        var n = (vv && vv.width) ? vv.width : (window.innerWidth || 0);
+        if (vv && vv.width > 0) {
+            var scale = vv.scale || 1;
+            if (scale > 0.95 && scale < 1.05) n = Math.min(n, vv.width);
+        }
+        if (window.innerWidth > 0) n = Math.min(n, window.innerWidth);
         return Math.max(1, Math.round(n));
     });
     int h = EM_ASM_INT({
+        var doc = document.documentElement;
+        var n = (doc && doc.clientHeight) || window.innerHeight || 0;
         var vv = window.visualViewport;
-        var n = (vv && vv.height) ? vv.height : (window.innerHeight || 0);
+        if (vv && vv.height > 0) {
+            var scale = vv.scale || 1;
+            if (scale > 0.95 && scale < 1.05) n = Math.min(n, vv.height);
+        }
+        if (window.innerHeight > 0) n = Math.min(n, window.innerHeight);
         return Math.max(1, Math.round(n));
     });
     if (out_w) *out_w = w;

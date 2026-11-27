@@ -1772,6 +1772,20 @@ void UIApp_SetChildren(UIApp* app, UIChildren* children) {
 
     app->window->children = children;
 
+    // Root widgets sit under window->children with no container Widget above
+    // them. Parent them to mainWidget (kept at the window/layout size) so
+    // `anchor: center` / SetAlignmentByParent on a root node has a sized target
+    // — same pattern as tests/test_resize.c.
+    if (app->mainWidget) {
+        for (int i = 0; i < children->count; i++) {
+            UIWidget* child = children->children[i];
+            if (!child) continue;
+            UIWidget_SetParent(child, app->mainWidget);
+            UIWidget_AdoptChildren(child);
+        }
+        UIChildren_Relayout(children);
+    }
+
     // The new tree's widgets carry their CREATE-time hover state (buttons NORMAL,
     // mouse areas un-hovered), but the cursor may be parked over one of them. The
     // child x/y aren't laid out until the next render, so defer the hover

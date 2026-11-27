@@ -9,10 +9,12 @@
 //! Members: `os` (`macos`, `windows`, `linux`, `ios`, `android`, or a console:
 //! `playstation`, `xbox`, `switch`), `device` (a simulated device's id, else
 //! the os), and `isMobile`, `isTouch`, `isDesktop`, `isConsole`, `isIOS`,
-//! `isAndroid`, `isMacOS`, `isWindows`, `isLinux`, `isWeb`, `debug`,
-//! `prefersReducedMotion` (`1` / `0`, so both `if Platform.isTouch` and
-//! `Platform.isTouch == true` work). On the web build, `isIOS` / `isAndroid`
-//! follow the live User-Agent so a phone visiting the listen site lights up.
+//! `isAndroid`, `isMacOS`, `isWindows`, `isLinux`, `isWeb`, `isPortrait`,
+//! `isLandscape`, `debug`, `prefersReducedMotion` (`1` / `0`, so both
+//! `if Platform.isTouch` and `Platform.isTouch == true` work). On the web
+//! build, `isIOS` / `isAndroid` follow the live User-Agent so a phone visiting
+//! the listen site lights up. `isPortrait` / `isLandscape` follow the live
+//! window (or CSS viewport on web) so mobile rotate rebuilds the right layout.
 //!
 //! `Platform.debug` is `1` for Rust debug builds, when `MOCIDA_DEBUG=1`, or
 //! when the page URL has `debug=1` / `admin=1` (web). Use it to gate admin HUD.
@@ -93,6 +95,21 @@ pub fn member(field: &str) -> Option<String> {
     } else {
         os.clone()
     };
+    // Live window / CSS viewport aspect. Prefer the app window size (always set
+    // after UIApp_Create); fall back to the CSS viewport on web if needed.
+    let (mut vw, mut vh) = (
+        unsafe { mocida::sys::UIApp_GetWidthG() },
+        unsafe { mocida::sys::UIApp_GetHeightG() },
+    );
+    if cfg!(target_arch = "wasm32") && (vw <= 0 || vh <= 0) {
+        let (css_w, css_h) = mocida::web::viewport();
+        if css_w > 0 && css_h > 0 {
+            vw = css_w;
+            vh = css_h;
+        }
+    }
+    let portrait = vh > vw && vh > 0 && vw > 0;
+
     Some(match field {
         "os" => reported_os,
         "isWeb" => flag(cfg!(target_arch = "wasm32")),
@@ -108,6 +125,8 @@ pub fn member(field: &str) -> Option<String> {
         "isMacOS" => flag(os == "macos" && !ios),
         "isWindows" => flag(os == "windows"),
         "isLinux" => flag(os == "linux"),
+        "isPortrait" => flag(portrait),
+        "isLandscape" => flag(!portrait && vw > 0 && vh > 0),
         "prefersReducedMotion" => flag(if cfg!(target_arch = "wasm32") {
             mocida::web::prefers_reduced_motion()
         } else {

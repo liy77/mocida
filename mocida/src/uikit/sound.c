@@ -45,6 +45,16 @@ static int TryLoadWav(const char* path, SDL_AudioSpec* spec,
                       Uint8** out, Uint32* outLen) {
     if (LoadWavCandidate(path, spec, out, outLen)) return 1;
 
+#if defined(MOCIDA_WEB)
+    /* MEMFS is rooted at "/". Boot stages "/assets/….wav". Relative
+       tickSound paths must also try the absolute form (same as asset.c). */
+    if (path[0] != '/' && path[0] != '\\') {
+        char abs[SOUND_PATH_BUF];
+        int n = snprintf(abs, sizeof(abs), "/%s", path);
+        if (n > 0 && n < (int)sizeof(abs) &&
+            LoadWavCandidate(abs, spec, out, outLen)) return 1;
+    }
+#else
     const char* base = SDL_GetBasePath();
     if (base) {
         char buf[SOUND_PATH_BUF];
@@ -56,6 +66,7 @@ static int TryLoadWav(const char* path, SDL_AudioSpec* spec,
         if (n > 0 && n < (int)sizeof(buf) &&
             LoadWavCandidate(buf, spec, out, outLen)) return 1;
     }
+#endif
     return 0;
 }
 

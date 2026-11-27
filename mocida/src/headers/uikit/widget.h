@@ -69,7 +69,7 @@ typedef struct {
     float* height;        /**< Explicit height pointer; NULL = dynamic. */
     float opacity;        /**< [0..1] alpha multiplier applied to the whole subtree. */
     UIAlignment* alignment; /**< Optional anchor rules; NULL = absolute positioning. */
-    UIWidgetData* parent;   /**< Owning parent (UIWidget*) or NULL for root. */
+    UIWidgetData parent;    /**< Owning parent (UIWidget*) or NULL for root. */
 
     /**
      * Generic keyboard-focus flag. Updated by UIWidget_SetFocus and the
@@ -321,6 +321,15 @@ void UIWidget_SetAlignment(UIWidget* widget, UIAlignment alignment);
  * @return Pointer to the updated UIWidget object.
  */
 UIWidget* UIWidget_SetParent(UIWidget* widget, UIWidget* parent);
+
+/**
+ * Links every direct child of a container widget (Stack / Glass / Grid /
+ * Rectangle / Dialog / TabView / Scroll content) to `widget` via
+ * UIWidget_SetParent, then relayouts. Call after widgcs() so children that
+ * received `anchor:` / SetAlignmentByParent before the parent Widget existed
+ * resolve against this container.
+ */
+void UIWidget_AdoptChildren(UIWidget* widget);
 
 /**
  * Gets the parent of a UIWidget object.

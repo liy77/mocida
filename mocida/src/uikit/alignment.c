@@ -37,11 +37,18 @@ void UIAlignment_Align(UIWidget* widget) {
     UIAlignment alignment = *(UIAlignment*)widget->alignment;
     UIWidget* targetH = UIAlignment_GetHTarget(&alignment);
     UIWidget* targetV = UIAlignment_GetVTarget(&alignment);
+    // NULL target = "align inside parent" (see UIAlign.target_widget). MUI
+    // calls SetAlignmentByParent before the container Widget exists, so the
+    // rule is stored with NULL targets and resolved once SetParent runs —
+    // and again every frame from the render path.
+    if (targetH == NULL) targetH = UIWidget_GetParent(widget);
+    if (targetV == NULL) targetV = UIWidget_GetParent(widget);
 
     if (targetH == NULL || targetV == NULL ||
         targetH->width == NULL || targetH->height == NULL ||
         targetV->width == NULL || targetV->height == NULL) {
-        UI_WARN(UI_CAT_LAYOUT, "alignment target is NULL or has no defined size");
+        // Deferred: parent not linked or sized yet. Not an error — AdoptChildren
+        // / SetParent / the next render pass will retry.
         return;
     }
 
@@ -52,27 +59,27 @@ void UIAlignment_Align(UIWidget* widget) {
     const float widgetWidth    = *widget->width;
     const float widgetHeight   = *widget->height;
 
-    // Margins are read from the WIDGET BEING ALIGNED (CSS-margin semantics):
-    // they offset the widget away from its anchor point. The previous
-    // implementation read them from the target, which conflated the
-    // target's intrinsic inset with the child's outer margin and made
-    // anchoring with a per-widget offset impossible.
-    //
-    // Only UIRectangle / UIText expose the margin fields at a known offset
-    // (same prefix as UIMarginsObject). For every other widget type the
-    // margins are taken as zero — those widgets shouldn't carry their
-    // own margin metadata since the field layout isn't compatible with
-    // the UIMarginsObject cast.
-    float marginLeft = 0, marginRight = 0, marginTop = 0, marginBottom = 0;
+    // Margins offset the widget away from its anchor (CSS-margin semantics).
+    // Prefer UIWidget_SetMargin (widget->margin*) so EVERY widget type —
+    // Image, Button, MouseArea, Stack, … — can inset from `anchor:` + `margin:`.
+    // Rectangle/Text also expose the same fields on their payload; use those
+    // when set so authors who called UIRectangle_SetMargins still win.
+    float marginLeft   = widget->marginLeft;
+    float marginRight  = widget->marginRight;
+    float marginTop    = widget->marginTop;
+    float marginBottom = widget->marginBottom;
     UIWidgetBase* base = (UIWidgetBase*)widget->data;
     if (base != NULL &&
         (UIWidget_TypeIs(base->__widget_type, UI_WIDGET_RECTANGLE) ||
          UIWidget_TypeIs(base->__widget_type, UI_WIDGET_TEXT))) {
         UIMarginsObject* m = (UIMarginsObject*)base;
-        marginLeft   = m->marginLeft;
-        marginRight  = m->marginRight;
-        marginTop    = m->marginTop;
-        marginBottom = m->marginBottom;
+        if (m->marginLeft != 0 || m->marginRight != 0 ||
+            m->marginTop != 0 || m->marginBottom != 0) {
+            marginLeft   = m->marginLeft;
+            marginRight  = m->marginRight;
+            marginTop    = m->marginTop;
+            marginBottom = m->marginBottom;
+        }
     }
 
     // Horizontal: compute the anchor-only base, then offset by the
@@ -128,16 +135,11 @@ void UIWidget_SetAlignmentByParent(UIWidget* widget, uint8_t valign, uint8_t hal
         return;
     }
 
+    // Always store the rule. Parent may be NULL here (MUI builds the child,
+    // applies `anchor:`, then adds it to a container that only becomes a
+    // Widget later via widgcs). NULL targets mean "use parent when linked";
+    // UIWidget_SetParent / UIWidget_AdoptChildren / render-time Align resolve it.
     UIWidget* parent = UIWidget_GetParent(widget);
-    if (parent == NULL) {
-        UI_WARN(UI_CAT_LAYOUT, "parent widget is NULL, alignment will not work");
-        return;
-    }
-
-    if (parent->width == NULL || parent->height == NULL) {
-        UI_WARN(UI_CAT_LAYOUT, "parent widget does not have a defined size");
-        return;
-    }
 
     UIAlignment alignment = UIAlignment_Create(
         (UIAlign){.value = valign, .target_widget = parent},
@@ -165,10 +167,7 @@ void UIWidget_SetAlignment(UIWidget* widget, UIAlignment alignment) {
 
     *widget->alignment = alignment;
 
-    if (widget->width == NULL || widget->height == NULL) {
-        UI_WARN(UI_CAT_LAYOUT, "child widget does not have a defined size");
-        return;
-    }
-
+    // Size / parent may still be pending (MUI builds apply `anchor:` before
+    // widgcs / AdoptChildren). Align is a no-op until both are ready.
     UIAlignment_Align(widget);
 }

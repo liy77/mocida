@@ -39,7 +39,7 @@ use std::rc::Rc;
 
 use crate::device_profiles::DeviceProfile;
 use crate::device_simulator::DeviceOrientation;
-use copper_syntax::expr::{BinOp, Expr, ExprKind, Literal, StrPart, StrTemplate};
+use copper_syntax::expr::{BinOp, Expr, ExprKind, Literal, StrPart, StrTemplate, UnOp};
 use mocida::sys as msys;
 use mocida::text::by_ptr;
 use mocida::canvas::Canvas;
@@ -296,6 +296,34 @@ struct TimerEntry {
     /// bind `rotation: hourRot` on a single Image — no structural rebuild/spinner.
     hour_rot: Option<Rc<RefCell<Signal<i32>>>>,
     min_rot: Option<Rc<RefCell<Signal<i32>>>>,
+    /// Optional one-shot WAV replayed on every fire (typewriter clicks, etc.).
+    tick_sound: RefCell<Option<Sound>>,
+    /// Path used to (re)load `tick_sound` after a failed first try (lazy MEMFS).
+    tick_sound_path: Option<String>,
+    /// Optional pendulum "tac" — alternates with `tickSound` when set.
+    tock_sound: RefCell<Option<Sound>>,
+    tock_sound_path: Option<String>,
+    tick_sound_gain: f32,
+    /// When set with `stop_when`, only play tickSound if the character at
+    /// index `stop_when` (1-based after the tick) is non-whitespace — so
+    /// pauses/`\\n\\n` in a typewriter don't keep clicking.
+    tick_text: Option<String>,
+    /// Play `tickSound` only when `orbit_secs` (or `stop_when`) `% tick_every == 0`.
+    /// `1` = every fire (default). Use `60` for a once-per-game-minute clock tick.
+    tick_every: i32,
+    /// Real-time pendulum cadence in ms (`tickPeriodMs:`). When > 0, plays
+    /// tick/tock on wall-clock time while the Timer is running (independent of
+    /// game-second `tickEvery`). Classic grandfather ≈ 500–700.
+    tick_period_ms: u64,
+    /// 0 = next SFX is tick, 1 = tock.
+    sfx_phase: Cell<u32>,
+    last_sfx_ms: Cell<u64>,
+    /// When `stop_when.get() >= stop_at`, the timer skips fires (typewriter cap).
+    stop_when: Option<Rc<RefCell<Signal<i32>>>>,
+    stop_at: i32,
+    /// Stable key so rebuilds can reuse the previous `last_ms` (avoids 1 Hz crawl
+    /// when structural rebuilds recreate every Timer).
+    persist_key: u64,
 }
 
 /// Non-visual `Gamepad` poller: hotplug + edge-triggered virtual keys.
@@ -495,6 +523,8 @@ pub struct Reactive {
     /// Loaded `Audio` clips — kept alive so a one-shot sound finishes playing
     /// (dropping a `Sound` stops it). They live for the document's lifetime.
     _sounds: Vec<Sound>,
+    /// Button `clickSound:` slots (path + lazy Sound) kept alive across rebuilds.
+    _click_slots: Vec<Rc<RefCell<(Option<Sound>, String, f32)>>>,
     /// Active `Timer` entries (polled by the host each frame).
     timers: Vec<TimerEntry>,
     /// Active `Gamepad` pollers (hotplug + edge-triggered buttons each frame).
@@ -517,6 +547,7 @@ impl Reactive {
             lists: HashMap::new(),
             _subs: Vec::new(),
             _sounds: Vec::new(),
+            _click_slots: Vec::new(),
             timers: Vec::new(),
             gamepads: Vec::new(),
             dirty: Rc::new(std::cell::Cell::new(false)),
@@ -580,10 +611,33 @@ impl Reactive {
         self.dirty.replace(false)
     }
 
+    /// Play `tickSound` or `tockSound` (lazy MEMFS load). `tock` picks the
+    /// pendulum "tac"; falls back to tick if tock is unset.
+    fn play_timer_tick_sfx(t: &TimerEntry, tock: bool) {
+        let (slot, path) = if tock && t.tock_sound_path.is_some() {
+            (&t.tock_sound, t.tock_sound_path.as_ref())
+        } else {
+            (&t.tick_sound, t.tick_sound_path.as_ref())
+        };
+        if let Ok(mut g) = slot.try_borrow_mut() {
+            if g.is_none() {
+                if let Some(p) = path {
+                    if let Ok(mut s) = Sound::load_wav(p) {
+                        s.set_gain(t.tick_sound_gain);
+                        *g = Some(s);
+                    }
+                }
+            }
+            if let Some(snd) = g.as_mut() {
+                snd.play();
+            }
+        }
+    }
+
     /// Fire due `Timer` entries. Call once per UI frame from the host loop
     /// (before checking [`Reactive::take_dirty`]). Safe to call when empty.
     pub fn poll_timers(&self) {
-        let now = unsafe { mocida::sys::SDL_GetTicks() };
+        let now = unsafe { mocida::sys::SDL_GetTicks() } as u64;
         for t in &self.timers {
             let running = if let Some(sig) = &t.running_sig {
                 sig.borrow().get() != 0
@@ -593,12 +647,45 @@ impl Reactive {
             if !running {
                 continue;
             }
+            if let Some(sig) = &t.stop_when {
+                if sig.borrow().get() >= t.stop_at {
+                    // Hard-stop: clear cadence + silence any queued click so the
+                    // last typewriter hits don't keep ringing after the text ends.
+                    TIMER_LAST_MS.with(|m| {
+                        m.borrow_mut().remove(&t.persist_key);
+                    });
+                    if let Ok(mut slot) = t.tick_sound.try_borrow_mut() {
+                        if let Some(snd) = slot.as_mut() {
+                            snd.stop();
+                        }
+                    }
+                    continue;
+                }
+            }
             let last = t.last_ms.get();
             let due = now.wrapping_sub(last) >= t.interval_ms;
             let mut clock_changed = false;
             if due {
-                // Catch up at most one interval behind to avoid burst after stalls.
+                // Snapshot counter before tick — only play SFX if we actually
+                // advanced (avoids "animation frozen, click still looping" when
+                // onTick's RefCell is already borrowed mid-rebuild).
+                let before = t.stop_when.as_ref().map(|s| s.borrow().get());
+                let mut ticked = t.on_tick.is_none();
+                if let Some(cb) = &t.on_tick {
+                    if let Ok(mut f) = cb.try_borrow_mut() {
+                        f();
+                        ticked = true;
+                    }
+                }
+                // Borrow busy: do NOT advance last_ms — retry next frame.
+                if !ticked {
+                    continue;
+                }
+                // Commit the fire only after a successful tick.
                 t.last_ms.set(now);
+                TIMER_LAST_MS.with(|m| {
+                    m.borrow_mut().insert(t.persist_key, now);
+                });
                 if let Some(clock) = &t.clock {
                     let next = advance_hhmmss(&clock.borrow().get(), t.step_secs);
                     let prev = clock.borrow().get();
@@ -607,18 +694,74 @@ impl Reactive {
                         clock_changed = true;
                     }
                 }
-                if let Some(cb) = &t.on_tick {
-                    if let Ok(mut f) = cb.try_borrow_mut() {
-                        f();
+                let after = t.stop_when.as_ref().map(|s| s.borrow().get());
+                let advanced = match (before, after) {
+                    (Some(b), Some(a)) => a > b,
+                    _ => true,
+                };
+                // Past the cap after this tick — don't click on the finishing frame.
+                if let Some(a) = after {
+                    if a > t.stop_at {
+                        continue;
+                    }
+                }
+                let modulo_ok = if t.tick_every > 1 {
+                    let v = t
+                        .orbit_secs
+                        .as_ref()
+                        .or(t.stop_when.as_ref())
+                        .map(|s| s.borrow().get());
+                    match v {
+                        Some(n) => n % t.tick_every == 0,
+                        None => true,
+                    }
+                } else {
+                    true
+                };
+                let play_sfx = advanced
+                    && modulo_ok
+                    && match (&t.tick_text, after) {
+                        (Some(text), Some(i)) => {
+                            if i <= 0 {
+                                false
+                            } else {
+                                text.chars()
+                                    .nth((i as usize).saturating_sub(1))
+                                    .map(|c| !c.is_whitespace())
+                                    .unwrap_or(false)
+                            }
+                        }
+                        (Some(text), None) => text.chars().any(|c| !c.is_whitespace()),
+                        (None, _) => true,
+                    };
+                // tickEvery-gated SFX (typewriter / sparse ticks). Skipped when
+                // tickPeriodMs drives a real-time pendulum instead.
+                if play_sfx && t.tick_period_ms == 0 {
+                    Self::play_timer_tick_sfx(t, /*tock=*/ false);
+                }
+            }
+            // Real-time pendulum: tic…tac…tic…tac while the timer runs.
+            if t.tick_period_ms > 0 {
+                let running_now = match &t.running_sig {
+                    Some(sig) => sig.borrow().get() != 0,
+                    None => t.running,
+                };
+                if running_now {
+                    let last = t.last_sfx_ms.get();
+                    if now.wrapping_sub(last) >= t.tick_period_ms {
+                        t.last_sfx_ms.set(now);
+                        let tock = t.sfx_phase.get() & 1 == 1;
+                        Self::play_timer_tick_sfx(t, tock);
+                        t.sfx_phase.set(t.sfx_phase.get().wrapping_add(1));
                     }
                 }
             }
             // Orbit every frame (smooth frac between ticks). Do NOT dirty the tree:
             // rebuilds reload Images (spinners). Reactive x/y + HH:MM:SS update in place.
             let _ = apply_timer_orbit(t, now);
-            if clock_changed {
-                self.dirty.set(true);
-            }
+            // `clock:` string signal advances in place via Text subscribers —
+            // never mark dirty here (that remounted every Image every tick).
+            let _ = clock_changed;
         }
         // Gamepads share the host frame poll (web + desktop) — hotplug + buttons.
         self.poll_gamepads();
@@ -1026,6 +1169,13 @@ thread_local! {
     /// The previous tree's scrolls while a rebuild runs (offsets to carry over).
     static SCROLLS_PREV: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
     static BUILD_DEPTH: std::cell::Cell<u32> = std::cell::Cell::new(0);
+    /// Survives structural rebuilds so typewriter / clock Timers keep cadence.
+    static TIMER_LAST_MS: RefCell<HashMap<u64, u64>> = RefCell::new(HashMap::new());
+    /// Button `clickSound:` clips keyed by path. MUST outlive the widget tree:
+    /// an onClick that mutates state rebuilds immediately and would Drop the
+    /// Sound mid-play (silent buttons) if it only lived in `_click_slots`.
+    static CLICK_SFX: RefCell<HashMap<String, Rc<RefCell<(Option<Sound>, String, f32)>>>> =
+        RefCell::new(HashMap::new());
 }
 
 /// Scroll offset the previous tree had for the Scroll at `key`, if that
@@ -1373,6 +1523,10 @@ struct Ctx<'a> {
     /// Tooltips from `tooltip:` props. They float above everything, so they're
     /// appended to the root children after the build instead of nesting.
     tooltips: Vec<Widget>,
+    /// Call-site `onClick:` while expanding a custom component (e.g.
+    /// `GameBtn("OK", onClick: { … })`). Consumed by the first Button in the
+    /// component body that doesn't declare its own onClick.
+    pending_click: Option<Handler>,
 }
 
 impl<'a> Ctx<'a> {
@@ -1387,6 +1541,7 @@ impl<'a> Ctx<'a> {
             parent_horizontal: None,
             id_dims: HashMap::new(),
             tooltips: Vec::new(),
+            pending_click: None,
         }
     }
 
@@ -1462,6 +1617,18 @@ impl<'a> Ctx<'a> {
         }
         for (name, sig) in &self.reactive.strings {
             env.vars.insert(name.clone(), sig.borrow().get());
+        }
+        // Seed live window/screen metrics so raw `if Window.height > Window.width`
+        // conditions resolve (and flip on web resize rebuild).
+        for (ns, field) in [
+            ("Window", "width"),
+            ("Window", "height"),
+            ("Screen", "width"),
+            ("Screen", "height"),
+        ] {
+            if let Some(n) = screen_metric(ns, field) {
+                env.vars.insert(format!("{ns}.{field}"), n.to_string());
+            }
         }
         env
     }
@@ -2134,10 +2301,14 @@ fn build_component(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
     let view = ctx.components.get(&el.name).cloned().unwrap();
 
     // Seed an env for the component: each param = the call's arg (a prop or the
-    // positional), else the param default.
+    // positional), else the param default. Use live_env so int/string signals
+    // at the call site (`PrologueText(typeI: typeI)`) pass their current value
+    // — plain `ctx.env` only has static defaults and left params empty, so
+    // in-component `if typeI == N` never matched and the body rendered blank.
     let mut comp_env = Env::default();
+    let live = ctx.live_env();
     for (i, p) in view.params.iter().enumerate() {
-        let val = call_arg_string(el, &p.name, i, &ctx.env)
+        let val = call_arg_string(el, &p.name, i, &live)
             .or_else(|| p.default.as_ref().and_then(literal_display));
         if let Some(v) = val {
             comp_env.vars.insert(p.name.clone(), v);
@@ -2151,6 +2322,12 @@ fn build_component(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
     // the parent layout, rather than re-wrapping in another Stack (an extra
     // wrapper with no real size is exactly what made sibling components overlap).
     let saved_env = std::mem::replace(&mut ctx.env, comp_env);
+    // Forward call-site onClick into the first Button that has none of its own.
+    let saved_click = ctx.pending_click.take();
+    ctx.pending_click = match find_prop(el, "onClick").map(|p| &p.value) {
+        Some(PropValue::Handler(h)) => Some(h.clone()),
+        _ => None,
+    };
     ctx.expanding.push(el.name.clone());
     ctx.declare_signals(&view.body);
 
@@ -2165,10 +2342,11 @@ fn build_component(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
     }
 
     ctx.expanding.pop();
+    ctx.pending_click = saved_click;
     ctx.env = saved_env;
 
     match result {
-        Some(widget) => Ok(apply_anchor(widget, style::anchor(el))),
+        Some(widget) => Ok(finish_placed(ctx, el, widget)),
         // Empty component (no renderable root) — emit a zero-ish spacer so the
         // call still produces a widget.
         None => sized_text("", 1.0, Color::rgb(0, 0, 0), layout),
@@ -2405,7 +2583,7 @@ fn build_rectangle(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
     // (the color picker), update the rect's color/gradient in place on change — no
     // rebuild, so the picker's bars + preview track the drag smoothly.
     subscribe_reactive_rect_color(ctx, el, rect_ptr);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// Parse `#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa` into an Rgba (a 0-255).
@@ -2798,7 +2976,7 @@ fn build_stack(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     if let Some(op) = style::f32_prop(el, "opacity") {
         widget = widget.opacity(op);
     }
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// `Glass(effect:, method:, radius:, tint:, tintOpacity:, blur:, …)`
@@ -2999,7 +3177,7 @@ fn build_glass(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     if let Some(op) = style::f32_prop(el, "opacity") {
         widget = widget.opacity(op);
     }
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// `Text(label, size:, color:)` → `mocida::Text`. When the label interpolates
@@ -3050,6 +3228,29 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
             .unwrap_or_default()
     };
 
+    // `visibleChars:` / `typewriter:` — show only the first N unicode scalars
+    // (typewriter / reveal). Prefer a bound int signal so ticks update the
+    // label in place without a structural rebuild. Layout still sizes against
+    // the FULL string so the box doesn't jump as characters appear.
+    let visible_chars_sig = int_signal_prop(ctx, el, "visibleChars")
+        .or_else(|| int_signal_prop(ctx, el, "typewriter"));
+    let visible_chars_n = dim_prop(ctx, el, "visibleChars")
+        .or_else(|| dim_prop(ctx, el, "typewriter"))
+        .map(|v| v.max(0.0) as usize);
+    let full_label = label;
+    let label = {
+        // Prefer the live signal so a coinciding dim snapshot can't freeze the
+        // typewriter at a stale N (or skip binding entirely).
+        let n = visible_chars_sig
+            .as_ref()
+            .map(|s| s.borrow().get().max(0) as usize)
+            .or(visible_chars_n);
+        match n {
+            Some(n) => full_label.chars().take(n).collect::<String>(),
+            None => full_label.clone(),
+        }
+    };
+
     // Size from the *current* text; mocida re-measures on update. The label
     // may contain explicit line breaks (`\n`, already unescaped by the
     // parser) — size against the WIDEST line for width and the line COUNT
@@ -3066,14 +3267,20 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
         .filter(|v| *v > 0.0)
         .unwrap_or(1.25);
     let letter_sp = style::f32_prop(el, "letterSpacing").unwrap_or(0.0).max(0.0);
-    let widest_line = label
+    // Prefer full_label for box size when typewriter is active (stable layout).
+    let size_src = if visible_chars_sig.is_some() || visible_chars_n.is_some() {
+        &full_label
+    } else {
+        &label
+    };
+    let widest_line = size_src
         .lines()
         .map(|ln| text_width(el, ln, size) + letter_sp * ln.chars().count().saturating_sub(1) as f32)
         .fold(0.0_f32, f32::max);
     let natural_w = if widest_line > 0.0 {
         widest_line
     } else {
-        text_width(el, &label, size)
+        text_width(el, size_src, size)
     };
     let wrap_mode = style::enum_member(el, "wrap").and_then(|s| wrap_from(&s));
     let w = dim_prop(ctx, el, "width").unwrap_or(natural_w);
@@ -3081,12 +3288,12 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
     let h = dim_prop(ctx, el, "height").unwrap_or_else(|| {
         let lines = match wrap_mode {
             Some(WrapMode::Word) if w > 0.0 => {
-                estimate_wrapped_lines(el, &label, size, w, letter_sp, false)
+                estimate_wrapped_lines(el, size_src, size, w, letter_sp, false)
             }
             Some(WrapMode::Char) if w > 0.0 => {
-                estimate_wrapped_lines(el, &label, size, w, letter_sp, true)
+                estimate_wrapped_lines(el, size_src, size, w, letter_sp, true)
             }
-            _ => label.lines().count().max(1) as f32,
+            _ => size_src.lines().count().max(1) as f32,
         };
         (line_h * lines).max(line_h)
     });
@@ -3159,6 +3366,9 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
                     .map(|s| (n.clone(), s.borrow().as_ptr()))
             })
             .collect();
+        let vis_ptr = visible_chars_sig
+            .as_ref()
+            .map(|s| s.borrow().as_ptr());
 
         // The updater reads current values via raw ptr, re-renders, sets text.
         let use_time = time_format.is_some();
@@ -3175,7 +3385,7 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
                 let val = unsafe { str_from_signal(*ptr) };
                 live.vars.insert(name.clone(), val);
             }
-            let s = if use_time {
+            let mut s = if use_time {
                 if let Some((_, ptr)) = int_ptrs.first() {
                     let val = unsafe { mocida::sys::UISignal_GetInt(*ptr) };
                     format_hhmmss(val)
@@ -3189,6 +3399,10 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
             } else {
                 String::new()
             };
+            if let Some(vp) = vis_ptr {
+                let n = unsafe { mocida::sys::UISignal_GetInt(vp) }.max(0) as usize;
+                s = s.chars().take(n).collect();
+            }
             // SAFETY: text_ptr points at a live UIText owned by the widget
             // tree, which outlives these subscriptions. Single-threaded.
             let _ = unsafe { by_ptr::set_text(text_ptr, &s) };
@@ -3209,10 +3423,33 @@ fn build_text(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
                 }
             }
         }
+        if let Some(sig) = &visible_chars_sig {
+            let updater = updater.clone();
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_| updater()) {
+                new_subs.push(sub);
+            }
+        }
         ctx.reactive._subs.extend(new_subs);
+    } else if let Some(sig) = &visible_chars_sig {
+        // Static label + live visibleChars (typewriter) — no ${} deps.
+        let full = std::rc::Rc::new(full_label.clone());
+        let vis_ptr = sig.borrow().as_ptr();
+        {
+            let full = full.clone();
+            let n = unsafe { mocida::sys::UISignal_GetInt(vis_ptr) }.max(0) as usize;
+            let s: String = full.chars().take(n).collect();
+            let _ = unsafe { by_ptr::set_text(text_ptr, &s) };
+        }
+        if let Ok(sub) = sig.borrow_mut().subscribe(move |_| {
+            let n = unsafe { mocida::sys::UISignal_GetInt(vis_ptr) }.max(0) as usize;
+            let s: String = full.chars().take(n).collect();
+            let _ = unsafe { by_ptr::set_text(text_ptr, &s) };
+        }) {
+            ctx.reactive._subs.push(sub);
+        }
     }
 
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// Resolve a Link `to`/`href` into an optional in-app docs topic + the URL to
@@ -3358,7 +3595,7 @@ fn build_link(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
 
     let (x, y) = place(el, layout, w, h);
     let widget = button.into_widget_sized(w, h)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// `Button(label, onClick:, ...)` → a real styled `mocida::Button`. Honors the
@@ -3444,10 +3681,75 @@ fn build_button(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
         button = button.enabled(false);
     }
 
+    // Optional `clickSound:` / `clickVolume:` — one-shot WAV on every press.
+    // Cached in CLICK_SFX (thread-local) so a click that rebuilds the tree
+    // does not Drop the Sound mid-play. Lazy-load on first click for MEMFS.
+    let click_gain = style::f32_prop(el, "clickVolume")
+        .or_else(|| style::f32_prop(el, "clickGain"))
+        .unwrap_or(0.55);
+    let click_path = prop_string_value(ctx, el, "clickSound")
+        .or_else(|| prop_string_value(ctx, el, "sound"))
+        .filter(|s| !s.is_empty());
+    let click_slot: Option<Rc<RefCell<(Option<Sound>, String, f32)>>> =
+        click_path.map(|path| {
+            CLICK_SFX.with(|cache| {
+                let mut map = cache.borrow_mut();
+                if let Some(existing) = map.get(&path) {
+                    let mut g = existing.borrow_mut();
+                    g.2 = click_gain;
+                    if let Some(s) = g.0.as_mut() {
+                        s.set_gain(click_gain);
+                    }
+                    return existing.clone();
+                }
+                let initial = match Sound::load_wav(&path) {
+                    Ok(mut s) => {
+                        s.set_gain(click_gain);
+                        Some(s)
+                    }
+                    Err(_) => None,
+                };
+                let slot = Rc::new(RefCell::new((initial, path.clone(), click_gain)));
+                map.insert(path, slot.clone());
+                slot
+            })
+        });
+    if let Some(s) = click_slot.clone() {
+        // Also pin on the current Reactive so Drop order stays predictable.
+        ctx.reactive._click_slots.push(s);
+    }
+
     // Wire onClick to the recognised state mutations (int `x += 1` + string
-    // sets `x = "lit"` / `x = otherSignal`).
-    if let Some(mut f) = handler_apply_closure(ctx, el, "onClick") {
-        button = button.on_click(move |_| f());
+    // sets `x = "lit"` / `x = otherSignal`). Prefer the Button's own handler;
+    // otherwise consume a call-site handler forwarded via `pending_click`
+    // (`GameBtn("OK", onClick: { … })`).
+    let pending = if find_prop(el, "onClick").is_none() {
+        ctx.pending_click.take()
+    } else {
+        None
+    };
+    let click_handler = handler_apply_closure(ctx, el, "onClick")
+        .or_else(|| pending.as_ref().and_then(|h| handler_apply_from(ctx, h)));
+    if click_handler.is_some() || click_slot.is_some() {
+        let mut f = click_handler;
+        let snd = click_slot;
+        button = button.on_click(move |_| {
+            if let Some(slot) = &snd {
+                let mut g = slot.borrow_mut();
+                if g.0.is_none() {
+                    if let Ok(mut s) = Sound::load_wav(&g.1) {
+                        s.set_gain(g.2);
+                        g.0 = Some(s);
+                    }
+                }
+                if let Some(s) = g.0.as_mut() {
+                    s.play();
+                }
+            }
+            if let Some(cb) = &mut f {
+                cb();
+            }
+        });
     }
 
     // Auto-size to the label (with comfortable padding) unless an explicit
@@ -3466,7 +3768,7 @@ fn build_button(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
         y = py;
     }
     let widget = button.into_widget_sized(bw, bh)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// `TextField` / `Input` — single-line text input, full style surface. Honors
@@ -3625,7 +3927,7 @@ fn build_textfield(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<W
     let h = dim_prop(ctx, el, "height").unwrap_or(size + 20.0);
     let (x, y) = place(el, layout, w, h);
     let widget = tf.into_widget_sized(w, h)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 thread_local! {
@@ -3902,7 +4204,7 @@ fn build_textarea(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
     let h = dim_prop(ctx, el, "height").unwrap_or(120.0);
     let (x, y) = place(el, layout, w, h);
     let widget = ta.into_widget_sized(w, h)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// `Checkbox(value:, label:, …)` — two-state checkbox with the full C style
@@ -4541,7 +4843,7 @@ fn build_slider(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
     let h = dim_prop(ctx, el, "height").unwrap_or(24.0);
     let (x, y) = place(el, layout, w, h);
     let widget = sl.into_widget_sized(w, h)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// `ProgressBar(value:, …)` — progress indicator (0..1). Full style: track/fill
@@ -4615,12 +4917,12 @@ fn build_progressbar(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result
     let h = dim_prop(ctx, el, "height").unwrap_or(8.0);
     let (x, y) = place(el, layout, w, h);
     let widget = pb.into_widget_sized(w, h)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// `Spinner(radius:, …)` — loading spinner. Full style: `color`, `thickness`,
 /// `speed` (rad/s), `radius`.
-fn build_spinner(_ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
+fn build_spinner(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
     let r = style::f32_prop(el, "radius").unwrap_or(16.0);
     let mut sp = Spinner::new(r)?;
     if let Some(c) = style::color_prop(el, "color").or_else(|| style::background(el)) {
@@ -4635,7 +4937,7 @@ fn build_spinner(_ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
     let d = r * 2.0;
     let (x, y) = place(el, layout, d, d);
     let widget = sp.into_widget_sized(d, d)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// Map a `fillMode:` keyword to mocida's [`FillMode`] (full set).
@@ -4696,10 +4998,7 @@ fn build_icon(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
         if let Some(py) = dim_prop(ctx, el, "y") {
             y = py;
         }
-        return Ok(apply_anchor(
-            text.into_widget_sized(w, h)?.position(x, y),
-            style::anchor(el),
-        ));
+        return Ok(finish_placed(ctx, el, text.into_widget_sized(w, h)?.position(x, y)));
     }
 
     let name = el
@@ -4735,7 +5034,7 @@ fn build_icon(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
         y = py;
     }
     let widget = img.into_widget_sized(w, h)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// `Image(source, fillMode:, tint:, animated:)` — image widget. The source is
@@ -4752,9 +5051,11 @@ fn build_image(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
         .or_else(|| prop_string_value(ctx, el, "src"))
         .unwrap_or_default();
     let fill = fill_mode_from(style::enum_member(el, "fillMode").as_deref());
+    // Default tint must be transparent — opaque white was color-modding every
+    // untinted Image to white (and looked like a broken Material icon).
     let tint = style::color_prop(el, "tint")
         .map(to_color)
-        .unwrap_or(Color::WHITE);
+        .unwrap_or(Color::TRANSPARENT);
     let animated = prop_bool(el, "animated").unwrap_or(false);
     let mut img = Image::new(&source, animated, fill, tint)?;
     // `cache:` toggles the in-memory cache for http/https sources (default on).
@@ -4782,7 +5083,7 @@ fn build_image(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
         y = py;
     }
     let widget = img.into_widget_sized(w, h)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// `Video("clip.mp4", width:, height:, fillMode:, autoplay:, loop:, muted:,
@@ -4829,7 +5130,7 @@ fn build_video(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widge
     let h = dim_prop(ctx, el, "height").unwrap_or(180.0);
     let (x, y) = place(el, layout, w, h);
     let widget = video.into_widget_sized(w, h)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// Bake yaw/pitch (degrees) into a unit-space vertex. `UIMesh3D` has no
@@ -5112,7 +5413,7 @@ fn build_scene3d(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wid
 
     let (x, y) = place(el, layout, w, h);
     let widget = scene.into_widget_sized(w, h)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// `Canvas`/`TabBarCanvas` — a vector canvas (mocida `UICanvas`) that paints
@@ -5391,7 +5692,7 @@ fn build_canvas(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
 
     let (x, y) = place(el, layout, w, h);
     let widget = canvas.into_widget_sized(w, h)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 type Painter = Rc<RefCell<dyn FnMut(&mut mocida::canvas::CanvasDraw)>>;
@@ -5425,7 +5726,7 @@ fn build_painted_canvas(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Res
     });
     let (x, y) = place(el, layout, w, h);
     let widget = canvas.into_widget_sized(w, h)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// `WebView("https://…", width:, height:, radius:, borderColor:, borderWidth:)`
@@ -5456,7 +5757,7 @@ fn build_webview(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wid
     let h = dim_prop(ctx, el, "height").unwrap_or(400.0);
     let (x, y) = place(el, layout, w, h);
     let widget = wv.into_widget_sized(w, h)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 
@@ -5594,15 +5895,14 @@ fn advance_hhmmss(raw: &str, step: u32) -> String {
     format!("{h:02}:{m:02}:{s:02}")
 }
 
-/// `Timer(interval:, step:, running:, clock:, onTick:, orbitSeconds:, …)` —
+/// `Timer(interval:, step:, running:, clock:, onTick:, tickSound:, …)` —
 /// non-visual periodic ticker. `interval` is milliseconds (default 1000).
 /// `step:` game-seconds added to `clock` each fire (default 1). `clock:` names
 /// a string signal in `HH:MM:SS` form. `onTick:` runs the same handler actions
-/// as a Button click. Optional Majora dial: `orbitSeconds:` int signal +
-/// `sunX`/`sunY`/`moonX`/`moonY`/`handX`/`handY` int signals + `orbitSize:` /
-/// `orbitIcon:` (px). Optional analog frames: `hourHand:` / `minHand:` int
-/// signals (0..11, 30° steps) derived from `orbitSeconds` each poll.
-/// Host must call [`Reactive::poll_timers`] (web: via `mui_host_frame_poll`).
+/// as a Button click. `tickSound:` / `tickVolume:` replay a WAV on every fire
+/// (typewriter clicks) without rebuilding the tree. Optional Majora dial:
+/// `orbitSeconds:` int signal + `sunX`/`sunY`/… Host must call
+/// [`Reactive::poll_timers`] (web: via `mui_host_frame_poll`).
 fn build_timer(ctx: &mut Ctx, el: &Element) -> Result<()> {
     let interval = style::f32_prop(el, "interval")
         .or_else(|| dim_prop(ctx, el, "interval"))
@@ -5633,7 +5933,11 @@ fn build_timer(ctx: &mut Ctx, el: &Element) -> Result<()> {
         },
         _ => None,
     };
-    let on_tick = handler_apply_closure(ctx, el, "onTick").map(|f| RefCell::new(f));
+    // Prefer full-block interpreter so `onTick: { x += 1 ; if x >= N { … } }`
+    // actually runs the `if` (flat HandlerAction parse drops it).
+    let on_tick = handler_block_closure(ctx, el, "onTick")
+        .or_else(|| handler_apply_closure(ctx, el, "onTick"))
+        .map(|f| RefCell::new(f));
     let orbit_secs = int_signal_prop(ctx, el, "orbitSeconds")
         .or_else(|| int_signal_prop(ctx, el, "orbit"));
     let orbit_size = style::f32_prop(el, "orbitSize")
@@ -5674,14 +5978,88 @@ fn build_timer(ctx: &mut Ctx, el: &Element) -> Result<()> {
         .or_else(|| int_signal_prop(ctx, el, "hourRot"));
     let min_rot = int_signal_prop(ctx, el, "minRotation")
         .or_else(|| int_signal_prop(ctx, el, "minRot"));
+    let tick_sound_path = prop_string_value(ctx, el, "tickSound")
+        .or_else(|| prop_string_value(ctx, el, "sound"))
+        .filter(|s| !s.is_empty());
+    let tock_sound_path = prop_string_value(ctx, el, "tockSound")
+        .or_else(|| prop_string_value(ctx, el, "tacSound"))
+        .filter(|s| !s.is_empty());
+    let tick_sound_gain = style::f32_prop(el, "tickVolume")
+        .or_else(|| style::f32_prop(el, "volume"))
+        .unwrap_or(0.45);
+    let tick_sound = tick_sound_path.as_ref().and_then(|path| {
+        match Sound::load_wav(path) {
+            Ok(mut s) => {
+                s.set_gain(tick_sound_gain);
+                Some(s)
+            }
+            Err(_) => {
+                // Soft-fail: WAV may arrive in MEMFS later (retry on fire).
+                eprintln!("[mui] Timer tickSound: could not load '{path}' (will retry)");
+                None
+            }
+        }
+    });
+    let tock_sound = tock_sound_path.as_ref().and_then(|path| {
+        match Sound::load_wav(path) {
+            Ok(mut s) => {
+                s.set_gain(tick_sound_gain);
+                Some(s)
+            }
+            Err(_) => {
+                eprintln!("[mui] Timer tockSound: could not load '{path}' (will retry)");
+                None
+            }
+        }
+    });
+    let stop_when = int_signal_prop(ctx, el, "stopWhen")
+        .or_else(|| int_signal_prop(ctx, el, "until"));
+    let stop_at = style::f32_prop(el, "stopAt")
+        .or_else(|| dim_prop(ctx, el, "stopAt"))
+        .or_else(|| style::f32_prop(el, "untilAt"))
+        .map(|v| v as i32)
+        .unwrap_or(i32::MAX);
+    // Static string of the typed text — gates tickSound on non-whitespace chars.
+    let tick_text = prop_string_value(ctx, el, "tickText")
+        .or_else(|| prop_string_value(ctx, el, "typeText"))
+        .filter(|s| !s.is_empty());
+    // `tickEvery: 60` → clock-hand tick once per game minute (needs orbitSeconds).
+    let tick_every = style::f32_prop(el, "tickEvery")
+        .or_else(|| dim_prop(ctx, el, "tickEvery"))
+        .map(|v| v as i32)
+        .unwrap_or(1)
+        .max(1);
+    // Real-time pendulum cadence (ms). 0 = off (use tickEvery only).
+    let tick_period_ms = style::f32_prop(el, "tickPeriodMs")
+        .or_else(|| dim_prop(ctx, el, "tickPeriodMs"))
+        .or_else(|| style::f32_prop(el, "pendulumMs"))
+        .map(|v| v.max(0.0) as u64)
+        .unwrap_or(0);
     // hourHand/minHand alone still need orbitSeconds as the time source.
-    if clock.is_none() && on_tick.is_none() && orbit_secs.is_none() {
+    if clock.is_none()
+        && on_tick.is_none()
+        && orbit_secs.is_none()
+        && tick_sound.is_none()
+        && tick_sound_path.is_none()
+    {
         return Ok(());
     }
-    let now = unsafe { mocida::sys::SDL_GetTicks() };
+    let persist_key = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        interval.hash(&mut h);
+        tick_sound_path.hash(&mut h);
+        stop_at.hash(&mut h);
+        // Distinguish prologue vs game-clock timers that share interval.
+        el.span.start.hash(&mut h);
+        h.finish()
+    };
+    let now = unsafe { mocida::sys::SDL_GetTicks() } as u64;
+    let last = TIMER_LAST_MS.with(|m| m.borrow().get(&persist_key).copied()).unwrap_or(now);
     let entry = TimerEntry {
         interval_ms: interval,
-        last_ms: Cell::new(now),
+        last_ms: Cell::new(last),
         step_secs,
         running,
         running_sig,
@@ -5704,6 +6082,19 @@ fn build_timer(ctx: &mut Ctx, el: &Element) -> Result<()> {
         min_hand,
         hour_rot,
         min_rot,
+        tick_sound: RefCell::new(tick_sound),
+        tick_sound_path,
+        tock_sound: RefCell::new(tock_sound),
+        tock_sound_path,
+        tick_sound_gain,
+        tick_text,
+        tick_every,
+        tick_period_ms,
+        sfx_phase: Cell::new(0),
+        last_sfx_ms: Cell::new(now.wrapping_sub(tick_period_ms.max(1))),
+        stop_when,
+        stop_at,
+        persist_key,
     };
     // Seed dial positions once so the first frame isn't stuck at (0,0).
     let _ = apply_timer_orbit(&entry, now);
@@ -5827,7 +6218,15 @@ fn build_audio(ctx: &mut Ctx, el: &Element) -> Result<()> {
     if source.is_empty() {
         return Ok(());
     }
-    let mut sound = Sound::load_wav(&source)?;
+    // Soft-fail: a missing WAV must not abort the whole view (prologue used to
+    // go black / stuck when typewriter.wav failed to load).
+    let mut sound = match Sound::load_wav(&source) {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("[mui] Audio: could not load '{source}'");
+            return Ok(());
+        }
+    };
     if let Some(g) = style::f32_prop(el, "volume").or_else(|| style::f32_prop(el, "gain")) {
         sound.set_gain(g);
     }
@@ -5958,26 +6357,41 @@ fn build_filedrop(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
         y = py;
     }
     let widget = fd.into_widget_sized(w, h)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget> {
-    // The visible container that renders the content (transparent by default,
-    // but `background:` makes the area a clickable card).
-    let mut rect = Rectangle::new()?.color(to_color(style::background(el).unwrap_or(Rgba {
+    // freeLayout Stack (not Rectangle): Rectangle's vertical flow overwrote
+    // every child's x/y each frame, so `anchor: center` on an icon inside a
+    // MouseArea could never stick — Align ran, then the next sibling/frame
+    // path still looked top-left when alignment was deferred. freeLayout keeps
+    // authored local coords and lets Align own centered children (same
+    // contract as HUD Stacks).
+    let bg = to_color(style::background(el).unwrap_or(Rgba {
         r: 0,
         g: 0,
         b: 0,
         a: 0,
-    })));
+    }));
+    let mut stack = Stack::new(StackOrientation::Vertical)?
+        .free_layout(true)
+        .background(bg);
     if let Some(r) = style::f32_prop(el, "radius") {
-        rect = rect.radius(r);
+        stack = stack.radius(r);
     }
-    if let Some(bw) = style::f32_prop(el, "borderWidth") {
-        rect = rect.border_width(bw);
+    if let (Some(bw), Some(bc)) = (
+        style::f32_prop(el, "borderWidth"),
+        style::color_prop(el, "borderColor"),
+    ) {
+        stack = stack.border(to_color(bc), bw);
+    } else if let Some(bw) = style::f32_prop(el, "borderWidth") {
+        stack = stack.border(Color::TRANSPARENT, bw);
     }
-    if let Some(bc) = style::color_prop(el, "borderColor") {
-        rect = rect.border_color(to_color(bc));
+    let padding_env = build_reactive_env(&ctx.reactive);
+    if let Some((pl, pt, pr, pb)) =
+        style::box_spacing_reactive(el, "padding", Some(&padding_env))
+    {
+        stack = stack.padding(pl, pt, pr, pb);
     }
 
     // Build children + measure (avail threaded like build_rectangle).
@@ -6016,7 +6430,7 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
                 }
             }
             let advanced = (child_layout.content_height() - before_h).max(0.0);
-            rect.add_child(widget);
+            stack.add(widget)?;
             content_w = content_w.max(child_layout.content_width()).max(ww);
             content_h += if advanced > 0.0 { advanced } else { wh };
         }
@@ -6305,39 +6719,30 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
     if pressed_sig.is_some() && prop_string_value(ctx, el, "dragData").is_none() && find_prop(el, "onDragEnd").is_none() {
         area = area.on(MouseAreaEvent::DragEnd, move |_| release());
     }
-    // `hoverBackground:` — recolor the visible card on hover (the MouseArea
-    // itself is invisible; the wrapping Rectangle is the card). We grab the
-    // rect's raw pointer and flip its fill on HoverEnter/HoverExit via
-    // UIRectangle_SetColor. The pointer stays valid for the tree's lifetime
-    // (the MouseArea is the rect's own child), so the 'static callbacks are
-    // safe. Gives the VSCode/JetBrains title-bar buttons their hover state
-    // (subtle grey; red for close) without a structural rebuild.
+    // `hoverBackground:` — recolor the visible card on hover. The freeLayout
+    // Stack is the card; flip its fill via UIStack_SetBackground.
     if let Some(hover_bg) = style::color_prop(el, "hoverBackground") {
-        let rect_ptr = rect.as_ptr();
-        let normal = to_color(style::background(el).unwrap_or(Rgba {
-            r: 0,
-            g: 0,
-            b: 0,
-            a: 0,
-        }));
+        let stack_ptr = stack.as_ptr();
+        let normal = bg;
         let hover = to_color(hover_bg);
-        let p_enter = rect_ptr as usize;
-        let p_exit = rect_ptr as usize;
+        let p_enter = stack_ptr as usize;
+        let p_exit = stack_ptr as usize;
         area = area.on(MouseAreaEvent::HoverEnter, move |_| unsafe {
-            mocida::sys::UIRectangle_SetColor(p_enter as *mut _, hover.into_raw());
+            mocida::sys::UIStack_SetBackground(p_enter as *mut _, hover.into_raw());
         });
         area = area.on(MouseAreaEvent::HoverExit, move |_| unsafe {
-            mocida::sys::UIRectangle_SetColor(p_exit as *mut _, normal.into_raw());
+            mocida::sys::UIStack_SetBackground(p_exit as *mut _, normal.into_raw());
         });
     }
 
-    // Overlay above content (Scene3D etc.) so drag/orbit hit-tests win over the
-    // visual child and over Scroll content-pan arbitration.
+    // Hit surface at local (0,0) covering the whole card (freeLayout — no
+    // negative-margin pullback). Above content so drag/orbit wins over Scene3D
+    // and Scroll content-pan arbitration.
     let area_widget = area
         .into_widget_sized(w, h)?
-        .margin(0.0, -content_h, 0.0, 0.0)
+        .position(0.0, 0.0)
         .z_index(50);
-    rect.add_child(area_widget);
+    stack.add(area_widget)?;
 
     // Absolute placement: honour `x:`/`y:` (resolved via dim_prop so they can be
     // bound vars/signals — e.g. a color-swatch overlay item positioned from a
@@ -6350,10 +6755,7 @@ fn build_mouse_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<
     if let Some(py) = dim_prop(ctx, el, "y") {
         y = py;
     }
-    Ok(apply_anchor(
-        rect.into_widget_sized(w, h)?.position(x, y),
-        style::anchor(el),
-    ))
+    Ok(finish_placed(ctx, el, stack.into_widget_sized(w, h)?.position(x, y)))
 }
 
 /// SwiftUI-style gesture surface.
@@ -6548,10 +6950,7 @@ fn build_gesture_area(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Resul
     if let Some(py) = dim_prop(ctx, el, "y") {
         y = py;
     }
-    Ok(apply_anchor(
-        rect.into_widget_sized(w, h)?.position(x, y),
-        style::anchor(el),
-    ))
+    Ok(finish_placed(ctx, el, rect.into_widget_sized(w, h)?.position(x, y)))
 }
 
 /// `Grid(columns:, gap:) { children }` — fixed-column grid container.
@@ -6580,7 +6979,7 @@ fn build_grid(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widget
     let h = (content_h / columns as f32 + gap).max(1.0);
     let (x, y) = place(el, layout, w, h);
     let widget = grid.into_widget_sized(w, h)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// `Scroll(direction:) { children }` — scrolling viewport. Children fill an
@@ -6700,7 +7099,7 @@ fn build_scroll(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Widg
     let h = dim_prop(ctx, el, "height").unwrap_or(200.0);
     let (x, y) = place(el, layout, w, h);
     let widget = scroll.into_widget_sized(w, h)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// `ListView(itemHeight:) { children }` — vertical scrolling list; each child is
@@ -6724,7 +7123,7 @@ fn build_listview(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
         dim_prop(ctx, el, "height").unwrap_or_else(|| (item_h * count as f32).clamp(item_h, 360.0));
     let (x, y) = place(el, layout, w, h);
     let widget = lv.into_widget_sized(w, h)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// `GridView(columns:, cellWidth:, cellHeight:) { children }` — scrolling grid
@@ -6761,7 +7160,7 @@ fn build_gridview(ctx: &mut Ctx, el: &Element, layout: &mut Layout) -> Result<Wi
     });
     let (x, y) = place(el, layout, w, h);
     let widget = gv.into_widget_sized(w, h)?.position(x, y);
-    Ok(apply_anchor(widget, style::anchor(el)))
+    Ok(finish_placed(ctx, el, widget))
 }
 
 /// Convert a parsed [`Rgba`] to a mocida [`Color`] (alpha 0–1).
@@ -6848,24 +7247,63 @@ fn color_eval(ctx: &Ctx, el: &Element, name: &str) -> Option<Rgba> {
 }
 
 /// Map an `anchor:` keyword's edges onto a widget via mocida's parent
-/// alignment. Only applies when at least one axis is set; a missing axis falls
-/// back to Center on that axis (mocida needs both masks).
+/// alignment. Only applies when at least one axis is set. A missing axis pins
+/// to the start edge (top / left) — never Center — so a half-parsed
+/// `anchor: top` (horizontal unspecified) doesn't shove HUD chrome to mid-screen.
 fn apply_anchor(widget: Widget, a: Anchor) -> Widget {
     if !a.is_set() {
         return widget;
     }
+    // Explicit Center arms (not `_`) so `anchor: center` maps 1:1 to
+    // UI_ALIGN_*_CENTER — the anchor point is the widget's own center.
     let v = match a.vertical {
         Some(VAnchor::Top) => VerticalAlign::Top,
         Some(VAnchor::Bottom) => VerticalAlign::Bottom,
-        _ => VerticalAlign::Center,
+        Some(VAnchor::Center) => VerticalAlign::Center,
+        // Single-axis `left`/`right`: keep the widget at the top, not vertically centered.
+        None => VerticalAlign::Top,
     };
     let h = match a.horizontal {
         Some(HAnchor::Left) => HorizontalAlign::Left,
         Some(HAnchor::Right) => HorizontalAlign::Right,
-        _ => HorizontalAlign::Center,
+        Some(HAnchor::Center) => HorizontalAlign::Center,
+        // Single-axis `top`/`bottom`: keep the widget on the left, not horizontally centered.
+        None => HorizontalAlign::Left,
     };
     widget.align_to_parent(v, h);
     widget
+}
+
+/// Apply the element's `margin:` / `marginTop:`… onto the widget, then
+/// `anchor:`. Anchored HUD chrome should use this instead of raw `x:`/`y:`
+/// — margins inset from the anchored edge and stay consistent across
+/// window sizes / safe areas. `x:`/`y:` remain for dynamic freeLayout
+/// (orbit, drag ghosts); prefer anchors for corners and docks.
+fn finish_placed(ctx: &Ctx, el: &Element, widget: Widget) -> Widget {
+    let margin_env = build_reactive_env(&ctx.reactive);
+    let (mut ml, mut mt, mut mr, mut mb) =
+        style::box_spacing_reactive(el, "margin", Some(&margin_env))
+            .unwrap_or((0.0, 0.0, 0.0, 0.0));
+    // dim_prop resolves `Window.width * …` expressions the static box
+    // spacing path can miss.
+    if let Some(v) = dim_prop(ctx, el, "marginLeft") {
+        ml = v;
+    }
+    if let Some(v) = dim_prop(ctx, el, "marginTop") {
+        mt = v;
+    }
+    if let Some(v) = dim_prop(ctx, el, "marginRight") {
+        mr = v;
+    }
+    if let Some(v) = dim_prop(ctx, el, "marginBottom") {
+        mb = v;
+    }
+    let widget = if ml != 0.0 || mt != 0.0 || mr != 0.0 || mb != 0.0 {
+        widget.margin(ml, mt, mr, mb)
+    } else {
+        widget
+    };
+    apply_anchor(widget, style::anchor(el))
 }
 
 /// Map a `cursor:` enum member to mocida's [`Cursor`].
@@ -6951,7 +7389,7 @@ fn control_with_caption(
         .filter(|s| !s.is_empty());
     let Some(label) = label else {
         let (x, y) = place(el, layout, cw, ch);
-        return Ok(apply_anchor(control.position(x, y), style::anchor(el)));
+        return Ok(finish_placed(ctx, el, control.position(x, y)));
     };
     // Caption shares the control's height + is vertically centered, so the text
     // lines up with the control's center rather than sitting at the top.
@@ -6962,9 +7400,10 @@ fn control_with_caption(
     let w = cw + 8.0 + tw;
     let h = ch;
     let (x, y) = place(el, layout, w, h);
-    Ok(apply_anchor(
+    Ok(finish_placed(
+        ctx,
+        el,
         row.into_widget_sized(w, h)?.position(x, y),
-        style::anchor(el),
     ))
 }
 
@@ -7214,16 +7653,74 @@ fn handler_apply_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn 
         PropValue::Handler(h) => h,
         _ => return None,
     };
+    handler_apply_from(ctx, handler)
+}
+
+/// Timer/`onTick` body with full `if` / `+=` / signal-to-signal assign support.
+/// The simple [`handler_apply_from`] path only understands flat `HandlerAction`s
+/// and silently drops `if doorFrame >= 12 { … }` — which froze the RE door
+/// cutscene after frame 0 advanced forever with no commit.
+fn handler_block_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn FnMut()>> {
+    let handler = match &find_prop(el, prop)?.value {
+        PropValue::Handler(h) => h,
+        _ => return None,
+    };
+    let (block, _) = copper_syntax::expr::parse_stmts(&handler.raw);
+    if block.stmts.is_empty() && block.tail.is_none() {
+        return None;
+    }
+    let ints: HashMap<String, Rc<RefCell<Signal<i32>>>> = ctx
+        .reactive
+        .signals
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let strs: HashMap<String, Rc<RefCell<Signal<String>>>> = ctx
+        .reactive
+        .strings
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    Some(Box::new(move || {
+        let kc = KeyEvalCtx {
+            param: "_",
+            key: "",
+            mods: 0,
+            ints: &ints,
+            strs: &strs,
+        };
+        run_key_block(&block, &kc);
+    }))
+}
+
+/// Same as [`handler_apply_closure`], but from an already-resolved [`Handler`]
+/// (used when forwarding a component call-site `onClick:` onto an inner Button).
+fn handler_apply_from(ctx: &Ctx, handler: &Handler) -> Option<Box<dyn FnMut()>> {
     let int_sets: Vec<(HandlerAction, Rc<RefCell<Signal<i32>>>)> = handler
         .actions()
         .into_iter()
         .filter(|a| {
             matches!(
                 a,
-                HandlerAction::AddAssign { .. } | HandlerAction::SetInt { .. }
+                HandlerAction::AddAssign { .. }
+                    | HandlerAction::AddAssignFrom { .. }
+                    | HandlerAction::SetInt { .. }
             )
         })
         .filter_map(|a| ctx.signal(a.name()).cloned().map(|s| (a, s)))
+        .collect();
+    // Live deltas for `clockSec += timeMult` (no Timer rebuild on speed change).
+    let int_from: Vec<(String, bool, Rc<RefCell<Signal<i32>>>, Rc<RefCell<Signal<i32>>>)> = handler
+        .actions()
+        .into_iter()
+        .filter_map(|a| match a {
+            HandlerAction::AddAssignFrom { name, from, neg } => {
+                let dst = ctx.signal(&name).cloned()?;
+                let src = ctx.signal(&from).cloned()?;
+                Some((name, neg, dst, src))
+            }
+            _ => None,
+        })
         .collect();
     type StrSet = (
         StrAction,
@@ -7274,10 +7771,11 @@ fn handler_apply_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn 
     } else {
         None
     };
-    if int_sets.is_empty() && str_sets.is_empty() && screen_raw.is_none() {
+    if int_sets.is_empty() && int_from.is_empty() && str_sets.is_empty() && screen_raw.is_none()
+    {
         return None;
     }
-    let trace_raw = trace_handlers_on().then(|| format!("{prop}: {}", handler.raw));
+    let trace_raw = trace_handlers_on().then(|| format!("onClick: {}", handler.raw));
     Some(Box::new(move || {
         if let Some(t) = &trace_raw {
             eprintln!("[mui] handler {t}");
@@ -7302,11 +7800,21 @@ fn handler_apply_closure(ctx: &Ctx, el: &Element, prop: &str) -> Option<Box<dyn 
             }
         }
         for (a, sig) in &int_sets {
+            // Skip AddAssignFrom — handled below with a live source read.
+            if matches!(a, HandlerAction::AddAssignFrom { .. }) {
+                continue;
+            }
             let next = {
                 let cur = sig.borrow().get();
                 a.apply(cur)
             };
             let _ = sig.borrow_mut().set(next);
+        }
+        for (_name, neg, dst, src) in &int_from {
+            let delta = src.borrow().get();
+            let cur = dst.borrow().get();
+            let next = if *neg { cur - delta } else { cur + delta };
+            let _ = dst.borrow_mut().set(next);
         }
     }))
 }
@@ -7803,7 +8311,9 @@ trait ActionExt {
 impl ActionExt for HandlerAction {
     fn name(&self) -> &str {
         match self {
-            HandlerAction::AddAssign { name, .. } | HandlerAction::SetInt { name, .. } => name,
+            HandlerAction::AddAssign { name, .. }
+            | HandlerAction::AddAssignFrom { name, .. }
+            | HandlerAction::SetInt { name, .. } => name,
             _ => unreachable!("ActionExt::name is only valid for integer actions"),
         }
     }
@@ -7811,6 +8321,8 @@ impl ActionExt for HandlerAction {
         match self {
             HandlerAction::AddAssign { delta, .. } => current + (*delta as i32),
             HandlerAction::SetInt { value, .. } => *value as i32,
+            // Live source applied in handler_apply_from — identity here.
+            HandlerAction::AddAssignFrom { .. } => current,
             _ => unreachable!("ActionExt::apply is only valid for integer actions"),
         }
     }
@@ -7865,6 +8377,11 @@ fn prop_bool(el: &Element, name: &str) -> Option<bool> {
     match &find_prop(el, name)?.value {
         PropValue::Expr(e) => match &e.kind {
             ExprKind::Literal(Literal::Bool(b)) => Some(*b),
+            // Mikasa often parses bare `true`/`false` as idents, not bool
+            // literals — without this, `freeLayout: true` silently no-op'd
+            // and Stack kept flowing children to (0,0).
+            ExprKind::Ident(n) if n.eq_ignore_ascii_case("true") => Some(true),
+            ExprKind::Ident(n) if n.eq_ignore_ascii_case("false") => Some(false),
             _ => None,
         },
         _ => None,
@@ -7896,6 +8413,10 @@ fn eval_bool_expr_env(e: &Expr, env: &Env) -> Option<bool> {
             let v = operand_value_env(e, env);
             Some(!(v.is_empty() || v == "false" || v == "0"))
         }
+        ExprKind::Unary {
+            op: UnOp::Not,
+            expr,
+        } => Some(!eval_bool_expr_env(expr, env)?),
         ExprKind::Binary { op, lhs, rhs } => match op {
             BinOp::And => Some(eval_bool_expr_env(lhs, env)? && eval_bool_expr_env(rhs, env)?),
             BinOp::Or => Some(eval_bool_expr_env(lhs, env)? || eval_bool_expr_env(rhs, env)?),
@@ -8423,53 +8944,128 @@ fn subscribe_reactive_position(ctx: &mut Ctx, el: &Element, ptr: *mut mocida::sy
     ctx.reactive._subs.extend(subs);
 }
 
-/// Make a widget's visibility REACTIVE: `visible: <ident>` bound to a signal toggles
-/// the widget (and its children) in place — no structural rebuild. A string signal is
-/// truthy unless "", "0" or "false"; an int signal is truthy when non-zero. Used so a
-/// popup (e.g. the color picker) can show/hide without rebuilding the editor (which
-/// flickers + steals focus). Called once per element at build.
+/// Make a widget's visibility REACTIVE without a structural rebuild:
+/// `visible: mapOpen`, `visible: !mapOpen`, or a bool expr like
+/// `visible: screen == "city" && room == "house"`.
+///
+/// Overlays/menus MUST use this instead of `if signal` so the rest of the tree
+/// (backgrounds, HUD images) is not torn down and reloaded.
+///
+/// A string signal is truthy unless "", "0" or "false"; an int signal is truthy
+/// when non-zero. Called once per element at build.
 fn subscribe_reactive_visible(ctx: &mut Ctx, el: &Element, ptr: *mut mocida::sys::UIWidget) {
     if ptr.is_null() {
         return;
     }
-    let name = match find_prop(el, "visible").map(|p| &p.value) {
-        Some(PropValue::Expr(e)) => match &e.kind {
-            ExprKind::Ident(n) => Some(n.clone()),
+    let Some(PropValue::Expr(expr)) = find_prop(el, "visible").map(|p| &p.value) else {
+        return;
+    };
+
+    // Fast path: bare ident / !ident.
+    let simple = match &expr.kind {
+        ExprKind::Ident(n) => Some((n.clone(), false)),
+        ExprKind::Unary {
+            op: UnOp::Not,
+            expr,
+        } => match &expr.kind {
+            ExprKind::Ident(n) => Some((n.clone(), true)),
             _ => None,
         },
         _ => None,
     };
-    let Some(name) = name else { return };
-    let truthy = |s: &str| !(s.is_empty() || s == "0" || s == "false");
-    if let Some(sig) = ctx.string_signal(&name).cloned() {
-        let p = sig.borrow().as_ptr();
-        unsafe {
-            (*ptr).visible = if truthy(&str_from_signal(p)) { 1 } else { 0 };
-        }
-        let updater = move || unsafe {
-            (*ptr).visible = if truthy(&str_from_signal(p)) { 1 } else { 0 };
-        };
-        if let Ok(sub) = sig.borrow_mut().subscribe(move |_| updater()) {
-            ctx.reactive._subs.push(sub);
-        }
-    } else if let Some(sig) = ctx.signal(&name).cloned() {
-        let p = sig.borrow().as_ptr();
-        unsafe {
-            (*ptr).visible = if mocida::sys::UISignal_GetInt(p) != 0 {
+    if let Some((name, invert)) = simple {
+        let truthy = |s: &str| !(s.is_empty() || s == "0" || s == "false");
+        let to_vis = move |on: bool| -> i32 {
+            if invert {
+                if on {
+                    0
+                } else {
+                    1
+                }
+            } else if on {
                 1
             } else {
                 0
-            };
-        }
-        let updater = move || unsafe {
-            (*ptr).visible = if mocida::sys::UISignal_GetInt(p) != 0 {
-                1
-            } else {
-                0
-            };
+            }
         };
-        if let Ok(sub) = sig.borrow_mut().subscribe(move |_| updater()) {
-            ctx.reactive._subs.push(sub);
+        if let Some(sig) = ctx.string_signal(&name).cloned() {
+            let p = sig.borrow().as_ptr();
+            unsafe {
+                (*ptr).visible = to_vis(truthy(&str_from_signal(p)));
+            }
+            let updater = move || unsafe {
+                (*ptr).visible = to_vis(truthy(&str_from_signal(p)));
+            };
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_| updater()) {
+                ctx.reactive._subs.push(sub);
+            }
+        } else if let Some(sig) = ctx.signal(&name).cloned() {
+            let p = sig.borrow().as_ptr();
+            unsafe {
+                (*ptr).visible = to_vis(mocida::sys::UISignal_GetInt(p) != 0);
+            }
+            let updater = move || unsafe {
+                (*ptr).visible = to_vis(mocida::sys::UISignal_GetInt(p) != 0);
+            };
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_| updater()) {
+                ctx.reactive._subs.push(sub);
+            }
+        }
+        return;
+    }
+
+    // General bool expression: `screen == "city"`, `boot >= 4`, `a && b`, …
+    let reads = names_read(expr);
+    if let Some(v) = eval_bool_expr_env(expr, &ctx.live_env()) {
+        unsafe {
+            (*ptr).visible = if v { 1 } else { 0 };
+        }
+    }
+    if reads.is_empty() {
+        return;
+    }
+    let int_ptrs: Vec<(String, *mut mocida::sys::UISignal)> = reads
+        .iter()
+        .filter_map(|n| ctx.signal(n).map(|s| (n.clone(), s.borrow().as_ptr())))
+        .collect();
+    let str_ptrs: Vec<(String, *mut mocida::sys::UISignal)> = reads
+        .iter()
+        .filter_map(|n| {
+            ctx.string_signal(n)
+                .map(|s| (n.clone(), s.borrow().as_ptr()))
+        })
+        .collect();
+    if int_ptrs.is_empty() && str_ptrs.is_empty() {
+        return;
+    }
+    let expr = expr.clone();
+    let env0 = ctx.env.clone();
+    let apply = Rc::new(move || {
+        let mut live = env0.clone();
+        for (name, p) in &int_ptrs {
+            let val = unsafe { mocida::sys::UISignal_GetInt(*p) };
+            live.vars.insert(name.clone(), val.to_string());
+        }
+        for (name, p) in &str_ptrs {
+            live.vars.insert(name.clone(), unsafe { str_from_signal(*p) });
+        }
+        if let Some(v) = eval_bool_expr_env(&expr, &live) {
+            unsafe {
+                (*ptr).visible = if v { 1 } else { 0 };
+            }
+        }
+    });
+    for n in &reads {
+        if let Some(sig) = ctx.string_signal(n).cloned() {
+            let u = apply.clone();
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_| u()) {
+                ctx.reactive._subs.push(sub);
+            }
+        } else if let Some(sig) = ctx.signal(n).cloned() {
+            let u = apply.clone();
+            if let Ok(sub) = sig.borrow_mut().subscribe(move |_| u()) {
+                ctx.reactive._subs.push(sub);
+            }
         }
     }
 }
@@ -8986,6 +9582,15 @@ fn resolve_operand_env(s: &str, env: &Env) -> String {
     if let Some(field) = s.strip_prefix("Platform.") {
         if let Some(v) = crate::platform::member(field) {
             return v;
+        }
+    }
+    // `Window.width` / `Window.height` / `Screen.*` in raw `if` conditions
+    // (`if Window.height > Window.width`) — same live metrics as numeric props.
+    if let Some((ns, field)) = s.split_once('.') {
+        if matches!(ns, "Window" | "Screen") {
+            if let Some(n) = screen_metric(ns, field) {
+                return n.to_string();
+            }
         }
     }
     env.get(s).map(str::to_string).unwrap_or_default()

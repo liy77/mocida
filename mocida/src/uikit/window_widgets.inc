@@ -119,11 +119,60 @@ static void RenderWidget_Stack(UIWindow* window, UIWidget* el,
             // Save/restore so we don't mutate authored local coords across frames
             // (would accumulate) and hit-tests see the same absolute box we drew.
             if (s->freeLayout) {
-                const float localX = item->x;
-                const float localY = item->y;
+                float localX = item->x;
+                float localY = item->y;
+                // Resolve parent-relative anchors against THIS stack (`el`),
+                // not a possibly-stale/NULL alignment target. Nested
+                // `anchor: center` inside freeLayout (MouseArea cards, HUD
+                // chips) was landing at local (0,0) when Align no-op'd.
+                if (item->alignment && item->width && item->height &&
+                    el->width && el->height) {
+                    if (UIWidget_GetParent(item) != el)
+                        UIWidget_SetParent(item, el);
+                    UIAlignment* a = (UIAlignment*)item->alignment;
+                    a->horizontal.target_widget = el;
+                    a->vertical.target_widget = el;
+                    const float iw = *item->width;
+                    const float ih = *item->height;
+                    const float pw = *el->width  - s->paddingLeft - s->paddingRight;
+                    const float ph = *el->height - s->paddingTop  - s->paddingBottom;
+                    switch (a->horizontal.value) {
+                        case UI_ALIGN_H_LEFT:
+                            localX = item->marginLeft;
+                            break;
+                        case UI_ALIGN_H_CENTER:
+                            localX = (pw - iw) * 0.5f
+                                   + item->marginLeft - item->marginRight;
+                            break;
+                        case UI_ALIGN_H_RIGHT:
+                            localX = pw - iw - item->marginRight;
+                            break;
+                        default: break;
+                    }
+                    switch (a->vertical.value) {
+                        case UI_ALIGN_V_TOP:
+                            localY = item->marginTop;
+                            break;
+                        case UI_ALIGN_V_CENTER:
+                            localY = (ph - ih) * 0.5f
+                                   + item->marginTop - item->marginBottom;
+                            break;
+                        case UI_ALIGN_V_BOTTOM:
+                            localY = ph - ih - item->marginBottom;
+                            break;
+                        default: break;
+                    }
+                }
                 item->x = el->x + s->paddingLeft + localX;
                 item->y = el->y + s->paddingTop + localY;
-                RenderSingleWidget(window, item);
+                // Draw without re-running Align (would use absolute parent
+                // coords that we already applied as local→abs above).
+                {
+                    UIAlignment* saved = item->alignment;
+                    item->alignment = NULL;
+                    RenderSingleWidget(window, item);
+                    item->alignment = saved;
+                }
                 item->x = localX;
                 item->y = localY;
                 continue;
@@ -135,6 +184,20 @@ static void RenderWidget_Stack(UIWindow* window, UIWidget* el,
             // A child's `selfAlign` (1=start,2=center,3=end) overrides the
             // stack's `align` for that child only; 0 = inherit the stack.
             const int ea = item->selfAlign ? (item->selfAlign - 1) : s->align;
+            // Anchored child: Align owns position; still advance the flow cursor.
+            if (item->alignment) {
+                if (UIWidget_GetParent(item) != el)
+                    UIWidget_SetParent(item, el);
+                RenderSingleWidget(window, item);
+                if (s->orientation == UI_STACK_HORIZONTAL) {
+                    cursorX += mL + iw + mR + gap;
+                    flowEnd = SDL_max(flowEnd, cursorX - el->x - gap + mR);
+                } else {
+                    cursorY += mT + ih + mB + gap;
+                    flowEnd = SDL_max(flowEnd, cursorY - el->y - gap + mB);
+                }
+                continue;
+            }
             if (s->orientation == UI_STACK_HORIZONTAL) {
                 const float ew = ih + mT + mB; // cross extent incl. margins
                 float off = (ea == UI_STACK_ALIGN_CENTER) ? (innerH - ew) * 0.5f
@@ -385,8 +448,13 @@ static void RenderWidget_Glass(UIWindow* window, UIWidget* el,
                 item->x = el->x + g->paddingLeft + localX;
                 item->y = el->y + g->paddingTop + localY;
                 RenderSingleWidget(window, item);
-                item->x = localX;
-                item->y = localY;
+                if (item->alignment) {
+                    item->x = item->x - el->x - g->paddingLeft;
+                    item->y = item->y - el->y - g->paddingTop;
+                } else {
+                    item->x = localX;
+                    item->y = localY;
+                }
                 continue;
             }
             const float iw = item->width  ? *item->width  : 0.0f;
@@ -708,6 +776,21 @@ static void RenderWidget_Rectangle(UIWindow* window, UIWidget* el,
                 UIWidget* item = kids->children[i];
                 if (!item || !item->visible) continue;
                 const float ih = item->height ? *item->height : 0.0f;
+                // Anchored children (`anchor: center` / SetAlignmentByParent):
+                // Align owns x/y relative to this rect. Do NOT clobber with the
+                // vertical flow cursor — that pinned icons to the top-left of
+                // MouseArea/Rectangle cards even when Align ran afterwards
+                // (and left them there entirely when Align was deferred).
+                if (item->alignment) {
+                    if (UIWidget_GetParent(item) != el)
+                        UIWidget_SetParent(item, el);
+                    RenderSingleWidget(window, item);
+                    // Still advance the flow so a later overlay sibling that
+                    // uses a negative top margin (MouseArea hit surface) lines
+                    // up with the content height measured at build time.
+                    cursorY += item->marginTop + ih + item->marginBottom + rect->gap;
+                    continue;
+                }
                 // Honour the child's outer margins (vertical flow), so a child
                 // can push itself away from the rect's edges / its neighbours.
                 cursorY += item->marginTop;

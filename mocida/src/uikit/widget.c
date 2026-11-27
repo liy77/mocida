@@ -28,7 +28,13 @@ UIWidget* widgc(UIWidgetData data) {
 
 UIWidget* widgcs(UIWidgetData data, float width, float height) {
     UIWidget* widget = UIWidget_Create(data);
-    return UIWidget_SetSize(widget, width, height);
+    widget = UIWidget_SetSize(widget, width, height);
+    // Children were typically added to the typed payload (Stack/Rectangle/…)
+    // before this Widget existed. Link parent pointers now so `anchor:` /
+    // SetAlignmentByParent (often applied while parent was still NULL) can
+    // resolve against this container.
+    if (widget) UIWidget_AdoptChildren(widget);
+    return widget;
 }
 
 UIWidget* UIWidget_Create(UIWidgetData data)  {
@@ -179,7 +185,69 @@ UIWidget* UIWidget_SetParent(UIWidget* widget, UIWidget* parent) {
     }
 
     widget->parent = (UIWidgetData)parent;
+
+    // Resolve deferred parent-alignment (targets stored as NULL while the
+    // child was built before this container Widget existed).
+    if (widget->alignment != NULL) {
+        UIAlignment* a = (UIAlignment*)widget->alignment;
+        if (a->horizontal.target_widget == NULL)
+            a->horizontal.target_widget = parent;
+        if (a->vertical.target_widget == NULL)
+            a->vertical.target_widget = parent;
+        if (widget->width != NULL && widget->height != NULL &&
+            parent->width != NULL && parent->height != NULL) {
+            UIAlignment_Align(widget);
+        }
+    }
     return widget;
+}
+
+static UIChildren* UIWidget_DirectChildren(UIWidget* widget) {
+    if (!widget || !widget->data) return NULL;
+    UIWidgetBase* base = (UIWidgetBase*)widget->data;
+    if (!base->__widget_type) return NULL;
+    const char* t = base->__widget_type;
+    if (UIWidget_TypeIs(t, UI_WIDGET_STACK))
+        return ((UIStack*)base)->items;
+    if (UIWidget_TypeIs(t, UI_WIDGET_GLASS))
+        return ((UIGlass*)base)->items;
+    if (UIWidget_TypeIs(t, UI_WIDGET_GRID))
+        return ((UIGrid*)base)->items;
+    if (UIWidget_TypeIs(t, UI_WIDGET_RECTANGLE))
+        return (UIChildren*)((UIRectangle*)base)->children;
+    if (UIWidget_TypeIs(t, UI_WIDGET_DIALOG))
+        return ((UIDialog*)base)->content;
+    if (UIWidget_TypeIs(t, UI_WIDGET_TABVIEW))
+        return ((UITabView*)base)->panels;
+    return NULL;
+}
+
+void UIWidget_AdoptChildren(UIWidget* widget) {
+    if (!widget || !widget->data) return;
+
+    // Scroll owns a single content widget rather than a UIChildren list.
+    UIWidgetBase* base = (UIWidgetBase*)widget->data;
+    if (base->__widget_type &&
+        UIWidget_TypeIs(base->__widget_type, UI_WIDGET_SCROLL)) {
+        UIWidget* content = ((UIScroll*)base)->content;
+        if (content) {
+            UIWidget_SetParent(content, widget);
+            UIWidget_AdoptChildren(content);
+        }
+        return;
+    }
+
+    UIChildren* kids = UIWidget_DirectChildren(widget);
+    if (!kids) return;
+    for (int i = 0; i < kids->count; i++) {
+        UIWidget* child = kids->children[i];
+        if (!child) continue;
+        UIWidget_SetParent(child, widget);
+        // Nested containers may themselves have been sized already; walk down
+        // so deeply-nested `anchor:` rules also pick up their parents.
+        UIWidget_AdoptChildren(child);
+    }
+    UIChildren_Relayout(kids);
 }
 
 void UIWidget_Destroy(UIWidget* widget) {
